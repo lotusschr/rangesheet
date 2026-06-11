@@ -1,0 +1,7 @@
+﻿id,name,role,session,date,action,detail
+TH000001,Manager — RangeSheet,ADMIN,15:39,10/06/2026,UPLOAD & AUTO-MERGE,"1 ไฟล์ → 1,549 แถว"
+TH000001,Manager — RangeSheet,ADMIN,16:20,10/06/2026,UPLOAD & AUTO-MERGE,"1 ไฟล์ → 1,549 แถว"
+TH000001,Manager — RangeSheet,ADMIN,16:20,10/06/2026,UPLOAD & AUTO-MERGE,1 ไฟล์ → 32 แถว
+TH000001,Manager — RangeSheet,ADMIN,16:21,10/06/2026,CLEAR FILES,
+TH000001,Manager — RangeSheet,ADMIN,16:21,10/06/2026,UPLOAD & AUTO-MERGE,2 ไฟล์ → 32 แถว
+DEV001,Developer,ADMIN,09:20,11/06/2026,UPLOAD & AUTO-MERGE,2 ไฟล์ → 32 แถว
