@@ -92,9 +92,11 @@ def _extract_rangesheet_meta(raw: bytes, encoding: str, header_row: int) -> dict
 
 # ── Column group / fill definitions (mirrors RangeSheet Excel layout) ─────────
 _FILL_COLORS = {
-    "display": {"bg": "#FFFDE7", "text": "#5D4037"},
-    "mer":     {"bg": "#FCE4EC", "text": "#880E4F"},
-    "formula": {"bg": "#F5F5F5", "text": "#616161"},
+    "display":  {"bg": "#FFFDE7", "text": "#5D4037"},
+    "mer":      {"bg": "#FCE4EC", "text": "#880E4F"},
+    "formula":  {"bg": "#F5F5F5", "text": "#616161"},
+    "starline": {"bg": "#000000", "text": "#FFFFFF"},
+    "green":    {"bg": "#CCFF90", "text": "#1B5E20"},
 }
 _STATUS_COLORS = {
     "MAINTAIN":    {"bg": "#E8F8F5", "c": "#2BBFA4"},
@@ -116,7 +118,8 @@ _RS_COL_GROUPS = [
         "Express Picking type", "HDET picking type",
     ]},
     {"group": "Price", "color": "#FFF9C4", "cols": [
-        "EDLP Price by Format", "Mer Price (incl. vat7%)", "COST", "%MOR (from EDLP)",
+        "EDLP Price by Format", "AVG Selling Price by Format",
+        "Mer Price (incl. vat7%)", "COST", "%MOR (from EDLP)",
     ]},
     {"group": "Range Architecture", "color": "#E8F8F5", "cols": [
         "AS-IS planograms applied", "TO-BE planograms applied",
@@ -124,29 +127,42 @@ _RS_COL_GROUPS = [
     ]},
     {"group": "Sales & Forecast", "color": "#FFF9C4", "cols": [
         "Avg Units 52wk/ Forecast new item sales",
-        "Supplier Pack Size", "AS-IS Sale Total Units", "TO-BE Total Sale Units",
-        "Total Units change", "AS-IS Total Sales (Ex Vat)",
-        "TO-BE Total Sales (Ex Vat)", "Total Sales change (Ex Vat)",
+        "Supplier Pack Size", "Range Tail YYYY",
+        "AS-IS Sale Total Units", "TO-BE Total Sale Units", "Total Units change",
+        "AS-IS Total Sales (Ex Vat)", "TO-BE Total Sales (Ex Vat)", "Total Sales change (Ex Vat)",
     ]},
     {"group": "Margin", "color": "#FCE4EC", "cols": [
         "AS-IS Total Margin (Ex Vat)", "TO-BE Total Margin (Ex Vat)",
         "Total Margin change (Ex Vat)",
     ]},
-    {"group": "Status", "color": "#FCE4EC", "cols": [
-        "Status", "Check Range To-be Waterfall",
+    {"group": "Star Line", "color": "#000000", "text_color": "#FFFFFF", "cols": [
+        "Star Line",
+    ]},
+    {"group": "Performance", "color": "#00E676", "text_color": "#1B5E20", "cols": [
+        "Item Priority", "JDA vs Actual", "Actual-Actual",
+    ]},
+    {"group": "Status", "color": "#9E9E9E", "text_color": "#FFFFFF", "cols": [
+        "Status",
+    ]},
+    {"group": "Range Check", "color": "#BDBDBD", "text_color": "#424242", "cols": [
+        "Check Range To-be Waterfall",
     ]},
 ]
 
 def _get_fill(col: str) -> str:
     c = str(col).strip()
+    if c == "Star Line": return "starline"
+    if c in ("Item Priority", "JDA vs Actual", "Actual-Actual"): return "green"
     if "TO-BE" in c or "TO BE" in c: return "mer"
     if "AS-IS" in c or "AS IS" in c or "%MOR" in c: return "formula"
     _display = {"Department","Section","Subclass","Barcode","TPNA","ID","Item Name",
                 "No. of unit in case","No. of unit in inner","Tray total number",
                 "Express Picking type","HDET picking type","EDLP Price by Format",
-                "Star Line","Status","Check Range To-be Waterfall"}
+                "AVG Selling Price by Format","Range Tail YYYY",
+                "Status","Check Range To-be Waterfall"}
     if c in _display: return "display"
-    _mer = {"Mer Price (incl. vat7%)","COST","Supplier Pack Size","Avg Units 52wk/ Forecast new item sales"}
+    _mer = {"Mer Price (incl. vat7%)","COST","Supplier Pack Size",
+            "Avg Units 52wk/ Forecast new item sales"}
     if c in _mer: return "mer"
     return "formula"
 
@@ -418,6 +434,61 @@ hr { border-color: #E0D9D2 !important; }
 /* ── Hide Streamlit chrome ── */
 #MainMenu, footer, header { visibility: hidden; }
 .stDeployButton { display: none; }
+
+/* ── Topbar row (anchor-targeted: element after .rs-tb-anch marker) ── */
+[data-testid="element-container"]:has(.rs-tb-anch)
+  + [data-testid="element-container"]
+  [data-testid="stHorizontalBlock"] {
+  background: #fff !important;
+  border-bottom: 1px solid #E0D9D2 !important;
+  margin: -1.5rem -2rem 1.5rem !important;
+  padding: 0 28px !important;
+  align-items: center !important;
+  min-height: 52px !important;
+}
+/* Logout pill inside topbar */
+[data-testid="element-container"]:has(.rs-tb-anch)
+  + [data-testid="element-container"]
+  .stButton > button {
+  background: transparent !important;
+  border: 1px solid rgba(43,191,164,.38) !important;
+  border-radius: 20px !important;
+  color: #1A1A1A !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  padding: 3px 14px !important;
+  white-space: nowrap !important;
+  box-shadow: none !important;
+}
+[data-testid="element-container"]:has(.rs-tb-anch)
+  + [data-testid="element-container"]
+  .stButton > button:hover {
+  background: #E8F8F5 !important;
+  border-color: #2BBFA4 !important;
+  color: #2BBFA4 !important;
+}
+
+/* ── Sheet tab inactive buttons (anchor-targeted) ── */
+[data-testid="element-container"]:has(.rs-tabs-anch)
+  + [data-testid="element-container"]
+  .stButton > button {
+  background: #F8F4F0 !important;
+  color: #888 !important;
+  border: 1px solid #E0D9D2 !important;
+  border-top: 2px solid transparent !important;
+  border-radius: 6px 6px 0 0 !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  padding: 5px 8px !important;
+  box-shadow: none !important;
+}
+[data-testid="element-container"]:has(.rs-tabs-anch)
+  + [data-testid="element-container"]
+  .stButton > button:hover {
+  background: #EDEAE7 !important;
+  color: #555 !important;
+  border-top-color: #B0A8A0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -435,6 +506,7 @@ _defaults = {
     "rangesheet_meta": {},
     "view_sheet": _RS_SHEETS[1],
     "view_vis_cols": None,
+    "sidebar_open": True,
 }
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -445,6 +517,13 @@ if st.session_state.merged_df is None:
     if _snap is not None:
         st.session_state.merged_df = _snap
         st.session_state.merge_log = [f"💾 โหลดข้อมูลล่าสุด ({len(_snap):,} แถว)"]
+
+# Sidebar visibility CSS
+if not st.session_state.get("sidebar_open", True):
+    st.markdown("""<style>
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="stMainBlockContainer"] { margin-left: 0 !important; }
+    </style>""", unsafe_allow_html=True)
 
 user = current_user()
 
@@ -565,22 +644,29 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════
 # TOP BAR
 # ═══════════════════════════════════════════════════════════════════════════
-role_badge = "🔓 ADMIN" if is_admin() else "🔒 VIEWER"
-st.markdown(f"""
-<div style="background:#fff;border-bottom:1px solid #E0D9D2;
-     margin:-1.5rem -2rem 1.5rem;padding:12px 28px;
-     display:flex;align-items:center;justify-content:space-between;">
-  <div style="font-size:13px;color:#888;">
-    <span style="color:#2BBFA4;font-weight:700;">RangeSheet</span>
-    <span style="margin:0 6px;">·</span>
-    <span style="color:#1A1A1A;font-weight:600;">{PAGE_LABELS[st.session_state.page]}</span>
-  </div>
-  <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:#888;">
-    <span>{role_badge}</span>
-    <span style="width:7px;height:7px;border-radius:50%;background:#2BBFA4;display:inline-block;"></span>
-    <span style="color:#1A1A1A;font-weight:600;">{user['employee_id']}</span>
-  </div>
-</div>""", unsafe_allow_html=True)
+_role_lbl = "ADMIN" if is_admin() else "VIEWER"
+# Anchor marker — CSS targets the columns row that immediately follows this
+st.markdown('<div class="rs-tb-anch"></div>', unsafe_allow_html=True)
+_tb0, _tb1, _tb2 = st.columns([0.4, 5, 2])
+with _tb0:
+    _sb_icon = "✕" if st.session_state.get("sidebar_open", True) else "☰"
+    if st.button(_sb_icon, key="topbar_sb_toggle", use_container_width=True):
+        st.session_state.sidebar_open = not st.session_state.get("sidebar_open", True)
+        st.rerun()
+with _tb1:
+    st.markdown(f"""
+    <div style="padding:11px 0;font-size:13px;color:#888;">
+      <span style="color:#2BBFA4;font-weight:700;">RangeSheet</span>
+      <span style="margin:0 6px;">·</span>
+      <span style="color:#1A1A1A;font-weight:600;">{PAGE_LABELS[st.session_state.page]}</span>
+    </div>""", unsafe_allow_html=True)
+with _tb2:
+    _badge = "🔓" if is_admin() else "🔒"
+    if st.button(f"{_badge} {user['employee_id']} · {_role_lbl}  ↩",
+                 key="topbar_logout", use_container_width=True):
+        add_audit("LOGOUT")
+        logout()
+        st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY FILES
@@ -703,30 +789,25 @@ elif st.session_state.page == "view":
         if st.session_state.view_vis_cols is None:
             st.session_state.view_vis_cols = _all_grouped[:] or all_cols[:]
 
-        # ── Excel-style sheet tabs ─────────────────────────────────────────────
-        _stabs = ""
-        for _s in _RS_SHEETS:
-            _a = (_s == st.session_state.view_sheet)
-            _stabs += (
-                f'<div style="padding:5px 13px;border-radius:6px 6px 0 0;'
-                f'border-top:{"2px solid #2BBFA4" if _a else "1px solid #E0D9D2"};'
-                f'border-left:1px solid #E0D9D2;border-right:1px solid #E0D9D2;'
-                f'border-bottom:{"2px solid #fff" if _a else "1px solid #E0D9D2"};'
-                f'background:{"#fff" if _a else "#F8F4F0"};'
-                f'color:{"#1A1A1A" if _a else "#888"};font-weight:{"700" if _a else "400"};'
-                f'font-size:12px;white-space:nowrap;display:inline-block;">{_s}</div>'
-            )
-        st.markdown(
-            f'<div style="display:flex;gap:3px;flex-wrap:wrap;">{_stabs}</div>'
-            f'<div style="border-top:1px solid #E0D9D2;margin-bottom:14px;"></div>',
-            unsafe_allow_html=True)
-        _sidx = _RS_SHEETS.index(st.session_state.view_sheet) \
-                if st.session_state.view_sheet in _RS_SHEETS else 1
-        _ns = st.selectbox("Sheet", _RS_SHEETS, index=_sidx,
-                           label_visibility="collapsed", key="vw_sheet_sel")
-        if _ns != st.session_state.view_sheet:
-            st.session_state.view_sheet = _ns
-            st.rerun()
+        # ── Sheet tabs — active=HTML div, inactive=st.button (CSS makes them tab-shaped)
+        st.markdown('<div class="rs-tabs-anch"></div>', unsafe_allow_html=True)
+        _tab_cols = st.columns(len(_RS_SHEETS))
+        for _ti, (_tcol, _s) in enumerate(zip(_tab_cols, _RS_SHEETS)):
+            with _tcol:
+                if _s == st.session_state.view_sheet:
+                    st.markdown(
+                        f'<div style="padding:5px 4px;text-align:center;'
+                        f'border:1px solid #E0D9D2;border-top:2px solid #2BBFA4;'
+                        f'border-radius:6px 6px 0 0;background:#fff;'
+                        f'color:#1A1A1A;font-weight:700;font-size:12px;'
+                        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+                        f'{_s}</div>', unsafe_allow_html=True)
+                else:
+                    if st.button(_s, key=f"stab_{_ti}", use_container_width=True):
+                        st.session_state.view_sheet = _s
+                        st.rerun()
+        st.markdown('<div style="border-top:1px solid #E0D9D2;margin-bottom:14px;"></div>',
+                    unsafe_allow_html=True)
 
         tab_all, tab_canvas = st.tabs(["📊 All Data", "🎨 New Canvas"])
 
@@ -825,17 +906,25 @@ elif st.session_state.page == "view":
                 <div style="background:#fff;border-radius:10px;border:1px solid #E0D9D2;padding:14px 16px;">
                   <div style="font-size:10px;font-weight:700;color:#888;text-transform:uppercase;
                        letter-spacing:.07em;margin-bottom:10px;">Color Note</div>
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                    <div style="width:24px;height:14px;background:#FFFDE7;border:1px solid #ddd;
-                         border-radius:3px;"></div><span style="font-size:11px;">Display fill</span>
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <div style="width:24px;height:14px;background:#FFFDE7;border:1px solid #ddd;border-radius:3px;"></div>
+                    <span style="font-size:11px;">Display fill</span>
                   </div>
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                    <div style="width:24px;height:14px;background:#FCE4EC;border:1px solid #ddd;
-                         border-radius:3px;"></div><span style="font-size:11px;">Merchandiser fill</span>
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <div style="width:24px;height:14px;background:#FCE4EC;border:1px solid #ddd;border-radius:3px;"></div>
+                    <span style="font-size:11px;">Merchandiser fill</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <div style="width:24px;height:14px;background:#F5F5F5;border:1px solid #ddd;border-radius:3px;"></div>
+                    <span style="font-size:11px;">Formula</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <div style="width:24px;height:14px;background:#000;border-radius:3px;"></div>
+                    <span style="font-size:11px;">Star Line</span>
                   </div>
                   <div style="display:flex;align-items:center;gap:8px;">
-                    <div style="width:24px;height:14px;background:#F5F5F5;border:1px solid #ddd;
-                         border-radius:3px;"></div><span style="font-size:11px;">Formula</span>
+                    <div style="width:24px;height:14px;background:#CCFF90;border:1px solid #ddd;border-radius:3px;"></div>
+                    <span style="font-size:11px;">Performance</span>
                   </div>
                 </div>''', unsafe_allow_html=True)
 
@@ -936,10 +1025,12 @@ elif st.session_state.page == "view":
             # group header row
             _h.append('<tr>')
             for _g in _disp_groups:
+                _gtc = _g.get("text_color", "#555")
+                _gbc = _g.get("color", "#F5F5F5")
                 _h.append(
                     f'<th colspan="{len(_g["disp_cols"])}" style="padding:5px 8px;text-align:center;'
-                    f'background:{_g["color"]};border:1px solid #E0D9D2;font-size:9px;font-weight:700;'
-                    f'color:#555;letter-spacing:.05em;text-transform:uppercase;">{_g["group"]}</th>')
+                    f'background:{_gbc};border:1px solid rgba(255,255,255,.15);font-size:9px;font-weight:700;'
+                    f'color:{_gtc};letter-spacing:.05em;text-transform:uppercase;">{_g["group"]}</th>')
             _h.append('</tr>')
             # column header row (dark)
             _h.append('<tr style="background:#1C1C1E;">')
@@ -968,10 +1059,24 @@ elif st.session_state.page == "view":
                         _val   = _row.get(_c, "")
                         _sv    = "" if pd.isna(_val) or str(_val) == "nan" else str(_val)
                         _fill  = _get_fill(_c)
-                        _cbg   = ("background:#FFFDE740;" if _fill == "display" else
-                                  "background:#FCE4EC25;" if _fill == "mer" else "")
                         _w     = _cw(_c)
                         _cl    = _c.strip().lower()
+                        # Cell background / text color by fill type
+                        if _fill == "starline":
+                            _cbg = "background:#000000;"
+                            _ctxt = "color:#FFFFFF;font-weight:700;"
+                        elif _fill == "green":
+                            _cbg = "background:#CCFF90;"
+                            _ctxt = "color:#1B5E20;font-weight:600;"
+                        elif _fill == "display":
+                            _cbg = "background:#FFFDE740;"
+                            _ctxt = ""
+                        elif _fill == "mer":
+                            _cbg = "background:#FCE4EC40;"
+                            _ctxt = ""
+                        else:
+                            _cbg = ""
+                            _ctxt = ""
                         if _cl == "status" and _sv:
                             _sc2 = _STATUS_COLORS.get(_sv.strip(), {"bg": "#F5F5F5", "c": "#888"})
                             _inner = (f'<span style="background:{_sc2["bg"]};color:{_sc2["c"]};'
@@ -981,7 +1086,7 @@ elif st.session_state.page == "view":
                             _inner = (f'<span style="color:#2BBFA4;font-family:monospace;'
                                       f'font-weight:600;">{_sv}</span>')
                         else:
-                            _inner = f'<span>{_sv}</span>'
+                            _inner = f'<span style="{_ctxt}">{_sv}</span>'
                         _h.append(
                             f'<td style="padding:7px 10px;border-bottom:1px solid #E0D9D2;'
                             f'border-right:1px solid #E0D9D2;{_cbg}min-width:{_w}px;max-width:{_w}px;'
