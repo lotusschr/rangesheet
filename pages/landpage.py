@@ -1,14 +1,13 @@
-"""My Files page — upload, merge, preview."""
+"""My Files page — upload, merge, file management."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
-import pandas as pd
 from datetime import datetime
 from utils.shared import (
-    inject_css, init_session_state, render_sidebar, render_topbar,
+    inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
     APP_CONFIG, read_uploaded_file, auto_merge, save_merged_snapshot,
-    save_file, add_audit, df_to_xlsx_bytes, df_to_csv_bytes,
+    save_file, add_audit, df_to_xlsx_bytes, df_to_csv_bytes, current_user,
 )
 
 inject_css()
@@ -16,50 +15,39 @@ init_session_state()
 render_sidebar("landpage")
 render_topbar("My Files")
 
+st.markdown(
+    "<div style='font-size:28px;font-weight:800;color:#1A1A1A;margin-bottom:24px;'>Files</div>",
+    unsafe_allow_html=True,
+)
 
-# ── Preview dialog ────────────────────────────────────────────────────────────
-@st.dialog("📄 File Preview", width="large")
-def _preview_dialog():
-    info = st.session_state.get("last_uploaded_preview")
-    if info is None:
-        st.info("No file to preview.")
-        return
-    df        = info["df"]
-    filename  = info["name"]
-    prev_cols = list(df.columns[:10])
-    st.markdown(
-        f"**{filename}** — {info['rows']:,} rows · {info['cols']} columns  "
-        f"*(showing first 50 rows & {len(prev_cols)} columns)*"
-    )
-    st.dataframe(df[prev_cols].head(50), use_container_width=True,
-                 hide_index=True, height=420)
-    if st.button("✅ Close", use_container_width=True):
-        st.session_state["_show_preview"] = False
-        st.rerun()
+col_upload, col_files = st.columns([1, 1.6], gap="large")
 
+# ── Left: Upload zone ─────────────────────────────────────────────────────────
+with col_upload:
+    st.markdown("""
+<div style="background:#fff;border-radius:16px;border:2px dashed #D0CAC2;
+            padding:40px 24px 28px;text-align:center;">
+    <div style="font-size:52px;margin-bottom:14px;opacity:0.6;">☁️</div>
+    <div style="font-size:16px;font-weight:600;color:#1A1A1A;margin-bottom:10px;">
+        Drop files here or browse
+    </div>
+    <div style="font-size:12px;color:#999;line-height:2;">
+        Select multiple files at once<br>
+        Supports .xlsx &nbsp;·&nbsp; .xls &nbsp;·&nbsp; .csv &nbsp;·&nbsp; .json<br>
+        Max 1 GB per file
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-# Trigger dialog if flagged
-if st.session_state.get("_show_preview"):
-    _preview_dialog()
-
-
-# ── Page layout ───────────────────────────────────────────────────────────────
-st.markdown("<div style='font-size:22px;font-weight:700;margin-bottom:2px;'>My Files</div>",
-            unsafe_allow_html=True)
-st.markdown("<div style='color:#888;font-size:13px;margin-bottom:18px;'>"
-            "Upload .csv / .xlsx → auto-merge → save locally</div>",
-            unsafe_allow_html=True)
-
-col_left, col_right = st.columns([1, 1.8], gap="large")
-
-# ── Left: upload ──────────────────────────────────────────────────────────────
-with col_left:
-    st.subheader("Upload Files")
     uploaded = st.file_uploader(
-        "Drag & drop or browse",
+        "upload",
         type=APP_CONFIG["allowed_extensions"],
         accept_multiple_files=True,
+        label_visibility="collapsed",
     )
+
+    st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
+
     if uploaded:
         new_files, failed = [], []
         for f in uploaded:
@@ -72,79 +60,123 @@ with col_left:
             f.seek(0)
             path = save_file(f.read(), f.name)
             new_files.append({
-                "name": f.name, "df": df,
-                "size": f"{round(f.size/1024, 1)} KB",
-                "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                "rows": len(df), "cols": len(df.columns),
+                "name":  f.name,
+                "df":    df,
+                "size":  f"{round(f.size / 1024, 1)} KB",
+                "date":  datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "rows":  len(df),
+                "cols":  len(df.columns),
                 "saved": bool(path),
+                "owner": current_user()["employee_id"],
             })
         if failed:
             st.error(f"Could not read: {', '.join(failed)}")
         if new_files:
             st.session_state.raw_files.extend(new_files)
             merged, log = auto_merge(st.session_state.raw_files)
-            st.session_state.merged_df  = merged
-            st.session_state.merge_log  = log
+            st.session_state.merged_df   = merged
+            st.session_state.merge_log   = log
             st.session_state.display_cols = None
             save_merged_snapshot(merged)
-            add_audit("UPLOAD", f"{len(new_files)} files → {len(merged):,} rows")
-            st.session_state["last_uploaded_preview"] = new_files[-1]
-            st.session_state["_show_preview"] = True
+            add_audit("Upload & Auto-Merge",
+                      f"{len(new_files)} files → {len(merged):,} rows")
             st.success(f"✅ Uploaded {len(new_files)} file(s) — {len(merged):,} rows merged")
             st.rerun()
 
-    if st.session_state.merge_log:
-        st.subheader("Merge Log")
-        for entry in st.session_state.merge_log:
-            st.write(entry)
-
     if st.session_state.raw_files:
-        if st.button("🗑️ Clear all files", key="clear_all"):
-            st.session_state.raw_files        = []
-            st.session_state.merged_df        = None
-            st.session_state.merge_log        = []
-            st.session_state.display_cols     = None
-            st.session_state["last_uploaded_preview"] = None
-            add_audit("CLEAR FILES")
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+        if st.button("🗑️ Clear All Files", key="clear_all", use_container_width=True):
+            st.session_state.raw_files    = []
+            st.session_state.merged_df    = None
+            st.session_state.merge_log    = []
+            st.session_state.display_cols = None
+            add_audit("Clear Files")
             st.rerun()
 
-# ── Right: file list + preview ────────────────────────────────────────────────
-with col_right:
-    st.subheader("Uploaded Files")
-    if not st.session_state.raw_files:
-        st.info("No files yet — drag & drop on the left.")
-    else:
-        for f in st.session_state.raw_files:
-            c_name, c_btn = st.columns([5, 1])
-            with c_name:
-                st.markdown(
-                    f"📄 **{f['name']}** — {f['rows']:,} rows · "
-                    f"{f['cols']} cols · {f['size']}")
-            with c_btn:
-                if st.button("👁️", key=f"prev_{f['name']}",
-                             help="Preview this file"):
-                    st.session_state["last_uploaded_preview"] = f
-                    st.session_state["_show_preview"] = True
-                    st.rerun()
+# ── Right: File table ─────────────────────────────────────────────────────────
+with col_files:
+    search_q = st.text_input(
+        "search", placeholder="🔍  Search files and folders...",
+        label_visibility="collapsed",
+    )
 
+    files = st.session_state.raw_files
+    if search_q:
+        files = [f for f in files if search_q.lower() in f["name"].lower()]
+
+    header_html = """
+<div style="background:#fff;border-radius:16px;border:1px solid #E8E3DC;overflow:hidden;">
+    <div style="display:grid;grid-template-columns:1fr 110px 90px 145px;
+                padding:10px 18px;background:#F5F0EA;border-bottom:1px solid #E8E3DC;">
+        <span style="font-size:11px;font-weight:700;color:#2BBFA4;
+                     text-transform:uppercase;letter-spacing:0.06em;">File Name</span>
+        <span style="font-size:11px;font-weight:700;color:#2BBFA4;
+                     text-transform:uppercase;letter-spacing:0.06em;">Owner</span>
+        <span style="font-size:11px;font-weight:700;color:#2BBFA4;
+                     text-transform:uppercase;letter-spacing:0.06em;">Size</span>
+        <span style="font-size:11px;font-weight:700;color:#2BBFA4;
+                     text-transform:uppercase;letter-spacing:0.06em;">Last Modified</span>
+    </div>"""
+
+    if not files:
+        table_html = header_html + """
+    <div style="padding:60px 20px;text-align:center;">
+        <div style="font-size:56px;margin-bottom:12px;">📁</div>
+        <div style="color:#999;font-size:13px;">
+            No files yet — drop files above or click <strong>New Upload</strong>
+        </div>
+    </div>
+</div>"""
+    else:
+        rows = ""
+        for i, f in enumerate(files):
+            bg = "#fff" if i % 2 == 0 else "#FAFAF8"
+            rows += f"""
+<div style="display:grid;grid-template-columns:1fr 110px 90px 145px;
+            padding:13px 18px;background:{bg};border-bottom:1px solid #F0EBE3;
+            align-items:center;">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+        <span style="font-size:20px;flex-shrink:0;">📄</span>
+        <div style="min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:#1A1A1A;
+                        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                {f['name']}
+            </div>
+            <div style="font-size:11px;color:#999;">{f['rows']:,} rows · {f['cols']} cols</div>
+        </div>
+    </div>
+    <span style="font-size:12px;color:#555;">{f.get('owner','—')}</span>
+    <span style="font-size:12px;color:#555;">{f['size']}</span>
+    <span style="font-size:12px;color:#555;">{f['date']}</span>
+</div>"""
+        table_html = header_html + rows + "</div>"
+
+    st.markdown(table_html, unsafe_allow_html=True)
+
+    # Metrics + export when merged data exists
     if st.session_state.merged_df is not None:
         m = st.session_state.merged_df
-        st.divider()
+        st.markdown("<div style='height:20px;'></div>", unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         c1.metric("Files",       len(st.session_state.raw_files))
         c2.metric("Merged Rows", f"{len(m):,}")
         c3.metric("Columns",     len(m.columns))
 
-        st.divider()
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
         d1, d2 = st.columns(2)
         with d1:
             st.download_button(
                 "⬇️ Export .xlsx", df_to_xlsx_bytes(m),
                 file_name=f"merged_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True)
+                use_container_width=True,
+            )
         with d2:
             st.download_button(
                 "⬇️ Export .csv", df_to_csv_bytes(m),
                 file_name=f"merged_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv", use_container_width=True)
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+render_page_nav("landpage")
