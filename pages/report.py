@@ -234,27 +234,78 @@ with rt1:
 
             # ── Preview panel ─────────────────────────────────────────────────
             if _is_open:
+                _all_cols = list(df_out.columns)
+                _vis_key  = f"prev_vis_{num}"
+                _zoom_key = f"prev_zoom_{num}"
+                _full_key = f"prev_full_{num}"
+                if _vis_key  not in st.session_state: st.session_state[_vis_key]  = _all_cols[:]
+                if _zoom_key not in st.session_state: st.session_state[_zoom_key] = 100
+                if _full_key not in st.session_state: st.session_state[_full_key] = False
+
+                _zoom    = st.session_state[_zoom_key]
+                _is_full = st.session_state[_full_key]
+                _tbl_h   = 580 if _is_full else 320
+
+                # ── Toolbar: column picker + zoom controls ────────────────────
+                _tc1, _tc2, _tc3, _tc4, _tc5 = st.columns([4.6, 0.55, 0.75, 0.55, 0.65])
+                with _tc1:
+                    _vis_sel = st.multiselect(
+                        "_vis",
+                        options=_all_cols,
+                        default=[c for c in st.session_state[_vis_key] if c in _all_cols] or _all_cols,
+                        key=f"vis_{num}",
+                        placeholder="👁  Show / hide columns…",
+                        label_visibility="collapsed",
+                    )
+                    st.session_state[_vis_key] = _vis_sel if _vis_sel else _all_cols[:]
+                with _tc2:
+                    if st.button("A−", key=f"zo_{num}", use_container_width=True, help="Zoom out"):
+                        st.session_state[_zoom_key] = max(70, _zoom - 15)
+                        st.rerun()
+                with _tc3:
+                    st.markdown(
+                        f"<p style='text-align:center;font-size:11px;color:#888;"
+                        f"margin:0;padding-top:9px;'>{_zoom}%</p>",
+                        unsafe_allow_html=True,
+                    )
+                with _tc4:
+                    if st.button("A+", key=f"zi_{num}", use_container_width=True, help="Zoom in"):
+                        st.session_state[_zoom_key] = min(160, _zoom + 15)
+                        st.rerun()
+                with _tc5:
+                    if st.button("⛶" if not _is_full else "⊠", key=f"fs_{num}",
+                                 use_container_width=True, help="Expand / collapse"):
+                        st.session_state[_full_key] = not _is_full
+                        st.rerun()
+
+                # ── Build table with visible columns + zoom scale ─────────────
+                _vis_cols = st.session_state[_vis_key]
+                _s   = _zoom / 100
+                _fz  = round(12 * _s, 1)
+                _pad = f"{round(8*_s)}px {round(14*_s)}px"
+                _hpad= f"{round(10*_s)}px {round(16*_s)}px"
                 _prev_n = min(50, len(df_out))
-                _cols = list(df_out.columns)
+
                 _th = "".join(
                     f'<th style="background:#2BBFA4;color:#fff;font-weight:700;'
-                    f'padding:10px 16px;white-space:nowrap;text-align:left;'
-                    f'font-size:12px;letter-spacing:.03em;'
+                    f'padding:{_hpad};white-space:nowrap;text-align:left;'
+                    f'font-size:{_fz}px;letter-spacing:.03em;'
                     f'border-right:1px solid rgba(255,255,255,0.25);'
                     f'position:sticky;top:0;z-index:2;">{c}</th>'
-                    for c in _cols
+                    for c in _vis_cols
                 )
                 _tbody = ""
                 for _ri, (_, _row) in enumerate(df_out.head(_prev_n).iterrows()):
                     _bg = "#fff" if _ri % 2 == 0 else "#F4FBF9"
                     _tds = "".join(
-                        f'<td style="padding:8px 16px;font-size:12px;color:#1A1A1A;'
+                        f'<td style="padding:{_pad};font-size:{_fz}px;color:#1A1A1A;'
                         f'white-space:nowrap;border-right:1px solid #EEE;'
                         f'border-bottom:1px solid #F0EBE3;">'
-                        f'{str(_v) if _v is not None and str(_v) not in ("nan","None") else ""}</td>'
-                        for _v in _row
+                        f'{str(_row[c]) if _row[c] is not None and str(_row[c]) not in ("nan","None") else ""}</td>'
+                        for c in _vis_cols
                     )
                     _tbody += f'<tr style="background:{_bg};">{_tds}</tr>'
+
                 st.markdown(f"""
 <div style="background:#F8FFFE;border:1px solid #E8E3DC;border-top:none;
             border-radius:0 0 14px 14px;padding:10px 14px 14px;">
@@ -263,10 +314,11 @@ with rt1:
         <span style="font-size:11px;font-weight:700;color:#2BBFA4;
                      text-transform:uppercase;letter-spacing:.06em;">Preview — {title}</span>
         <span style="font-size:11px;color:#888;">
-            First {_prev_n:,} of {len(df_out):,} rows
+            First {_prev_n:,} of {len(df_out):,} rows &nbsp;·&nbsp;
+            {len(_vis_cols)}/{len(_all_cols)} cols
         </span>
     </div>
-    <div style="overflow-x:auto;overflow-y:auto;max-height:320px;
+    <div style="overflow-x:auto;overflow-y:auto;max-height:{_tbl_h}px;
                 border-radius:8px;border:1px solid #E8E3DC;">
         <table style="border-collapse:collapse;width:100%;min-width:400px;">
             <thead><tr>{_th}</tr></thead>
