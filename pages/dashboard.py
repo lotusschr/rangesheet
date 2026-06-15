@@ -1,9 +1,10 @@
-"""Dashboard page — metric cards, bar chart, range status."""
+"""Dashboard page — metric cards, bar chart, range architecture pie."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 import pandas as pd
+import datetime as _dt
 from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
     find_col, add_audit,
@@ -15,11 +16,6 @@ render_sidebar("dashboard")
 render_topbar("Dashboard")
 
 add_audit("View Dashboard")
-
-st.markdown(
-    "<div style='font-size:28px;font-weight:800;color:#1A1A1A;margin-bottom:24px;'>Dashboard</div>",
-    unsafe_allow_html=True,
-)
 
 merged = st.session_state.merged_df
 if merged is None:
@@ -39,15 +35,80 @@ try:
 except ImportError:
     HAS_PLOTLY = False
 
-# ── Derive KPIs from data ─────────────────────────────────────────────────────
-status_col = find_col(merged, ["status"])
-sale_col   = find_col(merged, ["to-be total sale", "to be total sale", "to-be sale total"])
-if not sale_col:
-    sale_col = find_col(merged, ["sale", "sales"])
+# ── Header: Day/Week/Month filter right, no big title ────────────────────────
+st.markdown("""
+<style>
+/* Period filter pill bar */
+div[data-testid="stRadio"][data-key="dash_period"] > label { display: none !important; }
+div[data-testid="stRadio"][data-key="dash_period"] > div[role="radiogroup"] {
+    display: flex !important; flex-direction: row !important; gap: 0 !important;
+    background: #EDE8DF; border-radius: 10px; padding: 4px;
+    width: 100% !important;
+}
+div[data-testid="stRadio"][data-key="dash_period"] > div[role="radiogroup"] > label {
+    flex: 1 !important;
+    display: flex !important; align-items: center; justify-content: center;
+    padding: 7px 0 !important; border-radius: 7px !important;
+    font-size: 12px !important; font-weight: 600 !important;
+    cursor: pointer; color: #888 !important; transition: all .15s;
+    text-align: center !important;
+}
+div[data-testid="stRadio"][data-key="dash_period"] > div[role="radiogroup"] > label:has(input:checked) {
+    background: #fff !important; color: #1A1A1A !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,.14) !important;
+}
+div[data-testid="stRadio"][data-key="dash_period"] > div[role="radiogroup"] > label > div:first-child {
+    display: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
-total_skus   = len(merged)
+_, _h_filter = st.columns([2.5, 1])
+with _h_filter:
+    _period = st.radio(
+        "Period", ["Day", "Week", "Month"],
+        horizontal=True, key="dash_period", label_visibility="collapsed",
+    )
+
+st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+# ── Apply date filter ─────────────────────────────────────────────────────────
+_date_col = find_col(merged, ["date", "week", "month", "period"])
+_today    = pd.Timestamp.now().normalize()
+_df = merged.copy()
+
+_date_filtered = False
+if _date_col:
+    try:
+        _dt_series = pd.to_datetime(_df[_date_col], errors="coerce")
+        if _period == "Day":
+            _mask = _dt_series >= _today
+        elif _period == "Week":
+            _mask = _dt_series >= _today - pd.Timedelta(days=7)
+        else:
+            _mask = _dt_series >= _today - pd.Timedelta(days=30)
+        if _mask.sum() > 0:
+            _df = _df[_mask]
+            _date_filtered = True
+    except Exception:
+        pass
+
+if _date_filtered and len(_df) < len(merged):
+    st.markdown(
+        f"<div style='font-size:11px;color:#2BBFA4;margin-bottom:12px;font-weight:600;'>"
+        f"Showing {len(_df):,} rows for selected period ({_period})</div>",
+        unsafe_allow_html=True,
+    )
+
+# ── Derive KPIs ───────────────────────────────────────────────────────────────
+status_col = find_col(_df, ["status"])
+sale_col   = find_col(_df, ["to-be total sale", "to be total sale", "to-be sale total"])
+if not sale_col:
+    sale_col = find_col(_df, ["sale", "sales"])
+
+total_skus = len(_df)
 if status_col:
-    _statuses     = merged[status_col].astype(str).str.strip().str.upper()
+    _statuses     = _df[status_col].astype(str).str.strip().str.upper()
     active_range  = int((_statuses.isin(["MAINTAIN", "NEW SOME", "NEWNEW", "NEW"])).sum())
     low_sales_cnt = int((_statuses.isin(["DELETE SOME", "DELETE ALL"])).sum())
     pending_cnt   = int((_statuses == "REVIEW").sum())
@@ -56,13 +117,13 @@ else:
     low_sales_cnt = 0
     pending_cnt   = 0
 
-pct_active   = round(active_range  / total_skus * 100, 1) if total_skus else 0
-pct_low      = round(low_sales_cnt / total_skus * 100, 1) if total_skus else 0
-pct_pending  = round(pending_cnt   / total_skus * 100, 1) if total_skus else 0
-pct_review   = round((total_skus - active_range - low_sales_cnt) / total_skus * 100, 1) if total_skus else 0
-pct_new      = max(0, 100 - pct_active - pct_review - pct_low)
+pct_active  = round(active_range  / total_skus * 100, 1) if total_skus else 0
+pct_low     = round(low_sales_cnt / total_skus * 100, 1) if total_skus else 0
+pct_pending = round(pending_cnt   / total_skus * 100, 1) if total_skus else 0
+pct_review  = round((total_skus - active_range - low_sales_cnt) / total_skus * 100, 1) if total_skus else 0
+pct_new     = max(0, 100 - pct_active - pct_review - pct_low)
 
-# ── Metric cards (custom HTML with mini progress bar) ─────────────────────────
+# ── Metric cards ──────────────────────────────────────────────────────────────
 def _metric_card(label, value, delta_text, delta_positive, bar_color, bar_pct):
     delta_color = "#2BBFA4" if delta_positive else "#E05555"
     val_color   = "#E05555" if label == "LOW SALES SKUS" else "#1A1A1A"
@@ -106,7 +167,7 @@ with c4:
 
 st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 
-# ── Bottom section: bar chart + range status ──────────────────────────────────
+# ── Bar chart (monthly) + Range Status ───────────────────────────────────────
 left, right = st.columns([1.7, 1], gap="large")
 
 with left:
@@ -116,16 +177,14 @@ with left:
         Monthly Active SKUs
     </div>""", unsafe_allow_html=True)
 
-    # Build monthly data from uploaded data (date column) or use row-count as proxy
-    date_col = find_col(merged, ["date", "week", "month", "period"])
+    date_col = find_col(_df, ["date", "week", "month", "period"])
     months   = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    import datetime as _dt
-    cur_month = _dt.datetime.now().month - 1  # 0-indexed
+    cur_month = _dt.datetime.now().month - 1
 
     if date_col:
         try:
-            _dates = pd.to_datetime(merged[date_col], errors="coerce")
+            _dates = pd.to_datetime(_df[date_col], errors="coerce")
             _mc    = _dates.dt.month.value_counts().reindex(range(1, 13), fill_value=0)
             values = [int(_mc.get(i, 0)) for i in range(1, 13)]
         except Exception:
@@ -143,14 +202,12 @@ with left:
             marker_line_width=0,
         ))
         fig.update_layout(
-            height=260,
-            plot_bgcolor="#fff",
-            paper_bgcolor="#fff",
+            height=260, plot_bgcolor="#fff", paper_bgcolor="#fff",
             margin=dict(t=4, b=10, l=4, r=4),
             font=dict(family="Inter,sans-serif", size=11, color="#888"),
             xaxis=dict(showgrid=False, tickfont=dict(size=11, color="#888")),
-            yaxis=dict(showgrid=True, gridcolor="#F0EBE3", tickfont=dict(size=10, color="#ccc"),
-                       zeroline=False),
+            yaxis=dict(showgrid=True, gridcolor="#F0EBE3",
+                       tickfont=dict(size=10, color="#ccc"), zeroline=False),
             showlegend=False,
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -161,12 +218,11 @@ with left:
     st.markdown("</div>", unsafe_allow_html=True)
 
 with right:
-    # Range Status progress bars
     items = [
-        ("Active",     pct_active,  "#2BBFA4"),
-        ("Review",     pct_review,  "#F59E0B"),
-        ("Low Sales",  pct_low,     "#E05555"),
-        ("New",        pct_new,     "#3B82F6"),
+        ("Active",    pct_active, "#2BBFA4"),
+        ("Review",    pct_review, "#F59E0B"),
+        ("Low Sales", pct_low,    "#E05555"),
+        ("New",       pct_new,    "#3B82F6"),
     ]
     rows_html = ""
     for label, pct, color in items:
@@ -181,7 +237,6 @@ with right:
                     width:{min(pct,100):.1f}%;transition:width 0.3s;"></div>
     </div>
 </div>"""
-
     st.markdown(f"""
 <div style="background:#fff;border-radius:16px;border:1px solid #E8E3DC;
             padding:20px;height:100%;box-sizing:border-box;">
@@ -192,52 +247,136 @@ with right:
 </div>
 """, unsafe_allow_html=True)
 
-# ── Type breakdown (if available) ─────────────────────────────────────────────
-type_col = find_col(merged, ["type"])
-if not type_col and status_col:
-    type_col = status_col
+# ── Range Architecture Pie Chart ──────────────────────────────────────────────
+st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 
-if type_col and HAS_PLOTLY:
-    st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-    st.markdown("""
+_nc = lambda s: str(s).lower().strip()
+_all_cols = list(_df.columns)
+_arch_col = (
+    next((c for c in _all_cols if _nc(c) in ("item priority", "itempriority")), None)
+    or next((c for c in _all_cols if "item" in _nc(c) and "priority" in _nc(c)), None)
+    or next((c for c in _all_cols if _nc(c) == "status"), None)
+)
+
+ARCH_TYPES  = ["MAINTAIN", "NEW DELETE SOME", "DELETE SOME", "DELETE ALL", "NEW SOME", "NEWNEW"]
+ARCH_COLORS = ["#2BBFA4",  "#F59E0B",         "#E05555",     "#C0392B",    "#3B82F6",  "#8B5CF6"]
+ARCH_LABELS = {
+    "MAINTAIN":        "Maintain",
+    "NEW DELETE SOME": "New Delete Some",
+    "DELETE SOME":     "Delete Some",
+    "DELETE ALL":      "Delete All",
+    "NEW SOME":        "New Some",
+    "NEWNEW":          "New New",
+}
+
+if _arch_col and HAS_PLOTLY:
+    _type_series = _df[_arch_col].astype(str).str.strip().str.upper()
+    _counts = {t: int((_type_series == t).sum()) for t in ARCH_TYPES}
+    _total_arch = sum(_counts.values())
+
+    _pie_types  = [t for t in ARCH_TYPES if _counts[t] > 0]
+    _pie_vals   = [_counts[t] for t in _pie_types]
+    _pie_cols   = [ARCH_COLORS[ARCH_TYPES.index(t)] for t in _pie_types]
+    _pie_labels = [ARCH_LABELS[t] for t in _pie_types]
+
+    _pie_card, _pie_legend = st.columns([1.4, 1], gap="large")
+
+    with _pie_card:
+        st.markdown("""
 <div style="background:#fff;border-radius:16px;border:1px solid #E8E3DC;
             padding:20px 20px 8px;">
-    <div style="font-size:15px;font-weight:700;color:#1A1A1A;margin-bottom:16px;">
-        SKU Count by Type
+    <div style="font-size:15px;font-weight:700;color:#1A1A1A;margin-bottom:4px;">
+        Range Architecture — SKU Distribution
+    </div>
+    <div style="font-size:11px;color:#999;margin-bottom:8px;">
+        Total SKUs by range action type
     </div>""", unsafe_allow_html=True)
 
-    TYPE_COLORS = {
-        "MAINTAIN":    "#2BBFA4", "DELETE SOME": "#E05555", "DELETE ALL": "#C0392B",
-        "NEW SOME":    "#3B82F6", "NEWNEW":      "#8B5CF6", "NEW":        "#22C55E",
-        "NEW DELETE SOME": "#F59E0B",
-    }
-    _type_counts = (merged[type_col].astype(str).str.strip().str.upper()
-                    .value_counts().reset_index())
-    _type_counts.columns = ["Type", "Count"]
-    _type_counts = _type_counts[~_type_counts["Type"].isin(["NAN", "", "TOTAL SKU"])]
-    _type_counts["Color"] = _type_counts["Type"].map(lambda t: TYPE_COLORS.get(t, "#888"))
+        if _pie_vals:
+            fig_pie = go.Figure(go.Pie(
+                labels=_pie_labels,
+                values=_pie_vals,
+                marker=dict(
+                    colors=_pie_cols,
+                    line=dict(color="#fff", width=2),
+                ),
+                hole=0.42,
+                textinfo="percent",
+                textfont=dict(size=11, color="#fff"),
+                hovertemplate=(
+                    "<b>%{label}</b><br>"
+                    "%{value:,} SKUs<br>"
+                    "%{percent}<extra></extra>"
+                ),
+                sort=False,
+            ))
+            fig_pie.add_annotation(
+                text=f"<b>{_total_arch:,}</b><br><span style='font-size:10px;'>Total SKUs</span>",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=13, color="#1A1A1A", family="Inter,sans-serif"),
+                align="center",
+            )
+            fig_pie.update_layout(
+                height=300,
+                margin=dict(t=10, b=10, l=10, r=10),
+                showlegend=False,
+                paper_bgcolor="#fff",
+                font=dict(family="Inter,sans-serif"),
+            )
+            st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.markdown(
+                "<p style='color:#999;font-size:13px;padding:40px 0;text-align:center;'>"
+                "No matching type data found for this period.</p>",
+                unsafe_allow_html=True,
+            )
 
-    fig2 = go.Figure(go.Bar(
-        x=_type_counts["Type"],
-        y=_type_counts["Count"],
-        marker_color=_type_counts["Color"].tolist(),
-        marker_line_width=0,
-        text=_type_counts["Count"],
-        textposition="outside",
-        textfont=dict(size=11),
-    ))
-    fig2.update_layout(
-        height=240,
-        plot_bgcolor="#fff",
-        paper_bgcolor="#fff",
-        margin=dict(t=20, b=10, l=4, r=4),
-        font=dict(family="Inter,sans-serif", size=11, color="#888"),
-        xaxis=dict(showgrid=False, tickfont=dict(size=11, color="#555")),
-        yaxis=dict(showgrid=True, gridcolor="#F0EBE3", zeroline=False,
-                   tickfont=dict(size=10, color="#ccc")),
-        showlegend=False,
-    )
-    st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with _pie_legend:
+        _legend_rows = ""
+        for t, color in zip(ARCH_TYPES, ARCH_COLORS):
+            cnt = _counts.get(t, 0)
+            pct = round(cnt / _total_arch * 100, 1) if _total_arch else 0
+            _legend_rows += f"""
+<div style="display:flex;align-items:center;justify-content:space-between;
+            padding:12px 0;border-bottom:1px solid #F5F0EA;">
+    <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:12px;height:12px;border-radius:3px;background:{color};flex-shrink:0;"></div>
+        <span style="font-size:13px;color:#1A1A1A;font-weight:500;">{ARCH_LABELS[t]}</span>
+    </div>
+    <div style="text-align:right;">
+        <span style="font-size:13px;font-weight:700;color:#1A1A1A;">{cnt:,}</span>
+        <span style="font-size:11px;color:#999;margin-left:6px;">{pct:.1f}%</span>
+    </div>
+</div>"""
+
+        st.markdown(f"""
+<div style="background:#fff;border-radius:16px;border:1px solid #E8E3DC;
+            padding:20px;height:100%;box-sizing:border-box;">
+    <div style="font-size:15px;font-weight:700;color:#1A1A1A;margin-bottom:4px;">
+        SKU Breakdown
+    </div>
+    <div style="font-size:11px;color:#999;margin-bottom:16px;">
+        Count &amp; share per action type
+    </div>
+    {_legend_rows}
+    <div style="display:flex;justify-content:space-between;padding-top:12px;">
+        <span style="font-size:12px;font-weight:700;color:#555;">Total</span>
+        <span style="font-size:13px;font-weight:800;color:#1A1A1A;">{_total_arch:,}</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+elif not HAS_PLOTLY:
+    st.info("Install plotly (`pip install plotly`) to enable the pie chart.")
+else:
+    st.markdown("""
+<div style="background:#FFF9C4;border-radius:12px;padding:16px 20px;border:1px solid #F0E68C;">
+    <span style="font-size:13px;color:#7A6000;">
+        ⚠️ No <strong>Status</strong> or <strong>Type</strong> column found in the uploaded data
+        — Range Architecture chart unavailable.
+    </span>
+</div>""", unsafe_allow_html=True)
 
 render_page_nav("dashboard")

@@ -449,6 +449,116 @@ header button { visibility: visible !important; }
 [data-testid="stToolbar"] { visibility: hidden; }
 .stDeployButton { display: none; }
 [data-testid="stSidebarNav"] { display: none !important; }
+
+/* ── Logout icon button ── */
+button[title="Sign out"],
+div[title="Sign out"] button,
+span[title="Sign out"] button,
+.stMarkdown:has(.logout-btn-wrap) ~ div button {
+    border: 1.5px solid #D0CAC2 !important;
+    border-radius: 8px !important;
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    min-height: 38px !important;
+    padding: 0 !important;
+}
+/* ── Logout confirm dialog — No=red filled, Yes=white ── */
+.dlg-yes-btn button {
+    background: #fff !important;
+    border: 1.5px solid #C8C0B8 !important;
+    color: #1A1A1A !important;
+}
+.dlg-yes-btn button:hover {
+    background: #F5F0EA !important;
+    border-color: #A8A09A !important;
+}
+.dlg-no-btn button {
+    background: #E53935 !important;
+    border-color: #C62828 !important;
+    color: #fff !important;
+}
+.dlg-no-btn button:hover {
+    background: #C62828 !important;
+    border-color: #B71C1C !important;
+}
+/* ── Duplicate file dialog — Add=white, Replace=green ── */
+.dup-add-btn button {
+    background: #fff !important;
+    border: 1.5px solid #C8C0B8 !important;
+    color: #1A1A1A !important;
+}
+.dup-add-btn button:hover {
+    background: #F5F0EA !important;
+    border-color: #A8A09A !important;
+}
+.dup-replace-btn button {
+    background: #2BBFA4 !important;
+    border-color: #1EA891 !important;
+    color: #fff !important;
+}
+.dup-replace-btn button:hover {
+    background: #1EA891 !important;
+    border-color: #178A78 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+    # ── Logout button icon — base64-encoded SVG (safe across all browsers) ────
+    _ICON_GREY = (
+        "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1"
+        "MTIgNTEyIj48cGF0aCBmaWxsPSIjNTU1NTU1IiBkPSJNNTAyLjYgMjc4LjZjMTIuNS0xMi41"
+        "IDEyLjUtMzIuOCAwLTQ1LjNsLTEyOC0xMjhjLTEyLjUtMTIuNS0zMi44LTEyLjUtNDUuMyAw"
+        "cy0xMi41IDMyLjggMCA0NS4zTDQwMi43IDIyNCAxOTIgMjI0Yy0xNy43IDAtMzIgMTQuMy0z"
+        "MiAzMnMxNC4zIDMyIDMyIDMybDIxMC43IDAtNzMuNCA3My40Yy0xMi41IDEyLjUtMTIuNSAz"
+        "Mi44IDAgNDUuM3MzMi44IDEyLjUgNDUuMyAwbDEyOC0xMjh6TTE2MCA5NmMxNy43IDAgMzIt"
+        "MTQuMyAzMi0zMnMtMTQuMy0zMi0zMi0zMkw5NiAzMkM0MyAzMiAwIDc1IDAgMTI4TDAgMzg0"
+        "YzAgNTMgNDMgOTYgOTYgOTZsNjQgMGMxNy43IDAgMzItMTQuMyAzMi0zMnMtMTQuMy0zMi0z"
+        "Mi0zMmwtNjQgMGMtMTcuNyAwLTMyLTE0LjMtMzItMzJsMC0yNTZjMC0xNy43IDE0LjMtMzIg"
+        "MzItMzJsNjQgMHoiLz48L3N2Zz4="
+    )
+    _ICON_RED = (
+        "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1"
+        "MTIgNTEyIj48cGF0aCBmaWxsPSIjRTUzOTM1IiBkPSJNNTAyLjYgMjc4LjZjMTIuNS0xMi41"
+        "IDEyLjUtMzIuOCAwLTQ1LjNsLTEyOC0xMjhjLTEyLjUtMTIuNS0zMi44LTEyLjUtNDUuMyAw"
+        "cy0xMi41IDMyLjggMCA0NS4zTDQwMi43IDIyNCAxOTIgMjI0Yy0xNy43IDAtMzIgMTQuMy0z"
+        "MiAzMnMxNC4zIDMyIDMyIDMybDIxMC43IDAtNzMuNCA3My40Yy0xMi41IDEyLjUtMTIuNSAz"
+        "Mi44IDAgNDUuM3MzMi44IDEyLjUgNDUuMyAwbDEyOC0xMjh6TTE2MCA5NmMxNy43IDAgMzIt"
+        "MTQuMyAzMi0zMnMtMTQuMy0zMi0zMi0zMkw5NiAzMkM0MyAzMiAwIDc1IDAgMTI4TDAgMzg0"
+        "YzAgNTMgNDMgOTYgOTYgOTZsNjQgMGMxNy43IDAgMzItMTQuMyAzMi0zMnMtMTQuMy0zMi0z"
+        "Mi0zMmwtNjQgMGMtMTcuNyAwLTMyLTE0LjMtMzItMzJsMC0yNTZjMC0xNy43IDE0LjMtMzIg"
+        "MzItMzJsNjQgMHoiLz48L3N2Zz4="
+    )
+    st.markdown(f"""
+<style>
+button[title="Sign out"],
+div[title="Sign out"] button,
+span[title="Sign out"] button,
+.stMarkdown:has(.logout-btn-wrap) ~ div button {{
+    background-color: transparent !important;
+    background-image: url("data:image/svg+xml;base64,{_ICON_GREY}") !important;
+    background-size: 20px 20px !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    color: transparent !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+}}
+button[title="Sign out"] *,
+div[title="Sign out"] button *,
+span[title="Sign out"] button *,
+.stMarkdown:has(.logout-btn-wrap) ~ div button * {{
+    color: transparent !important;
+    font-size: 0 !important;
+}}
+button[title="Sign out"]:hover,
+div[title="Sign out"] button:hover,
+span[title="Sign out"] button:hover,
+.stMarkdown:has(.logout-btn-wrap) ~ div button:hover {{
+    background-color: #FFF0F0 !important;
+    background-image: url("data:image/svg+xml;base64,{_ICON_RED}") !important;
+    border-color: #E53935 !important;
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -541,27 +651,64 @@ def render_sidebar(active: str = "landpage"):
             unsafe_allow_html=True)
 
 
+# ── Logout confirmation dialog ─────────────────────────────────────────────────
+@st.dialog("Confirm")
+def _logout_dialog():
+    st.markdown("""
+<div style="text-align:center;padding:6px 0 20px;">
+    <div style="width:56px;height:56px;background:#FFE0E0;border-radius:50%;
+                display:flex;align-items:center;justify-content:center;
+                font-size:26px;margin:0 auto 16px;">⚠️</div>
+    <div style="font-size:18px;font-weight:700;color:#1A1A1A;line-height:1.4;margin-bottom:8px;">
+        Do you really want to exit the app?
+    </div>
+    <div style="font-size:13px;color:#888;line-height:1.5;">
+        All of the unsaved progress would be lost!
+    </div>
+</div>""", unsafe_allow_html=True)
+    _yc, _nc = st.columns(2)
+    with _yc:
+        st.markdown('<div class="dlg-yes-btn">', unsafe_allow_html=True)
+        if st.button("Yes", use_container_width=True, type="secondary", key="dlg_logout_yes"):
+            logout()
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    with _nc:
+        st.markdown('<div class="dlg-no-btn">', unsafe_allow_html=True)
+        if st.button("No", use_container_width=True, type="primary", key="dlg_logout_no"):
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
 # ── Topbar ────────────────────────────────────────────────────────────────────
 def render_topbar(page_name: str):
     user = current_user()
-    st.markdown(f"""
-<div style="display:flex;justify-content:space-between;align-items:center;
-            padding:20px 0 14px;border-bottom:1px solid #D8D2C8;margin-bottom:24px;">
-    <div style="font-size:14px;line-height:1;">
-        <span style="color:#2BBFA4;font-weight:600;">RangeSheet</span>
-        <span style="margin:0 8px;color:#C0B8B0;">/</span>
-        <span style="color:#1A1A1A;font-weight:600;">{page_name}</span>
+    _tl, _tr = st.columns([7, 2.5])
+    with _tl:
+        st.markdown(f"""
+<div style="padding:16px 0 12px;">
+    <span style="color:#2BBFA4;font-weight:600;font-size:14px;">RangeSheet</span>
+    <span style="margin:0 8px;color:#C0B8B0;font-size:14px;">/</span>
+    <span style="color:#1A1A1A;font-weight:600;font-size:14px;">{page_name}</span>
+</div>""", unsafe_allow_html=True)
+    with _tr:
+        _chip_c, _icon_c = st.columns([4, 1])
+        with _chip_c:
+            st.markdown(f"""
+<div style="padding-top:10px;display:flex;justify-content:flex-end;">
+    <div style="display:inline-flex;align-items:center;gap:6px;background:#1A1A1A;
+                padding:5px 14px 5px 10px;border-radius:20px;">
+        <div style="width:6px;height:6px;background:#2BBFA4;border-radius:50%;flex-shrink:0;"></div>
+        <span style="color:#fff;font-size:11px;font-weight:700;letter-spacing:.04em;">{user['employee_id']}</span>
     </div>
-    <div style="display:flex;align-items:center;gap:14px;">
-        <span style="font-size:12px;color:#999;">50 users · Active session</span>
-        <div style="display:flex;align-items:center;gap:7px;background:#1A1A1A;
-                    padding:5px 14px 5px 10px;border-radius:20px;">
-            <div style="width:7px;height:7px;background:#2BBFA4;border-radius:50%;flex-shrink:0;"></div>
-            <span style="color:#fff;font-size:12px;font-weight:700;letter-spacing:0.04em;">{user['employee_id']}</span>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
+        with _icon_c:
+            st.markdown('<div class="logout-btn-wrap" style="padding-top:8px;display:flex;justify-content:center;">',
+                        unsafe_allow_html=True)
+            if st.button(" ", key="_tb_logout", help="Sign out"):
+                _logout_dialog()
+            st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("<hr style='border-color:#D8D2C8;margin:-6px 0 24px;'>", unsafe_allow_html=True)
 
 
 # ── File I/O helpers ──────────────────────────────────────────────────────────
@@ -684,10 +831,24 @@ def auto_merge(files_info: list) -> tuple:
 
 def df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
     try:
+        from openpyxl import load_workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False)
-        return buf.getvalue()
+            df.to_excel(writer, index=False, sheet_name="Sheet1")
+        buf.seek(0)
+        wb = load_workbook(buf)
+        ws = wb.active
+        green_fill  = PatternFill(fill_type="solid", fgColor="2BBFA4")
+        white_font  = Font(color="FFFFFF", bold=True)
+        mid_align   = Alignment(horizontal="center", vertical="center")
+        for cell in ws[1]:
+            cell.fill      = green_fill
+            cell.font      = white_font
+            cell.alignment = mid_align
+        out = io.BytesIO()
+        wb.save(out)
+        return out.getvalue()
     except Exception:
         return df.to_csv(index=False).encode("utf-8-sig")
 

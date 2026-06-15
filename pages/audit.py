@@ -40,15 +40,22 @@ st.markdown("""
 <div style="background:#fff;border-radius:14px;border:1px solid #E8E3DC;
             padding:14px 20px;margin-bottom:20px;">""", unsafe_allow_html=True)
 
-ctrl1, ctrl2, ctrl3 = st.columns([2.5, 1.5, 1])
+ctrl1, ctrl2, ctrl3 = st.columns([2.5, 1.6, 1])
 with ctrl1:
     aq = st.text_input("search", placeholder="🔍  ID / Name / Action",
                        label_visibility="collapsed")
 with ctrl2:
-    ad = st.text_input("date", placeholder="📅  Date  (dd/mm/yyyy)",
-                       label_visibility="collapsed")
+    ad_cal = st.date_input(
+        "Date filter",
+        value=None,
+        key="audit_date_cal",
+        label_visibility="collapsed",
+        format="DD/MM/YYYY",
+    )
 with ctrl3:
-    st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
+    if st.button("Clear Date", key="audit_clear_date", use_container_width=True):
+        st.session_state["audit_date_cal"] = None
+        st.rerun()
 
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -58,8 +65,9 @@ if aq:
     mask = show.apply(
         lambda r: r.astype(str).str.contains(aq, case=False, na=False).any(), axis=1)
     show = show[mask]
-if ad and "date" in show.columns:
-    show = show[show["date"].astype(str).str.contains(ad, na=False)]
+if ad_cal is not None and "date" in show.columns:
+    _d_str = ad_cal.strftime("%d/%m/%Y")
+    show = show[show["date"].astype(str).str.startswith(_d_str)]
 
 show = show.iloc[::-1].reset_index(drop=True)
 total = len(audit_df)
