@@ -17,6 +17,7 @@ APP_CONFIG = {"allowed_extensions": ["csv", "xlsx", "xls"], "max_file_mb": 1024}
 RS_SHEETS = [
     "Range Sheet_Non-SSPOG", "Range Sheet_SSPOG",
     "StoreApply_SSPOG", "5.1 ItembyStore", "5.2 ItembyStore_SC",
+    "5.3 Upload_product_library", "5.4 Upload to Citrix",
 ]
 RS_TYPE_ORDER = ["MAINTAIN", "DELETE SOME", "DELETE ALL", "NEW SOME", "NEWNEW"]
 
@@ -39,29 +40,91 @@ NAV_ITEMS = [
 ]
 
 RS_COL_GROUPS = [
-    {"group": "Item Info", "color": "#F5F5F5", "cols": [
-        "Department", "Section", "Subclass", "Barcode", "TPNA", "ID", "Item Name"]},
-    {"group": "Pack Info", "color": "#FAFAFA", "cols": [
-        "No. of unit in case", "No. of unit in inner", "Tray total number",
-        "Express Picking type", "HDET picking type"]},
-    {"group": "Price", "color": "#FFF9C4", "cols": [
-        "EDLP Price by Format", "Mer Price (incl. vat7%)", "COST", "%MOR (from EDLP)"]},
-    {"group": "Range Architecture", "color": "#E8F8F5", "cols": [
-        "AS-IS planograms applied", "TO-BE planograms applied",
-        "AS-IS Stores Applied", "TO-BE stores applied"]},
-    {"group": "Sales & Forecast", "color": "#FFF9C4", "cols": [
-        "Avg Units 52wk/ Forecast new item sales", "Supplier Pack Size",
-        "AS-IS Sale Total Units", "TO-BE Total Sale Units", "Total Units change",
-        "AS-IS Total Sales (Ex Vat)", "TO-BE Total Sales (Ex Vat)", "Total Sales change (Ex Vat)"]},
-    {"group": "Margin", "color": "#FCE4EC", "cols": [
-        "AS-IS Total Margin (Ex Vat)", "TO-BE Total Margin (Ex Vat)", "Total Margin change (Ex Vat)"]},
-    {"group": "Status", "color": "#FCE4EC", "cols": ["Status", "Check Range To-be Waterfall"]},
+    # ── Gray: item identifiers ────────────────────────────────────────────────
+    {"group": "Item Info", "color": "#D9D9D9", "hdr_color": "#333333", "cols": [
+        "Department", "Section", "Subclass", "Barcode", "TPNA", "ID",
+        "No. of Unit in Case", "No. of Unit in Inner", "Tray total number",
+        "Express Picking Type", "HDET Picking Type", "EDLP Price by Format",
+    ]},
+    # ── Beige: item name + AS-IS & TO-BE columns interleaved ─────────────────
+    {"group": "Range Info", "color": "#E8E3DC", "hdr_color": "#444444", "cols": [
+        "Item Name",
+        "AS IS planograms applied",
+        "TO-BE planograms applied",
+        "AS-IS Stores Applied",
+        "TO-Be stores applied",
+        "Avg Units 52wk/ Forecast new item sales",
+        "Supplier Pack Size",
+        "Range Tail YYYY",
+        "AVG Selling Price by Format",
+    ]},
+    # ── Black: star line separator ────────────────────────────────────────────
+    {"group": "Star Line", "color": "#000000", "hdr_color": "#FFFFFF", "cols": [
+        "Star Line",
+    ]},
+    # ── Green: priority / JDA ─────────────────────────────────────────────────
+    {"group": "Priority", "color": "#00CC44", "hdr_color": "#003300", "cols": [
+        "Item Priority", "JDA vs Actual", "Actual-Actual",
+    ]},
+    # ── Light gray: status + waterfall ────────────────────────────────────────
+    {"group": "Status", "color": "#F5F5F5", "hdr_color": "#555555", "cols": [
+        "Status", "Check Range To-be Waterfall",
+        "(name of the planogram+productname+store)",
+    ]},
+    # ── Purple: cluster summary ───────────────────────────────────────────────
+    {"group": "Cluster Summary", "color": "#C9A0DC", "hdr_color": "#3D0070", "cols": [
+        "Cluster (Planogram name)", "To be stores applied count", "AS IS",
+        "MODS", "Fixtures", "Range Class", "Total New SKUs", "Total Delete SKUs",
+        "%Achieving CRD case (AS is)", "%Achieving LRD (AS is)",
+    ]},
 ]
 
 FILL_COLORS = {
     "display": {"bg": "#FFFDE7", "text": "#5D4037"},
     "mer":     {"bg": "#FCE4EC", "text": "#880E4F"},
     "formula": {"bg": "#F5F5F5", "text": "#616161"},
+}
+
+# Desired display labels for each column (keyed by lowercase/stripped name)
+COLUMN_LABELS = {
+    "department":                                "Department",
+    "section":                                   "Section",
+    "subclass":                                  "Subclass",
+    "barcode":                                   "Barcode",
+    "tpna":                                      "TPNA",
+    "id":                                        "ID",
+    "no. of unit in case":                       "No. of Unit in Case",
+    "no. of unit in inner":                      "No. of Unit in Inner",
+    "tray total number":                         "Tray total number",
+    "express picking type":                      "Express Picking Type",
+    "hdet picking type":                         "HDET Picking Type",
+    "edlp price by format":                      "EDLP Price by Format",
+    "item name":                                 "Item name",
+    "as is planograms applied":                  "As IS planograms applied",
+    "to-be planograms applied":                  "To-BE planograms applied",
+    "as-is stores applied":                      "AS-IS Store applied",
+    "to-be stores applied":                      "To-Be store applied",
+    "avg units 52wk/ forecast new item sales":   "Avg unit 52 wk/forecast new item sales",
+    "supplier pack size":                        "Supplier pack size",
+    "range tail yyyy":                           "Range Tail YYYY",
+    "avg selling price by format":               "AVG selling Price by format",
+    "star line":                                 "Star Line",
+    "item priority":                             "Item priority",
+    "jda vs actual":                             "JDA vs Actual",
+    "actual-actual":                             "Actual-Actual",
+    "status":                                    "Status",
+    "check range to-be waterfall":               "Check Range to be waterfall",
+    "(name of the planogram+productname+store)": "(name of the planogram+productname+store)",
+    "cluster (planogram name)":                  "Cluster (Planogram name)",
+    "to be stores applied count":                "To be stores applied count",
+    "as is":                                     "As IS",
+    "mods":                                      "MODS",
+    "fixtures":                                  "Fixtures",
+    "range class":                               "Range Class",
+    "total new skus":                            "Total New SKUS",
+    "total delete skus":                         "Total Delete SKUs",
+    "%achieving crd case (as is)":               "%Achieving CRD case (AS is)",
+    "%achieving lrd (as is)":                    "%Achieving LRD (AS is)",
 }
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -261,13 +324,42 @@ section[data-testid="stSidebar"] > div {
     background: #fff !important;
 }
 
-/* ── File uploader ── */
-[data-testid="stFileUploader"] {
-    background: transparent !important;
-}
+/* ── File uploader — styled as the dashed drop box ── */
 [data-testid="stFileUploaderDropzone"] {
-    background: transparent !important;
-    border: none !important;
+    background: white !important;
+    border: 2px dashed #D0CAC2 !important;
+    border-radius: 16px !important;
+    padding: 40px 24px 32px !important;
+    text-align: center !important;
+    cursor: pointer !important;
+    min-height: 200px !important;
+    transition: border-color 0.2s, background 0.2s !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+[data-testid="stFileUploaderDropzone"]:hover {
+    border-color: #2BBFA4 !important;
+    background: #F0FDF9 !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] > div > span {
+    font-size: 15px !important;
+    font-weight: 700 !important;
+    color: #1A1A1A !important;
+    text-transform: uppercase !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] > div > small {
+    font-size: 11px !important;
+    color: #999 !important;
+    text-transform: uppercase !important;
+    line-height: 2 !important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] svg {
+    width: 36px !important;
+    height: 36px !important;
+    opacity: 0.45 !important;
+    color: #2BBFA4 !important;
 }
 
 /* ── Dataframe ── */
@@ -337,6 +429,16 @@ div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
 .page-nav-btn > button:hover {
     background: #E8F8F5 !important;
 }
+
+/* ── Global UPPERCASE for all UI labels / buttons / tabs / nav ── */
+.stButton > button,
+.stDownloadButton > button { text-transform: uppercase !important; }
+.stTabs [data-baseweb="tab"] { text-transform: uppercase !important; }
+div[role="radiogroup"] > label > div:last-child p { text-transform: uppercase !important; }
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] label { text-transform: uppercase !important; }
+[data-testid="stMetricLabel"] { text-transform: uppercase !important; }
+[data-testid="stSidebar"] .stMarkdown p { text-transform: uppercase !important; }
 
 /* ── Hide Streamlit chrome but keep sidebar toggle ── */
 #MainMenu, footer { visibility: hidden; }

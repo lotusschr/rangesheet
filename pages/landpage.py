@@ -24,23 +24,8 @@ col_upload, col_files = st.columns([1, 1.6], gap="large")
 
 # ── Left: Upload zone ─────────────────────────────────────────────────────────
 with col_upload:
-    st.markdown("""
-<div style="background:#fff;border-radius:16px;border:2px dashed #D0CAC2;
-            padding:40px 24px 28px;text-align:center;">
-    <div style="font-size:52px;margin-bottom:14px;opacity:0.6;">☁️</div>
-    <div style="font-size:16px;font-weight:600;color:#1A1A1A;margin-bottom:10px;">
-        Drop files here or browse
-    </div>
-    <div style="font-size:12px;color:#999;line-height:2;">
-        Select multiple files at once<br>
-        Supports .xlsx &nbsp;·&nbsp; .xls &nbsp;·&nbsp; .csv &nbsp;·&nbsp; .json<br>
-        Max 1 GB per file
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
     uploaded = st.file_uploader(
-        "upload",
+        "Drop files here or browse\n\nUp to 5 files · .xlsx · .xls · .csv · Max 1 GB per file",
         type=APP_CONFIG["allowed_extensions"],
         accept_multiple_files=True,
         label_visibility="collapsed",
@@ -49,6 +34,9 @@ with col_upload:
     st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
 
     if uploaded:
+        if len(uploaded) > 5:
+            st.warning("⚠️ Maximum 5 files per upload. Only the first 5 will be processed.")
+            uploaded = uploaded[:5]
         new_files, failed = [], []
         for f in uploaded:
             if any(x["name"] == f.name for x in st.session_state.raw_files):
@@ -111,7 +99,7 @@ with col_files:
         <span style="font-size:11px;font-weight:700;color:#2BBFA4;
                      text-transform:uppercase;letter-spacing:0.06em;">File Name</span>
         <span style="font-size:11px;font-weight:700;color:#2BBFA4;
-                     text-transform:uppercase;letter-spacing:0.06em;">Owner</span>
+                     text-transform:uppercase;letter-spacing:0.06em;">User</span>
         <span style="font-size:11px;font-weight:700;color:#2BBFA4;
                      text-transform:uppercase;letter-spacing:0.06em;">Size</span>
         <span style="font-size:11px;font-weight:700;color:#2BBFA4;
