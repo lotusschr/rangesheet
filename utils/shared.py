@@ -44,11 +44,11 @@ RS_COL_GROUPS = [
     {"group": "Item Info", "color": "#D9D9D9", "hdr_color": "#333333", "cols": [
         "Department", "Section", "Subclass", "Barcode", "TPNA", "ID",
         "No. of Unit in Case", "No. of Unit in Inner", "Tray total number",
-        "Express Picking Type", "HDET Picking Type", "EDLP Price by Format",
+        "Express Picking Type", "HDET Picking Type",
+        "EDLP Price by Format", "Item Name",
     ]},
-    # ── Beige: item name + AS-IS & TO-BE columns interleaved ─────────────────
+    # ── Beige: AS-IS & TO-BE columns ─────────────────────────────────────────
     {"group": "Range Info", "color": "#E8E3DC", "hdr_color": "#444444", "cols": [
-        "Item Name",
         "AS IS planograms applied",
         "TO-BE planograms applied",
         "AS-IS Stores Applied",
@@ -98,8 +98,8 @@ COLUMN_LABELS = {
     "tray total number":                         "Tray total number",
     "express picking type":                      "Express Picking Type",
     "hdet picking type":                         "HDET Picking Type",
-    "edlp price by format":                      "EDLP Price by Format",
-    "item name":                                 "Item name",
+    "edlp price by format":                      "EDLP Price by Format Item name",
+    "item name":                                 "EDLP Price by Format Item name",
     "as is planograms applied":                  "As IS planograms applied",
     "to-be planograms applied":                  "To-BE planograms applied",
     "as-is stores applied":                      "AS-IS Store applied",

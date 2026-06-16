@@ -37,13 +37,61 @@ if audit_df is None or audit_df.empty:
 
 # ── Search controls ────────────────────────────────────────────────────────────
 st.markdown("""
+<style>
+div[data-testid="stVerticalBlock"]:has(.audit-clr-marker) {
+    position: relative;
+}
+div[data-testid="stVerticalBlock"]:has(.audit-clr-marker)
+    > div[data-testid="stMarkdown"]:has(.audit-clr-marker) {
+    position: absolute;
+    height: 0;
+    overflow: hidden;
+}
+div[data-testid="stVerticalBlock"]:has(.audit-clr-marker) > div[data-testid="stButton"] {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    z-index: 10;
+}
+div[data-testid="stVerticalBlock"]:has(.audit-clr-marker) > div[data-testid="stButton"] button {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: #aaa !important;
+    font-size: 15px !important;
+    font-weight: 300 !important;
+    width: 30px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    min-height: 30px !important;
+    padding: 0 !important;
+    margin-top: 4px !important;
+    margin-right: 4px !important;
+    border-radius: 50% !important;
+    line-height: 30px !important;
+    text-align: center !important;
+    cursor: pointer !important;
+}
+div[data-testid="stVerticalBlock"]:has(.audit-clr-marker) > div[data-testid="stButton"] button:hover {
+    color: #333 !important;
+    background: rgba(0,0,0,0.07) !important;
+}
+div[data-testid="stVerticalBlock"]:has(.audit-clr-marker) input {
+    padding-right: 38px !important;
+}
+</style>
 <div style="background:#fff;border-radius:14px;border:1px solid #E8E3DC;
             padding:14px 20px;margin-bottom:20px;">""", unsafe_allow_html=True)
 
-ctrl1, ctrl2, ctrl3 = st.columns([2.5, 1.6, 1])
+ctrl1, ctrl2 = st.columns([2.5, 1.6])
 with ctrl1:
     aq = st.text_input("search", placeholder="🔍  ID / Name / Action",
-                       label_visibility="collapsed")
+                       label_visibility="collapsed", key="audit_sq")
+    if aq:
+        st.markdown('<div class="audit-clr-marker"></div>', unsafe_allow_html=True)
+        if st.button("✕", key="audit_clr_q"):
+            st.session_state["audit_sq"] = ""
+            st.rerun()
 with ctrl2:
     ad_cal = st.date_input(
         "Date filter",
@@ -52,10 +100,6 @@ with ctrl2:
         label_visibility="collapsed",
         format="DD/MM/YYYY",
     )
-with ctrl3:
-    if st.button("Clear Date", key="audit_clear_date", use_container_width=True):
-        st.session_state["audit_date_cal"] = None
-        st.rerun()
 
 st.markdown("</div>", unsafe_allow_html=True)
 
