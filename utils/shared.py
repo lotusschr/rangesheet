@@ -12,7 +12,7 @@ ROOT_DIR = os.path.dirname(_HERE)
 BASE_DIR = os.path.join(ROOT_DIR, "rangesheet_data")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-APP_CONFIG = {"allowed_extensions": ["csv", "xlsx", "xls"], "max_file_mb": 1024}
+APP_CONFIG = {"allowed_extensions": ["csv", "xlsx", "xls", "xlsb"], "max_file_mb": 1024}
 
 RS_SHEETS = [
     "Range Sheet_Non-SSPOG", "Range Sheet_SSPOG",
@@ -187,6 +187,9 @@ def init_session_state():
         if snap is not None:
             st.session_state.merged_df = snap
             st.session_state.merge_log = [f"💾 Loaded snapshot ({len(snap):,} rows)"]
+    if "uploader_key" not in st.session_state:
+        st.session_state.uploader_key = 0
+   
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 def inject_css():
@@ -450,19 +453,6 @@ header button { visibility: visible !important; }
 .stDeployButton { display: none; }
 [data-testid="stSidebarNav"] { display: none !important; }
 
-/* ── Logout icon button ── */
-button[title="Sign out"],
-div[title="Sign out"] button,
-span[title="Sign out"] button,
-.stMarkdown:has(.logout-btn-wrap) ~ div button {
-    border: 1.5px solid #D0CAC2 !important;
-    border-radius: 8px !important;
-    width: 38px !important;
-    height: 38px !important;
-    min-width: 38px !important;
-    min-height: 38px !important;
-    padding: 0 !important;
-}
 /* ── Logout confirm dialog — No=red filled, Yes=white ── */
 .dlg-yes-btn button {
     background: #fff !important;
@@ -534,23 +524,6 @@ span[title="Sign out"] button,
 button[title="Sign out"],
 div[title="Sign out"] button,
 span[title="Sign out"] button,
-.stMarkdown:has(.logout-btn-wrap) ~ div button {{
-    background-color: transparent !important;
-    background-image: url("data:image/svg+xml;base64,{_ICON_GREY}") !important;
-    background-size: 20px 20px !important;
-    background-repeat: no-repeat !important;
-    background-position: center !important;
-    color: transparent !important;
-    font-size: 0 !important;
-    line-height: 0 !important;
-}}
-button[title="Sign out"] *,
-div[title="Sign out"] button *,
-span[title="Sign out"] button *,
-.stMarkdown:has(.logout-btn-wrap) ~ div button * {{
-    color: transparent !important;
-    font-size: 0 !important;
-}}
 button[title="Sign out"]:hover,
 div[title="Sign out"] button:hover,
 span[title="Sign out"] button:hover,
@@ -558,6 +531,7 @@ span[title="Sign out"] button:hover,
     background-color: #FFF0F0 !important;
     background-image: url("data:image/svg+xml;base64,{_ICON_RED}") !important;
     border-color: #E53935 !important;
+    color: #E53935 !important;
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -705,7 +679,7 @@ def render_topbar(page_name: str):
         with _icon_c:
             st.markdown('<div class="logout-btn-wrap" style="padding-top:8px;display:flex;justify-content:center;">',
                         unsafe_allow_html=True)
-            if st.button(" ", key="_tb_logout", help="Sign out"):
+            if st.button("Sign Out", key="_tb_logout", help="Sign out"):
                 _logout_dialog()
             st.markdown('</div>', unsafe_allow_html=True)
     st.markdown("<hr style='border-color:#D8D2C8;margin:-6px 0 24px;'>", unsafe_allow_html=True)
@@ -730,9 +704,10 @@ def _detect_header_row(raw: bytes, encoding: str) -> int:
         pass
     return 0
 
-def _detect_header_row_excel(raw: bytes) -> int:
+def _detect_header_row_excel(raw: bytes, engine=None) -> int:
     try:
-        preview = pd.read_excel(io.BytesIO(raw), header=None, nrows=30)
+        kwargs = {"engine": engine} if engine else {}
+        preview = pd.read_excel(io.BytesIO(raw), header=None, nrows=30, **kwargs)
         for i, row in preview.iterrows():
             cells = {str(c).strip().lower() for c in row if pd.notna(c)}
             if len(cells & _HEADER_KEYWORDS) >= 2:
@@ -800,10 +775,12 @@ def read_uploaded_file(uploaded_file):
                     return df
                 except Exception:
                     continue
-        elif ext in (".xlsx", ".xls"):
+        elif ext in (".xlsx", ".xls", ".xlsb"):
             raw = uploaded_file.read()
-            header_row = _detect_header_row_excel(raw)
-            df = pd.read_excel(io.BytesIO(raw), header=header_row)
+            engine = "pyxlsb" if ext == ".xlsb" else None
+            header_row = _detect_header_row_excel(raw, engine=engine)
+            kwargs = {"engine": engine} if engine else {}
+            df = pd.read_excel(io.BytesIO(raw), header=header_row, **kwargs)
             df.columns = [str(c).strip().replace('\n', ' ').replace('\r', '')
                           for c in df.columns]
             if "Department" in df.columns:
@@ -896,6 +873,14 @@ def save_merged_snapshot(df: pd.DataFrame):
         _ensure_dirs()
         df.to_csv(os.path.join(BASE_DIR, "merged", "merged_latest.csv"),
                   index=False, encoding="utf-8-sig")
+    except Exception:
+        pass
+
+def clear_merged_snapshot():
+    try:
+        path = os.path.join(BASE_DIR, "merged", "merged_latest.csv")
+        if os.path.exists(path):
+            os.remove(path)
     except Exception:
         pass
 

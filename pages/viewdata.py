@@ -18,7 +18,11 @@ render_sidebar("viewdata")
 render_topbar("Rangesheet Review")
 
 merged = st.session_state.merged_df
-if merged is None:
+
+# Treat both None AND empty DataFrame as "no data"
+_no_data = merged is None or (hasattr(merged, '__len__') and len(merged) == 0)
+
+if _no_data:
     st.markdown("""
 <div style="background:#fff;border-radius:16px;border:1px solid #E8E3DC;
             padding:60px;text-align:center;">
@@ -27,6 +31,17 @@ if merged is None:
     <div style="font-size:13px;color:#999;">Go to My Files and upload a file first.</div>
 </div>
 """, unsafe_allow_html=True)
+
+    # Show zeroed metrics so the page feels stable (no disappearing UI)
+    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Total SKUs",  "0")
+    m2.metric("MAINTAIN",    "0")
+    m3.metric("SSPOG",       "0")
+    m4.metric("Non-SSPOG",   "0")
+    m5.metric("Null Values", "0")
+
+    render_page_nav("viewdata")   # ← nav still renders
     st.stop()
 
 all_cols = list(merged.columns)
