@@ -317,12 +317,17 @@ with col_files:
                 type="primary",
             ):
                 _sel_raw = [f for f in st.session_state.raw_files if f["name"] in _selected]
+
+                st.session_state.selected_files = _selected
+
                 merged, log = auto_merge(_sel_raw)
-                st.session_state.merged_df    = merged
+                # st.session_state.merged_df    = merged
+                st.session_state.upload_df = merged
                 st.session_state.merge_log    = log
                 st.session_state.display_cols = None
                 save_merged_snapshot(merged)
                 add_audit("View Data", f"{len(_selected)} file(s) selected")
+                
                 st.switch_page("pages/viewdata.py")
         else:
             # No files selected → clear any previously loaded data

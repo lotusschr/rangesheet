@@ -17,7 +17,12 @@ init_session_state()
 render_sidebar("viewdata")
 render_topbar("Rangesheet Review")
 
-merged = st.session_state.merged_df
+merged = st.session_state.get("upload_df")
+
+selected_files = st.session_state.get(
+    "selected_files",
+    []
+)
 
 # Treat both None AND empty DataFrame as "no data"
 _no_data = merged is None or (hasattr(merged, '__len__') and len(merged) == 0)

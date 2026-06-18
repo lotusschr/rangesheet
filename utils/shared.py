@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import io
 from datetime import datetime
+from difflib import SequenceMatcher
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _HERE    = os.path.dirname(os.path.abspath(__file__))
@@ -98,8 +99,8 @@ COLUMN_LABELS = {
     "tray total number":                         "Tray total number",
     "express picking type":                      "Express Picking Type",
     "hdet picking type":                         "HDET Picking Type",
-    "edlp price by format":                      "EDLP Price by Format Item name",
-    "item name":                                 "EDLP Price by Format Item name",
+    "edlp price by format":                      "EDLP Price by Formate",
+    "item name":                                 "Item name",
     "as is planograms applied":                  "As IS planograms applied",
     "to-be planograms applied":                  "To-BE planograms applied",
     "as-is stores applied":                      "AS-IS Store applied",
@@ -126,6 +127,61 @@ COLUMN_LABELS = {
     "%achieving crd case (as is)":               "%Achieving CRD case (AS is)",
     "%achieving lrd (as is)":                    "%Achieving LRD (AS is)",
 }
+
+def normalize_col(col):
+    return str(col).strip().lower()
+
+TARGET_COLUMNS = list(COLUMN_LABELS.values())
+
+def find_best_match(upload_col, target_cols, threshold=0.75):
+    upload_col = normalize_col(upload_col)
+
+    best_score = 0
+    best_match = None
+
+    for target in target_cols:
+        score = SequenceMatcher(
+            None,
+            upload_col,
+            normalize_col(target)
+        ).ratio()
+
+        if score > best_score:
+            best_score = score
+            best_match = target
+
+    if best_score >= threshold:
+        return best_match
+
+    return None
+
+def build_column_mapping(df):
+    mapping = {}
+    questions = []
+
+    target_cols = list(COLUMN_LABELS.values())
+
+    for col in df.columns:
+
+        match = find_best_match(col, target_cols)
+
+        if match:
+            mapping[col] = match
+
+        else:
+            questions.append(col)
+
+    return mapping, questions
+
+def create_review_df(df, mapping):
+
+    review_df = pd.DataFrame()
+
+    for source_col, target_col in mapping.items():
+
+        review_df[target_col] = df[source_col]
+
+    return review_df
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 def current_user() -> dict:
@@ -178,7 +234,12 @@ def init_session_state():
         "display_cols": None, "canvases": {}, "rangesheet_meta": {},
         "view_sheet": RS_SHEETS[1], "view_vis_cols": None,
         "last_uploaded_preview": None,
+        "selected_files": [],
+        "review_df": None,
+        "column_mapping": {},
+        "mapping_completed": False,
     }
+
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -189,6 +250,7 @@ def init_session_state():
             st.session_state.merge_log = [f"💾 Loaded snapshot ({len(snap):,} rows)"]
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0
+    
    
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
