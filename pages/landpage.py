@@ -6,12 +6,15 @@ import streamlit as st
 from datetime import datetime
 from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
-    APP_CONFIG, read_uploaded_file, auto_merge, save_merged_snapshot,
+    APP_CONFIG, read_uploaded_file, auto_merge, save_merged_snapshot, clear_merged_snapshot,
     save_file, add_audit, current_user,
 )
 
 inject_css()
 init_session_state()
+
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
 # ── Per-session state for upload deduplication & duplicate handling ───────────
 if "dup_pending"      not in st.session_state: st.session_state.dup_pending      = []
@@ -134,7 +137,7 @@ with col_upload:
 <div style="font-size:12px;color:#999;margin-bottom:8px;text-align:center;">
     Max <strong style="color:#555;">5 files</strong> per upload &nbsp;·&nbsp;
     Each file max <strong style="color:#555;">1 GB</strong>
-    &nbsp;·&nbsp; csv, xls, xlsx accepted
+    &nbsp;·&nbsp; csv, xls, xlsx, xlsb accepted
 </div>""", unsafe_allow_html=True)
 
     uploaded = st.file_uploader(
@@ -142,6 +145,7 @@ with col_upload:
         type=APP_CONFIG["allowed_extensions"],
         accept_multiple_files=True,
         label_visibility="collapsed",
+        key=f"uploader_{st.session_state.uploader_key}",
     )
 
     st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
@@ -205,18 +209,31 @@ with col_upload:
         _dup_dialog()
 
     # Clear All button
-    if st.session_state.raw_files:
-        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-        if st.button("🗑️ Clear All Files", key="clear_all", use_container_width=True):
-            st.session_state.raw_files         = []
-            st.session_state.merged_df         = None
-            st.session_state.merge_log         = []
-            st.session_state.display_cols      = None
-            st.session_state._upload_sig_last  = set()
-            st.session_state.dup_pending       = []
-            st.session_state.pop("view_file_selection", None)
-            add_audit("Clear Files")
-            st.rerun()
+    # if st.session_state.raw_files:
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+    if st.button("🗑️ Clear All Files", key="clear_all", use_container_width=True):
+
+        # st.session_state.raw_files         = []
+        # st.session_state.merged_df         = None
+
+        clear_merged_snapshot()
+
+        st.session_state.merged_df = None
+        st.session_state.raw_files = []
+
+        st.session_state.merge_log         = []
+        st.session_state.display_cols      = None
+
+        st.session_state._upload_sig_last  = set()
+        st.session_state.dup_pending       = []
+
+        st.session_state.pop("view_file_selection", None)
+
+        # force reset uploader
+        st.session_state.uploader_key += 1
+
+        add_audit("Clear Files")
+        st.rerun()
 
 # ── Right: File table + selection ─────────────────────────────────────────────
 with col_files:
