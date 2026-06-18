@@ -388,51 +388,84 @@ def _render_sheet_content(df_src, p):
             _t_sdiff=sum(r["sale_diff"] for r in _arch_rows); _t_mai=sum(r["marg_ai"] for r in _arch_rows)
             _pct_sale=f"{(_t_sdiff/_t_sai*100):.1f}%" if _t_sai else "0.0%"
             _B="border:1px solid #B8B8B8;"; _BR="border-right:2px solid #999;"
-            tbody=""
-            for _r in _arch_rows:
-                _t=_r["type"]
-                _ai_bg="background:#E53935;color:#fff;" if _t=="NEWNEW" else ""
-                _tb_bg="background:#E53935;color:#fff;" if _t=="DELETE ALL" else ""
-                tbody+=(f'<tr style="border-bottom:1px solid #D8D8D8;">'
-                    f'<td style="padding:5px 10px;font-size:11px;color:#1A1A1A;{_B}">{_t}</td>'
-                    f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}{_ai_bg}">{_fmt(_r["as_is"])}</td>'
-                    f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}{_BR}{_tb_bg}">{_fmt(_r["to_be"])}</td>'
-                    f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}">{_fmt(_r["sale_ai"])}</td>'
-                    f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}">{_fmt(_r["sale_tb"])}</td>'
-                    f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}{_BR}">{_fmt(_r["sale_diff"])}</td>'
-                    f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}">{_fmt(_r["marg_ai"])}</td></tr>')
-            tbody+=(f'<tr style="font-weight:800;"><td style="padding:6px 10px;font-size:11px;font-weight:800;{_B}">TOTAL SKU</td>'
-                f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_ai)}</td>'
-                f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}{_BR}">{_fmt(_t_tb)}</td>'
-                f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_sai)}</td>'
-                f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_stb)}</td>'
-                f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}{_BR}">{_fmt(_t_sdiff)}</td>'
-                f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_mai)}</td></tr>'
-                f'<tr><td style="padding:5px 10px;font-size:11px;font-style:italic;{_B}">% Impact</td>'
-                f'<td style="{_B}"></td>'
-                f'<td style="text-align:center;color:#00AA00;font-weight:700;font-size:11px;{_B}{_BR}">0.0%</td>'
-                f'<td style="{_B}"></td><td style="{_B}"></td>'
-                f'<td style="text-align:center;color:#00AA00;font-weight:700;font-size:11px;{_B}{_BR}">{_pct_sale}</td>'
-                f'<td style="{_B}"></td></tr>')
             _TH="padding:7px 8px;text-align:center;font-size:10px;font-weight:700;border:1px solid #B8B8B8;background:#D9D9D9;color:#333;"
-            st.markdown(f"""<div style="background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
-              <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">
-                <thead><tr>
-                  <th colspan="3" style="{_TH}text-align:left;min-width:130px;">Range architecture</th>
-                  <th colspan="3" style="{_TH}">Sale Impact ( ex.vat) / Week<br>calcualte from Mer Price</th>
-                  <th colspan="1" style="{_TH}">Margin Impact ( ex.vat) / Week<br>calcualte from EDLP Price</th>
-                </tr><tr>
-                  <th style="{_TH}text-align:left;">TYPE</th>
-                  <th style="{_TH}min-width:52px;">AS IS</th>
-                  <th style="{_TH}min-width:52px;border-right:2px solid #999;">TO BE</th>
-                  <th style="{_TH}min-width:60px;">AS IS</th>
-                  <th style="{_TH}min-width:60px;">TO BE</th>
-                  <th style="{_TH}min-width:52px;border-right:2px solid #999;">DIFF</th>
-                  <th style="{_TH}min-width:60px;">AS IS</th>
-                </tr></thead><tbody>{tbody}</tbody></table></div>
-              <div style="text-align:right;padding:3px 8px;font-size:9px;color:#888;
-                          border-top:1px solid #E0E0E0;background:#F8F8F8;">
-                display mgr = Avg selling price from format</div></div>""", unsafe_allow_html=True)
+
+            if p == "sa":
+                # ── StoreApply: simplified TYPE | AS IS | TO BE only ──────────
+                tbody=""
+                for _r in _arch_rows:
+                    _t=_r["type"]
+                    _ai_bg="background:#E53935;color:#fff;" if _t=="NEWNEW" else ""
+                    _tb_bg="background:#E53935;color:#fff;" if _t=="DELETE ALL" else ""
+                    tbody+=(f'<tr style="border-bottom:1px solid #D8D8D8;">'
+                        f'<td style="padding:5px 10px;font-size:11px;color:#1A1A1A;{_B}">{_t}</td>'
+                        f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}{_ai_bg}">{_fmt(_r["as_is"])}</td>'
+                        f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}{_tb_bg}">{_fmt(_r["to_be"])}</td>'
+                        f'</tr>')
+                tbody+=(f'<tr><td style="padding:6px 10px;font-size:11px;font-weight:800;{_B}">TOTAL SKU</td>'
+                    f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_ai)}</td>'
+                    f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_tb)}</td></tr>'
+                    f'<tr><td style="padding:5px 10px;font-size:11px;font-style:italic;{_B}">% Impact</td>'
+                    f'<td style="{_B}"></td>'
+                    f'<td style="text-align:center;color:#00AA00;font-weight:700;font-size:11px;{_B}">0.0%</td></tr>')
+                st.markdown(f"""<div style="background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
+                  <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">
+                    <thead>
+                      <tr><th colspan="3" style="{_TH}text-align:left;min-width:130px;">Range architecture</th></tr>
+                      <tr>
+                        <th style="{_TH}text-align:left;min-width:140px;">TYPE</th>
+                        <th style="{_TH}min-width:60px;">AS IS</th>
+                        <th style="{_TH}min-width:60px;">TO BE</th>
+                      </tr>
+                    </thead><tbody>{tbody}</tbody></table></div>
+                </div>""", unsafe_allow_html=True)
+
+            else:
+                # ── Non-SSPOG / SSPOG: full table with Sale + Margin Impact ───
+                tbody=""
+                for _r in _arch_rows:
+                    _t=_r["type"]
+                    _ai_bg="background:#E53935;color:#fff;" if _t=="NEWNEW" else ""
+                    _tb_bg="background:#E53935;color:#fff;" if _t=="DELETE ALL" else ""
+                    tbody+=(f'<tr style="border-bottom:1px solid #D8D8D8;">'
+                        f'<td style="padding:5px 10px;font-size:11px;color:#1A1A1A;{_B}">{_t}</td>'
+                        f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}{_ai_bg}">{_fmt(_r["as_is"])}</td>'
+                        f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}{_BR}{_tb_bg}">{_fmt(_r["to_be"])}</td>'
+                        f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}">{_fmt(_r["sale_ai"])}</td>'
+                        f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}">{_fmt(_r["sale_tb"])}</td>'
+                        f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}{_BR}">{_fmt(_r["sale_diff"])}</td>'
+                        f'<td style="padding:5px 8px;text-align:center;font-size:11px;{_B}">{_fmt(_r["marg_ai"])}</td></tr>')
+                tbody+=(f'<tr style="font-weight:800;"><td style="padding:6px 10px;font-size:11px;font-weight:800;{_B}">TOTAL SKU</td>'
+                    f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_ai)}</td>'
+                    f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}{_BR}">{_fmt(_t_tb)}</td>'
+                    f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_sai)}</td>'
+                    f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_stb)}</td>'
+                    f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}{_BR}">{_fmt(_t_sdiff)}</td>'
+                    f'<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;{_B}">{_fmt(_t_mai)}</td></tr>'
+                    f'<tr><td style="padding:5px 10px;font-size:11px;font-style:italic;{_B}">% Impact</td>'
+                    f'<td style="{_B}"></td>'
+                    f'<td style="text-align:center;color:#00AA00;font-weight:700;font-size:11px;{_B}{_BR}">0.0%</td>'
+                    f'<td style="{_B}"></td><td style="{_B}"></td>'
+                    f'<td style="text-align:center;color:#00AA00;font-weight:700;font-size:11px;{_B}{_BR}">{_pct_sale}</td>'
+                    f'<td style="{_B}"></td></tr>')
+                st.markdown(f"""<div style="background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
+                  <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">
+                    <thead><tr>
+                      <th colspan="3" style="{_TH}text-align:left;min-width:130px;">Range architecture</th>
+                      <th colspan="3" style="{_TH}">Sale Impact ( ex.vat) / Week<br>calcualte from Mer Price</th>
+                      <th colspan="1" style="{_TH}">Margin Impact ( ex.vat) / Week<br>calcualte from EDLP Price</th>
+                    </tr><tr>
+                      <th style="{_TH}text-align:left;">TYPE</th>
+                      <th style="{_TH}min-width:52px;">AS IS</th>
+                      <th style="{_TH}min-width:52px;border-right:2px solid #999;">TO BE</th>
+                      <th style="{_TH}min-width:60px;">AS IS</th>
+                      <th style="{_TH}min-width:60px;">TO BE</th>
+                      <th style="{_TH}min-width:52px;border-right:2px solid #999;">DIFF</th>
+                      <th style="{_TH}min-width:60px;">AS IS</th>
+                    </tr></thead><tbody>{tbody}</tbody></table></div>
+                  <div style="text-align:right;padding:3px 8px;font-size:9px;color:#888;
+                              border-top:1px solid #E0E0E0;background:#F8F8F8;">
+                    display mgr = Avg selling price from format</div></div>""", unsafe_allow_html=True)
 
         with _leg_c:
             st.markdown("""<div style="background:#fff;border-radius:14px;border:1px solid #E8E3DC;padding:16px;">
@@ -672,39 +705,100 @@ def _render_sheet_content(df_src, p):
         # ── Status ────────────────────────────────────────────────────────────
         elif _subview == "📊 Status":
             if _stc:
-                _sc=df_view[_stc].astype(str).str.strip().value_counts().reset_index()
-                _sc.columns=["Status","Count"]
-                _sc=_sc[~_sc["Status"].isin(["nan",""])]; _tot=_sc["Count"].sum()
-                _sh=['<div style="overflow-x:auto;border-radius:12px;border:1px solid #E0D9D2;margin-top:14px;">',
-                     '<table style="border-collapse:collapse;font-size:12px;width:100%;">',
-                     '<thead><tr style="background:#1C1C1E;">',
-                     '<th style="padding:10px 16px;text-align:left;color:rgba(255,255,255,.75);font-size:11px;font-weight:700;">STATUS</th>',
-                     '<th style="padding:10px 16px;text-align:center;color:rgba(255,255,255,.75);font-size:11px;font-weight:700;">COUNT</th>',
-                     '<th style="padding:10px 16px;text-align:center;color:rgba(255,255,255,.75);font-size:11px;font-weight:700;">%</th>',
-                     '<th style="padding:10px 16px;color:rgba(255,255,255,.75);font-size:11px;font-weight:700;">BAR</th>',
-                     '</tr></thead><tbody>']
-                for _si,_sr in _sc.iterrows():
-                    _sv3=str(_sr["Status"]); _scc=STATUS_COLORS.get(_sv3,{"bg":"#F5F5F5","c":"#888"})
-                    _pct=_sr["Count"]/_tot*100 if _tot else 0; _rb2="#FFFFFF" if _si%2==0 else "#F8F4F0"
-                    _sh.append(f'<tr style="background:{_rb2};">'
-                               f'<td style="padding:10px 16px;border-bottom:1px solid #F0EBE3;">'
-                               f'<span style="background:{_scc["bg"]};color:{_scc["c"]};padding:3px 10px;'
-                               f'border-radius:4px;font-weight:700;font-size:11px;">{_sv3}</span></td>'
-                               f'<td style="padding:10px 16px;text-align:center;border-bottom:1px solid #F0EBE3;'
-                               f'font-weight:700;font-size:13px;">{_sr["Count"]:,}</td>'
-                               f'<td style="padding:10px 16px;text-align:center;border-bottom:1px solid #F0EBE3;'
-                               f'color:#888;font-size:12px;">{_pct:.1f}%</td>'
-                               f'<td style="padding:10px 16px;border-bottom:1px solid #F0EBE3;">'
-                               f'<div style="background:#EDE8DF;border-radius:99px;height:6px;">'
-                               f'<div style="background:{_scc["c"]};border-radius:99px;height:6px;'
-                               f'width:{min(_pct,100):.1f}%;"></div></div></td></tr>')
+                _wf_key = f"{p}_wf_data"
+                # Filter out blank/nan status rows
+                _st_mask = ~df_view[_stc].astype(str).str.strip().isin(["nan", ""])
+                _fdf = df_view[_st_mask].reset_index(drop=True)
+                _st_vals = _fdf[_stc].astype(str).str.strip().reset_index(drop=True)
+
+                # Signature = columns + shape; changes whenever a new file is loaded
+                _df_sig = (tuple(_fdf.columns.tolist()), len(_fdf))
+                _prev_sig = st.session_state.get(f"{p}_wf_sig")
+
+                # Find matching "Check Range To-be Waterfall" column (flexible match)
+                _target_norm = _nca("Check Range To-be Waterfall")
+                _cr_col = next(
+                    (c for c in _fdf.columns if _nca(c) == _target_norm),
+                    None
+                )
+
+                # Re-build table whenever the file changes
+                if _wf_key not in st.session_state or _prev_sig != _df_sig:
+                    _cr_vals = _fdf[_cr_col].tolist() if _cr_col else [None] * len(_fdf)
+                    st.session_state[_wf_key] = pd.DataFrame({
+                        "Status": _st_vals.tolist(),
+                        "Check Range To-be Waterfall": _cr_vals,
+                    })
+                    st.session_state[f"{p}_wf_sig"] = _df_sig
+
+                # ── Excel-like HTML display ───────────────────────────────────
+                _wf_df = st.session_state[_wf_key]
+                if _cr_col:
+                    st.caption(f"Auto-filled from column: **{_cr_col}**")
+                _EXCEL_COLORS = {
+                    "MAINTAIN":        {"bg": "#D9D9D9", "c": "#000000"},
+                    "NEW SOME":        {"bg": "#00B050", "c": "#FFFFFF"},
+                    "NEW":             {"bg": "#00B050", "c": "#FFFFFF"},
+                    "NEWNEW":          {"bg": "#70AD47", "c": "#FFFFFF"},
+                    "DELETE SOME":     {"bg": "#FF0000", "c": "#FFFFFF"},
+                    "DELETE ALL":      {"bg": "#C00000", "c": "#FFFFFF"},
+                    "NEW DELETE SOME": {"bg": "#ED7D31", "c": "#FFFFFF"},
+                }
+                _sh = [
+                    '<div style="overflow-x:auto;margin-top:12px;">',
+                    '<table style="border-collapse:collapse;font-size:12px;'
+                    'border:1px solid #BFBFBF;min-width:360px;">',
+                    '<thead><tr style="background:#D9D9D9;">',
+                    '<th style="padding:10px 24px;border:1px solid #BFBFBF;text-align:center;'
+                    'font-weight:700;font-size:12px;color:#000;min-width:160px;">Status</th>',
+                    '<th style="padding:10px 24px;border:1px solid #BFBFBF;text-align:center;'
+                    'font-weight:700;font-size:12px;color:#000;min-width:200px;line-height:1.5;">'
+                    'Check Range To-be<br>Waterfall</th>',
+                    '</tr></thead><tbody>',
+                ]
+                for _i, _row in _wf_df.iterrows():
+                    _sv = str(_row["Status"])
+                    _ec = _EXCEL_COLORS.get(_sv, {"bg": "#D9D9D9", "c": "#000000"})
+                    _val = _row["Check Range To-be Waterfall"]
+                    _val_str = "" if (_val is None or str(_val) in ("nan", "None", "")) else str(_val)
+                    _sh.append(
+                        f'<tr>'
+                        f'<td style="padding:7px 24px;border:1px solid #D0D0D0;text-align:center;'
+                        f'background:{_ec["bg"]};color:{_ec["c"]};font-weight:700;font-size:12px;">{_sv}</td>'
+                        f'<td style="padding:7px 24px;border:1px solid #D0D0D0;text-align:center;'
+                        f'background:#FFFFFF;font-size:12px;color:#333;">{_val_str}</td>'
+                        f'</tr>'
+                    )
                 _sh.append('</tbody></table></div>')
-                st.markdown(''.join(_sh),unsafe_allow_html=True)
-                st.caption(f"{len(_sc)} statuses · {_tot:,} total SKUs")
-                st.download_button("⬇️ Export Status Summary",df_to_xlsx_bytes(_sc),
-                    file_name=f"status_{p}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key=f"{p}_st_dl")
+                st.markdown(''.join(_sh), unsafe_allow_html=True)
+
+                # ── Edit / refresh toolbar ────────────────────────────────────
+                st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+                _we1, _we2, _ = st.columns([1.2, 1.2, 5])
+                with _we1:
+                    if st.button("✏️ Edit Table", key=f"{p}_wf_edit_btn", use_container_width=True):
+                        st.session_state[f"{p}_wf_show_editor"] = not st.session_state.get(f"{p}_wf_show_editor", False)
+                        st.rerun()
+                with _we2:
+                    if st.button("↺ Sync from Data", key=f"{p}_wf_refresh", use_container_width=True):
+                        for _k in [_wf_key, f"{p}_wf_sig"]:
+                            if _k in st.session_state: del st.session_state[_k]
+                        st.rerun()
+
+                if st.session_state.get(f"{p}_wf_show_editor", False):
+                    _edited = st.data_editor(
+                        st.session_state[_wf_key],
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Status": st.column_config.TextColumn("Status", width="medium"),
+                            "Check Range To-be Waterfall": st.column_config.NumberColumn(
+                                "Check Range To-be Waterfall", width="large"),
+                        },
+                        key=f"{p}_wf_editor",
+                    )
+                    st.session_state[_wf_key] = _edited
             else:
                 st.warning("Status column not found in the data.")
 
