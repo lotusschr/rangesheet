@@ -10,6 +10,7 @@ from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
     RS_SHEETS, RS_COL_GROUPS, STATUS_COLORS, FILL_COLORS, COLUMN_LABELS,
     get_fill, df_to_xlsx_bytes, df_to_csv_bytes, add_audit,
+    get_shared_db,
 )
 
 inject_css()
@@ -17,15 +18,21 @@ init_session_state()
 render_sidebar("viewdata")
 render_topbar("Rangesheet Review")
 
-merged = st.session_state.get("upload_df")
+selected_files = st.session_state.get("selected_files", [])
+_user_upload = st.session_state.get("upload_df")
 
-selected_files = st.session_state.get(
-    "selected_files",
-    []
-)
+# Always read the shared admin database — it refreshes for all users whenever
+# the admin pins or unpins a file (bump_shared_db invalidates the cache).
+_shared_df, _ = get_shared_db()
+
+# User's own file selection takes priority; fall back to shared admin database.
+if selected_files and _user_upload is not None and len(_user_upload) > 0:
+    merged = _user_upload
+else:
+    merged = _shared_df
 
 # Treat both None AND empty DataFrame as "no data"
-_no_data = merged is None or (hasattr(merged, '__len__') and len(merged) == 0)
+_no_data = merged is None or (hasattr(merged, "__len__") and len(merged) == 0)
 
 if _no_data:
     st.markdown("""
@@ -49,11 +56,57 @@ if _no_data:
     render_page_nav("viewdata")   # ← nav still renders
     st.stop()
 
+# Deduplicate column names in the merged df so Arrow / Streamlit never crashes.
+def _dedup(df: pd.DataFrame) -> pd.DataFrame:
+    seen: dict[str, int] = {}
+    cols = []
+    for c in df.columns:
+        s = str(c)
+        if s in seen:
+            seen[s] += 1
+            cols.append(f"{s}.{seen[s]}")
+        else:
+            seen[s] = 0
+            cols.append(s)
+    if cols != list(df.columns):
+        df = df.copy()
+        df.columns = cols
+    return df
+
+merged = _dedup(merged)
 all_cols = list(merged.columns)
 
 # ── Column group matching ──────────────────────────────────────────────────────
 def _nc(s):  return str(s).lower().strip().replace('\n', ' ').replace('  ', ' ')
 def _nca(s): return _re.sub(r'[^a-z0-9]', '', _nc(s))   # letters+digits only
+
+def _cast_text_cols(df: pd.DataFrame, text_cols: list) -> pd.DataFrame:
+    """Cast specified columns to str so TextColumn editors don't crash on int data."""
+    for c in text_cols:
+        if c in df.columns:
+            df[c] = df[c].where(df[c].isna(), df[c].astype(str))
+    return df
+
+def _fill_from_db(col_list: list, source_df) -> pd.DataFrame:
+    """Build a DataFrame matching col_list by scanning source_df for same-named columns."""
+    if source_df is None or len(source_df) == 0:
+        return pd.DataFrame(columns=col_list)
+    col_map = {col: next((c for c in source_df.columns if _nca(c) == _nca(col)), None)
+               for col in col_list}
+    matched = [col for col, src in col_map.items() if src is not None]
+    if not matched:
+        return pd.DataFrame(columns=col_list)
+    n = len(source_df)
+    result = {col: (source_df[col_map[col]].reset_index(drop=True)
+                    if col_map[col] else pd.Series([None] * n))
+              for col in col_list}
+    df = pd.DataFrame(result)
+    # Drop rows where every matched column is null
+    df = df[~df[matched].isnull().all(axis=1)].reset_index(drop=True)
+    return df
+
+# Signature used to detect when the database (pinned files) changes
+_db_sig = (len(merged), tuple(merged.columns.tolist()))
 
 _dcm  = {_nc(c):  c for c in all_cols}   # normalized → actual col name
 _dcm2 = {_nca(c): c for c in all_cols}   # aggressively normalized → actual col name
@@ -74,9 +127,7 @@ for grp in RS_COL_GROUPS:
     if matched:
         active_groups.append({**grp, "matched": matched})
 _all_grouped = [c for g in active_groups for c in g["matched"]]
-_remaining   = [c for c in all_cols if c not in _all_grouped]
-if _remaining:
-    active_groups.append({"group": "Other", "color": "#FAFAFA", "matched": _remaining})
+# Non-RS columns are intentionally excluded from Rangesheet Review — they appear on the View Data page instead.
 
 # view_vis_cols stores which cols to SHOW (set), order always follows _all_grouped
 if st.session_state.view_vis_cols is not None:
@@ -291,9 +342,7 @@ def _render_sheet_content(df_src, p):
         if _gm:
             _sag.append({**_grp, "matched": _gm})
     _sag_flat = [c for g in _sag for c in g["matched"]]
-    _sag_rest = [c for c in _src_cols if c not in _sag_flat]
-    if _sag_rest:
-        _sag.append({"group": "Other", "color": "#FAFAFA", "matched": _sag_rest})
+    # Only RS_COL_GROUPS columns are shown here; all other columns belong to View Data page.
 
     _subview = st.radio("sub_view",["📋 Table","🏪 Cluster","📊 Status"],
                         horizontal=True, label_visibility="collapsed", key=f"{p}_subview")
@@ -312,13 +361,8 @@ def _render_sheet_content(df_src, p):
             or next((c for c in _src_cols if "dg" in _nc(c) and "name" in _nc(c)), None)
             or next((c for c in _src_cols if "section" in _nc(c)), None)
         )
-        _dg_code_opts = (
-            ["ALL"] + sorted(df_src[_dg_code_col].dropna().astype(str).str.strip().unique().tolist())
-            if _dg_code_col else ["ALL"]
-        )
-
         _dg_c, _arch_c, _leg_c = st.columns([1.05, 2.9, 0.75])
-        _sel_dg_code = "ALL"
+        _sel_dg_code = ""
         _sel_dg_name = "ALL"
 
         with _dg_c:
@@ -328,26 +372,23 @@ def _render_sheet_content(df_src, p):
                         letter-spacing:.08em;margin-bottom:10px;">Display Group</div></div>""",
                 unsafe_allow_html=True)
             with st.container():
-                _prev_code = st.session_state.get(f"_{p}_dg_code_prev", "ALL")
-                _sel_dg_code = st.selectbox(
-                    "DG CODE", _dg_code_opts,
-                    index=(_dg_code_opts.index(_prev_code) if _prev_code in _dg_code_opts else 0),
+                _sel_dg_code = st.text_input(
+                    "Search DG Code", placeholder="Type DG code to filter…",
                     key=f"{p}_dg_code", label_visibility="visible")
-                if _dg_code_col and _dg_name_col and _sel_dg_code != "ALL":
-                    _ns = df_src[df_src[_dg_code_col].astype(str).str.strip() == _sel_dg_code]
+                if _dg_code_col and _dg_name_col and _sel_dg_code:
+                    _ns = df_src[df_src[_dg_code_col].astype(str).str.contains(_sel_dg_code, case=False, na=False)]
                     _dg_name_opts = ["ALL"] + sorted(_ns[_dg_name_col].dropna().astype(str).str.strip().unique().tolist())
                 elif _dg_name_col:
                     _dg_name_opts = ["ALL"] + sorted(df_src[_dg_name_col].dropna().astype(str).str.strip().unique().tolist())
                 else:
                     _dg_name_opts = ["ALL"]
                 _prev_name = st.session_state.get(f"_{p}_dg_name_prev", "ALL")
-                if _sel_dg_code != _prev_code and _prev_name not in _dg_name_opts:
+                if _prev_name not in _dg_name_opts:
                     _prev_name = "ALL"
                 _sel_dg_name = st.selectbox(
                     "DG NAME", _dg_name_opts,
                     index=(_dg_name_opts.index(_prev_name) if _prev_name in _dg_name_opts else 0),
                     key=f"{p}_dg_name", label_visibility="visible")
-                st.session_state[f"_{p}_dg_code_prev"] = _sel_dg_code
                 st.session_state[f"_{p}_dg_name_prev"] = _sel_dg_name
                 _static_rows = ""
                 for _sk, _sv2 in [
@@ -377,8 +418,8 @@ def _render_sheet_content(df_src, p):
             _asis_stc  = next((c for c in _src_cols if ("as-is stores applied" in _nc(c) or ("as is" in _nc(c) and "stores applied" in _nc(c))) and "to" not in _nc(c)[:4]), None)
             _tobe_stc  = next((c for c in _src_cols if "to-be stores applied" in _nc(c) or "to be stores applied" in _nc(c) or "to-be stores" in _nc(c)), None)
             _ab = df_src.copy()
-            if _sel_dg_code != "ALL" and _dg_code_col and _dg_code_col in _ab.columns:
-                _ab = _ab[_ab[_dg_code_col].astype(str).str.strip() == _sel_dg_code]
+            if _sel_dg_code and _dg_code_col and _dg_code_col in _ab.columns:
+                _ab = _ab[_ab[_dg_code_col].astype(str).str.contains(_sel_dg_code, case=False, na=False)]
             if _sel_dg_name != "ALL" and _dg_name_col and _dg_name_col in _ab.columns:
                 _ab = _ab[_ab[_dg_name_col].astype(str).str.strip() == _sel_dg_name]
             TYPES = ["MAINTAIN","NEW DELETE SOME","DELETE SOME","DELETE ALL","NEW SOME","NEWNEW"]
@@ -507,8 +548,8 @@ def _render_sheet_content(df_src, p):
             _search_q = st.text_input("Search", placeholder="🔎  Search item, barcode, status...",
                                       label_visibility="collapsed", key=f"{p}_search")
         with _c3:
-            _n_rows = st.number_input("Rows", min_value=1, max_value=10000, value=10, step=10,
-                                      help="Rows to display", key=f"{p}_nrows")
+            _n_rows = st.number_input("Rows", min_value=10, max_value=100000, value=500, step=100,
+                                      help="Max rows to display", key=f"{p}_nrows")
         with _c4:
             _edit_on = st.toggle("⚙️ Edit Columns", key=f"{p}_edit_cols")
 
@@ -542,13 +583,19 @@ def _render_sheet_content(df_src, p):
                     st.rerun()
 
         _vis_set = set(st.session_state[_pvis_key] or [])
-        disp_cols = ([c for c in _sag_flat if c in df_src.columns and (not _vis_set or c in _vis_set)] or _src_cols[:20])
+        _matched_cols = [c for c in _sag_flat if c in df_src.columns and (not _vis_set or c in _vis_set)]
+        disp_cols = _matched_cols  # Only RS_COL_GROUPS columns — no fallback to all cols
+
+        if not disp_cols:
+            st.info("No columns in this dataset match the RangeSheet standard headers. "
+                    "Check the raw file on the View Data page.")
+            return  # exit only this function, not the whole page
 
         # Filter + search
         df_view = df_src.copy()
         _pog_c = next((c for c in _src_cols if "pog" in c.lower() and "cluster" in c.lower()), None)
-        if _sel_dg_code != "ALL" and _dg_code_col and _dg_code_col in df_view.columns:
-            df_view = df_view[df_view[_dg_code_col].astype(str).str.strip() == _sel_dg_code]
+        if _sel_dg_code and _dg_code_col and _dg_code_col in df_view.columns:
+            df_view = df_view[df_view[_dg_code_col].astype(str).str.contains(_sel_dg_code, case=False, na=False)]
         if _sel_dg_name != "ALL" and _dg_name_col and _dg_name_col in df_view.columns:
             df_view = df_view[df_view[_dg_name_col].astype(str).str.strip() == _sel_dg_name]
         if _search_q:
@@ -566,73 +613,34 @@ def _render_sheet_content(df_src, p):
         # ── Table ─────────────────────────────────────────────────────────────
         if _subview == "📋 Table":
             _MAX = int(_n_rows)
-            _VS = [
-                ("Department",["Department","Dept","Department Code&Desc","department_code_desc"]),
-                ("Section",["Section","section"]),
-                ("Subclass",["Subclass","SubClass","Sub Class","subclass"]),
-                ("Barcode",["Barcode","barcode","UPC","EAN","ean"]),
-                ("TPNA",["TPNA","tpna"]),
-                ("ID",["ID","id","Item ID","ItemID"]),
-                ("No. of Unit in Case",["No. of Unit in Case","No_of_Unit_in_Case","Units Per Case","Case Units","no of unit in case"]),
-                ("No. of Unit in Inner",["No. of Unit in Inner","No_of_Unit_in_Inner","no of unit in inner"]),
-                ("Tray total number",["Tray total number","Tray_total_number","Tray Total Number","tray total"]),
-                ("Express Picking Type",["Express Picking Type","Express_Picking_Type","express picking type"]),
-                ("HDET Picking Type",["HDET Picking Type","HDET_Picking_Type","hdet picking type"]),
-                ("EDLP Price by Format Item name",["EDLP Price by Format","EDLP_Price_by_Format","Item Name","Item name","edlp price by format"]),
-                ("As IS planograms applied",["AS IS planograms applied","As IS planograms applied","AS-IS planograms applied","ASIS planograms applied","as is planograms applied"]),
-                ("To-BE planograms applied",["TO-BE planograms applied","To-BE planograms applied","TOBE planograms applied","to be planograms applied"]),
-                ("AS-IS Store applied",["AS-IS Stores Applied","AS IS Stores Applied","ASIS Stores Applied","AS-IS Store applied","as-is stores applied"]),
-                ("To-Be store applied",["TO-Be stores applied","To-Be stores applied","TOBE stores applied","to-be stores applied","to be stores applied"]),
-                ("Avg unit 52 wk/forecast new item sales",["Avg Units 52wk/ Forecast new item sales","Avg Units 52wk/Forecast new item sales","avg units 52wk/ forecast new item sales","Avg unit 52wk"]),
-                ("Supplier pack size",["Supplier Pack Size","Supplier pack size","Supplier_Pack_Size","supplier pack size"]),
-                ("Range Tail YYYY",["Range Tail YYYY","Range_Tail_YYYY","range tail yyyy"]),
-                ("AVG selling Price by format",["AVG Selling Price by Format","Avg Selling Price by Format","avg selling price by format","AVG_Selling_Price_by_Format"]),
-                ("Star Line",["Star Line","Star_Line","starline","star line"]),
-                ("Item priority",["Item Priority","Item priority","Item_Priority","item priority"]),
-                ("JDA vs Actual",["JDA vs Actual","JDA_vs_Actual","jda vs actual"]),
-                ("Actual-Actual",["Actual-Actual","Actual_Actual","actual-actual","actual actual"]),
-            ]
-            _VG = [("Item Info","#D9D9D9","#333333",12),("Range Info","#E8E3DC","#444444",8),
-                   ("Star Line","#000000","#FFFFFF",1),("Priority","#00CC44","#003300",3)]
-            def _sv(src_df, specs):
-                def _vn(s): return _re.sub(r'[^a-z0-9]','',str(s).lower())
-                res={}
-                for on,cands in specs:
-                    sc=None
-                    for cand in cands:
-                        sc=next((c for c in src_df.columns if _vn(c)==_vn(cand)),None)
-                        if sc: break
-                    res[on]=(src_df[sc].reset_index(drop=True) if sc else pd.Series([None]*len(src_df),name=on))
-                return pd.DataFrame(res)
-            _tdf=_sv(df_view,_VS).head(_MAX); _hdrs=list(_tdf.columns)
-            def _cw(lbl): return max(90,min(240,len(lbl)*7+16))
-            _h=['<div style="overflow-x:auto;border-radius:12px;border:1px solid #E0D9D2;margin-top:14px;">',
-                '<table style="border-collapse:collapse;font-size:11px;min-width:100%;"><thead><tr>']
-            for _gn,_gc,_gt,_gcnt in _VG:
-                _h.append(f'<th colspan="{_gcnt}" style="padding:6px 8px;text-align:center;background:{_gc};'
-                          f'border:1px solid #E0D9D2;font-size:9px;font-weight:700;color:{_gt};'
-                          f'letter-spacing:.05em;text-transform:uppercase;">{_gn}</th>')
-            _h.append('</tr><tr style="background:#1C1C1E;">')
-            for _lbl in _hdrs:
-                _w=_cw(_lbl)
-                _h.append(f'<th style="padding:9px 10px;text-align:left;font-weight:700;'
-                          f'color:rgba(255,255,255,.85);font-size:10px;white-space:nowrap;'
-                          f'min-width:{_w}px;max-width:{_w}px;border-right:1px solid rgba(255,255,255,.07);">{_lbl}</th>')
-            _h.append('</tr></thead><tbody>')
-            for _i,_row in _tdf.iterrows():
-                _rb="#FFFFFF" if _i%2==0 else "#F8F4F0"
-                _h.append(f'<tr style="background:{_rb};">')
-                for _lbl in _hdrs:
-                    _val=_row.get(_lbl,""); _sv2="" if pd.isna(_val) or str(_val) in ("nan","None") else str(_val)
-                    _w=_cw(_lbl)
-                    _inner=(f'<span style="color:#2BBFA4;font-family:monospace;font-weight:600;">{_sv2}</span>'
-                            if _lbl.lower() in ("barcode","id") and _sv2 else f'<span>{_sv2}</span>')
-                    _h.append(f'<td style="padding:8px 10px;border-bottom:1px solid #E0D9D2;'
-                              f'border-right:1px solid #E0D9D2;min-width:{_w}px;max-width:{_w}px;'
-                              f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{_inner}</td>')
-                _h.append('</tr>')
-            _h.append('</tbody></table></div>')
-            st.markdown(''.join(_h),unsafe_allow_html=True)
+            # Fixed predefined column structure — headers never change.
+            # Data is pulled from df_view by _nca() name matching; empty where no match.
+            _std_all = [c for grp in RS_COL_GROUPS for c in grp["cols"]]
+            _t_col_map = {
+                sc: next((c for c in df_view.columns if _nca(c) == _nca(sc)), None)
+                for sc in _std_all
+            }
+            # Visibility filter: if user applied one, keep only cols whose matched
+            # actual name (or standard name itself) is in the visible set.
+            if _vis_set:
+                _std_all = [sc for sc in _std_all
+                            if (_t_col_map.get(sc) in _vis_set) or sc in _vis_set]
+            _n = min(len(df_view), _MAX)
+            def _safe_col(src_df, col_name, n):
+                s = src_df[col_name]
+                if isinstance(s, pd.DataFrame):   # duplicate col names → take first
+                    s = s.iloc[:, 0]
+                return s.iloc[:n].reset_index(drop=True)
+            _tdf = pd.DataFrame({
+                sc: (_safe_col(df_view, _t_col_map[sc], _n)
+                     if _t_col_map.get(sc) else pd.Series([""] * _n))
+                for sc in _std_all
+            })
+            st.dataframe(_tdf, use_container_width=True, height=560, hide_index=True)
+            if len(df_view) > _MAX:
+                st.caption(f"Showing {_MAX:,} of {len(df_view):,} rows — increase Rows to see more")
+            else:
+                st.caption(f"{len(df_view):,} rows · {len(_std_all)} columns")
 
         # ── Cluster ───────────────────────────────────────────────────────────
         elif _subview == "🏪 Cluster":
@@ -839,7 +847,7 @@ def _render_sheet_content(df_src, p):
         _cdf=df_src[_cnv_cols].copy() if _cnv_cols else df_src.copy()
         if _cnv_srch:
             _cdf=_cdf[_cdf.apply(lambda r:r.astype(str).str.contains(_cnv_srch,case=False,na=False).any(),axis=1)]
-        st.dataframe(_cdf.reset_index(drop=True),use_container_width=True,height=300,hide_index=True)
+        st.dataframe(_dedup(_cdf.reset_index(drop=True)),use_container_width=True,height=300,hide_index=True)
         st.caption(f"{len(_cdf):,} rows · {len(_cnv_cols)} columns")
         _ccb1,_ccb2=st.columns(2)
         with _ccb1:
@@ -904,8 +912,12 @@ with _sheet_tabs[3]:   # 5.1 ItembyStore
         "DaysSupply":               st.column_config.NumberColumn("DaysSupply",             width="small", format="%.0f"),
         "MaxDOS":                   st.column_config.NumberColumn("MaxDOS",                 width="small", format="%.0f"),
     }
-    if "ib_data" not in st.session_state:
-        st.session_state.ib_data = pd.DataFrame(columns=_IB_COLS)
+    if "ib_data" not in st.session_state or st.session_state.get("_ib_db_sig") != _db_sig:
+        _ib_raw = _fill_from_db(_IB_COLS, merged)
+        st.session_state.ib_data = _cast_text_cols(
+            _ib_raw, ["store_no", "store_name", "ID", "ProductDescription",
+                      "POG_STATUS", "Display Group", "Display group desc"])
+        st.session_state["_ib_db_sig"] = _db_sig
 
     _ib_c1, _ib_c2, _ib_c3, _ = st.columns([1.1, 1.0, 1.4, 4.5])
     with _ib_c1:
@@ -915,8 +927,11 @@ with _sheet_tabs[3]:   # 5.1 ItembyStore
                 [st.session_state.ib_data, _empty], ignore_index=True)
             st.rerun()
     with _ib_c2:
-        if st.button("↺ Clear All", key="ib_clear", use_container_width=True):
-            st.session_state.ib_data = pd.DataFrame(columns=_IB_COLS)
+        if st.button("↺ Reset", key="ib_clear", use_container_width=True):
+            st.session_state.ib_data = _cast_text_cols(
+                _fill_from_db(_IB_COLS, merged),
+                ["store_no", "store_name", "ID", "ProductDescription",
+                 "POG_STATUS", "Display Group", "Display group desc"])
             st.session_state.pop("vw_submit_51", None)
             st.rerun()
     with _ib_c3:
@@ -956,8 +971,9 @@ with _sheet_tabs[4]:   # 5.2 ItembyStore_SC
         "avg per wk":      st.column_config.NumberColumn("avg per wk",    width="small",  format="%.2f"),
         "Coperate Status": st.column_config.TextColumn("Coperate Status", width="medium"),
     }
-    if "ibs_sc_data" not in st.session_state:
-        st.session_state.ibs_sc_data = pd.DataFrame(columns=_IBS_COLS)
+    if "ibs_sc_data" not in st.session_state or st.session_state.get("_ibs_db_sig") != _db_sig:
+        st.session_state.ibs_sc_data = _fill_from_db(_IBS_COLS, merged)
+        st.session_state["_ibs_db_sig"] = _db_sig
 
     # ── Toolbar ──────────────────────────────────────────────────────────────
     _ibs_c1, _ibs_c2, _ibs_c3, _ibs_c4 = st.columns([1.1, 1.0, 1.4, 4.5])
@@ -969,8 +985,8 @@ with _sheet_tabs[4]:   # 5.2 ItembyStore_SC
             )
             st.rerun()
     with _ibs_c2:
-        if st.button("↺ Clear All", key="ibs_clear", use_container_width=True):
-            st.session_state.ibs_sc_data = pd.DataFrame(columns=_IBS_COLS)
+        if st.button("↺ Reset", key="ibs_clear", use_container_width=True):
+            st.session_state.ibs_sc_data = _fill_from_db(_IBS_COLS, merged)
             st.session_state.pop("vw_submit_52", None)
             st.rerun()
     with _ibs_c3:
@@ -996,8 +1012,9 @@ with _sheet_tabs[4]:   # 5.2 ItembyStore_SC
         st.caption(f"✅ {len(st.session_state['vw_submit_52']):,} rows submitted to Report")
 with _sheet_tabs[5]:   # 5.3 Upload_product_library
     _PRODLIB_COLS = ["ID", "Product Description", "Mod_structure_fixture"]
-    if "vw_prodlib_data" not in st.session_state:
-        st.session_state.vw_prodlib_data = pd.DataFrame(columns=_PRODLIB_COLS)
+    if "vw_prodlib_data" not in st.session_state or st.session_state.get("_pl_db_sig") != _db_sig:
+        st.session_state.vw_prodlib_data = _fill_from_db(_PRODLIB_COLS, merged)
+        st.session_state["_pl_db_sig"] = _db_sig
 
     # ── Toolbar ──────────────────────────────────────────────────────────────
     _pl_c1, _pl_c2, _pl_c3, _pl_c4 = st.columns([1.1, 1.0, 1.4, 4.5])
@@ -1009,8 +1026,8 @@ with _sheet_tabs[5]:   # 5.3 Upload_product_library
             )
             st.rerun()
     with _pl_c2:
-        if st.button("↺ Clear All", key="pl_clear", use_container_width=True):
-            st.session_state.vw_prodlib_data = pd.DataFrame(columns=_PRODLIB_COLS)
+        if st.button("↺ Reset", key="pl_clear", use_container_width=True):
+            st.session_state.vw_prodlib_data = _fill_from_db(_PRODLIB_COLS, merged)
             st.session_state.pop("vw_submit_53", None)
             st.rerun()
     with _pl_c3:
@@ -1054,8 +1071,11 @@ with _sheet_tabs[6]:   # 5.4 Upload to Citrix
         "FP_status":  st.column_config.TextColumn("FP_status",  width="small"),
         "Capacity":   st.column_config.NumberColumn("Capacity",   width="small", format="%.0f"),
     }
-    if "vw_citrix_data" not in st.session_state:
-        st.session_state.vw_citrix_data = pd.DataFrame(columns=_CITRIX_COLS)
+    if "vw_citrix_data" not in st.session_state or st.session_state.get("_cx_db_sig") != _db_sig:
+        _cx_raw = _fill_from_db(_CITRIX_COLS, merged)
+        st.session_state.vw_citrix_data = _cast_text_cols(
+            _cx_raw, ["POGName", "store_no", "store_name", "FP_status"])
+        st.session_state["_cx_db_sig"] = _db_sig
 
     # ── Toolbar ──────────────────────────────────────────────────────────────
     _cx_c1, _cx_c2, _cx_c3, _ = st.columns([1.1, 1.0, 1.4, 4.5])
@@ -1067,8 +1087,10 @@ with _sheet_tabs[6]:   # 5.4 Upload to Citrix
             )
             st.rerun()
     with _cx_c2:
-        if st.button("↺ Clear All", key="cx_clear", use_container_width=True):
-            st.session_state.vw_citrix_data = pd.DataFrame(columns=_CITRIX_COLS)
+        if st.button("↺ Reset", key="cx_clear", use_container_width=True):
+            st.session_state.vw_citrix_data = _cast_text_cols(
+                _fill_from_db(_CITRIX_COLS, merged),
+                ["POGName", "store_no", "store_name", "FP_status"])
             st.session_state.pop("vw_submit_54", None)
             st.rerun()
     with _cx_c3:

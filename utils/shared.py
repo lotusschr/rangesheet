@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 import os
 import io
+import json
 from datetime import datetime
 from difflib import SequenceMatcher
 
@@ -13,7 +14,7 @@ ROOT_DIR = os.path.dirname(_HERE)
 BASE_DIR = os.path.join(ROOT_DIR, "rangesheet_data")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-APP_CONFIG = {"allowed_extensions": ["csv", "xlsx", "xls", "xlsb"], "max_file_mb": 1024}
+APP_CONFIG = {"allowed_extensions": ["csv", "txt", "xlsx", "xls", "xlsb"], "max_file_mb": 1024}
 
 RS_SHEETS = [
     "Range Sheet_Non-SSPOG", "Range Sheet_SSPOG",
@@ -34,6 +35,7 @@ STATUS_COLORS = {
 
 NAV_ITEMS = [
     ("landpage",  "🗂️", "My Files"),
+    ("rawfiles",  "📁", "View Data"),
     ("viewdata",  "🔍", "Rangesheet Review"),
     ("dashboard", "📊", "Dashboard"),
     ("report",    "📋", "Report"),
@@ -600,9 +602,10 @@ span[title="Sign out"] button:hover,
 
 
 # ── Page navigation (Next / Previous) ────────────────────────────────────────
-_PAGE_ORDER  = ["landpage", "viewdata", "dashboard", "report", "audit"]
+_PAGE_ORDER  = ["landpage", "rawfiles", "viewdata", "dashboard", "report", "audit"]
 _PAGE_LABELS = {
     "landpage":  "My Files",
+    "rawfiles":  "View Data",
     "viewdata":  "Rangesheet Review",
     "dashboard": "Dashboard",
     "report":    "Report",
@@ -755,13 +758,20 @@ _HEADER_KEYWORDS = {
     "check range to-be waterfall", "item priority",
 }
 
-def _detect_header_row(raw: bytes, encoding: str) -> int:
+def _detect_header_row(raw: bytes, encoding: str, sep: str = ",") -> int:
+    # Use pandas to parse so multi-line quoted fields are handled correctly.
+    # The returned index is a LOGICAL CSV row number (matches what skiprows= expects).
     try:
-        lines = raw.decode(encoding, errors="replace").splitlines()
-        for i, line in enumerate(lines[:30]):
-            cells = {c.strip().lower() for c in line.split(",")}
+        preview = pd.read_csv(
+            io.BytesIO(raw), encoding=encoding, sep=sep,
+            header=None, nrows=60, on_bad_lines="skip",
+            dtype=str, low_memory=False,
+        )
+        for i, row in preview.iterrows():
+            cells = {str(c).strip().strip('"').strip("'").lower()
+                     for c in row if pd.notna(c) and str(c).strip()}
             if len(cells & _HEADER_KEYWORDS) >= 2:
-                return i
+                return int(i)
     except Exception:
         pass
     return 0
@@ -810,24 +820,202 @@ def _extract_rangesheet_meta(raw: bytes, encoding: str, header_row: int) -> dict
         pass
     return meta
 
+# ── Column alias mapping ──────────────────────────────────────────────────────
+# Maps raw column names (lowercase/stripped) → standard app column names.
+# Edit this dict to support new file formats or spelling variants.
+COLUMN_MAPPING = {
+    # Department / DG Code
+    "dept":                                    "Department",
+    "department":                              "Department",
+    "department code & desc":                  "Department",
+    "department code&desc":                    "Department",
+    "dg code":                                 "Department",
+    "dg_code":                                 "Department",
+    # Section / DG Name
+    "section":                                 "Section",
+    "dg name":                                 "Section",
+    "dg_name":                                 "Section",
+    "department name":                         "Section",
+    # Subclass
+    "sub class":                               "Subclass",
+    "sub-class":                               "Subclass",
+    "subclass":                                "Subclass",
+    # Barcode
+    "barcode":                                 "Barcode",
+    "upc":                                     "Barcode",
+    "ean":                                     "Barcode",
+    "ean code":                                "Barcode",
+    "sku":                                     "Barcode",
+    # TPNA / ID
+    "tpna":                                    "TPNA",
+    "item id":                                 "ID",
+    "item_id":                                 "ID",
+    "itemid":                                  "ID",
+    # Units
+    "no. of unit in case":                     "No. of Unit in Case",
+    "no of unit in case":                      "No. of Unit in Case",
+    "units per case":                          "No. of Unit in Case",
+    "case units":                              "No. of Unit in Case",
+    "no_of_unit_in_case":                      "No. of Unit in Case",
+    "no. of unit in inner":                    "No. of Unit in Inner",
+    "no of unit in inner":                     "No. of Unit in Inner",
+    "no_of_unit_in_inner":                     "No. of Unit in Inner",
+    "tray total number":                       "Tray total number",
+    "tray_total_number":                       "Tray total number",
+    # Picking types
+    "express picking type":                    "Express Picking Type",
+    "express_picking_type":                    "Express Picking Type",
+    "hdet picking type":                       "HDET Picking Type",
+    "hdet_picking_type":                       "HDET Picking Type",
+    # Prices
+    "edlp price by format":                    "EDLP Price by Format",
+    "edlp_price_by_format":                    "EDLP Price by Format",
+    "edlp price":                              "EDLP Price by Format",
+    "avg selling price by format":             "AVG Selling Price by Format",
+    "avg_selling_price_by_format":             "AVG Selling Price by Format",
+    "avg selling price":                       "AVG Selling Price by Format",
+    "average selling price":                   "AVG Selling Price by Format",
+    # Item name
+    "item name":                               "Item Name",
+    "item_name":                               "Item Name",
+    "product name":                            "Item Name",
+    "product_name":                            "Item Name",
+    "description":                             "Item Name",
+    # Planograms
+    "as is planograms applied":                "AS IS planograms applied",
+    "asis planograms applied":                 "AS IS planograms applied",
+    "as-is planograms applied":                "AS IS planograms applied",
+    "to-be planograms applied":                "TO-BE planograms applied",
+    "tobe planograms applied":                 "TO-BE planograms applied",
+    "to be planograms applied":                "TO-BE planograms applied",
+    # Stores applied
+    "as-is stores applied":                    "AS-IS Stores Applied",
+    "as is stores applied":                    "AS-IS Stores Applied",
+    "asis stores applied":                     "AS-IS Stores Applied",
+    "to-be stores applied":                    "TO-Be stores applied",
+    "to be stores applied":                    "TO-Be stores applied",
+    "tobe stores applied":                     "TO-Be stores applied",
+    # Sales / forecast
+    "avg units 52wk/ forecast new item sales": "Avg Units 52wk/ Forecast new item sales",
+    "avg units 52wk/forecast new item sales":  "Avg Units 52wk/ Forecast new item sales",
+    "avg unit 52wk":                           "Avg Units 52wk/ Forecast new item sales",
+    "avg units 52wk":                          "Avg Units 52wk/ Forecast new item sales",
+    # Supplier
+    "supplier pack size":                      "Supplier Pack Size",
+    "supplier_pack_size":                      "Supplier Pack Size",
+    "pack size":                               "Supplier Pack Size",
+    # Range tail
+    "range tail yyyy":                         "Range Tail YYYY",
+    "range_tail_yyyy":                         "Range Tail YYYY",
+    "range tail":                              "Range Tail YYYY",
+    # Priority / status
+    "star line":                               "Star Line",
+    "star_line":                               "Star Line",
+    "starline":                                "Star Line",
+    "item priority":                           "Item Priority",
+    "item_priority":                           "Item Priority",
+    "itempriority":                            "Item Priority",
+    "jda vs actual":                           "JDA vs Actual",
+    "jda_vs_actual":                           "JDA vs Actual",
+    "actual-actual":                           "Actual-Actual",
+    "actual_actual":                           "Actual-Actual",
+    "status":                                  "Status",
+    # Waterfall
+    "check range to-be waterfall":             "Check Range To-be Waterfall",
+    "check range to be waterfall":             "Check Range To-be Waterfall",
+    "check range":                             "Check Range To-be Waterfall",
+    # Cluster
+    "cluster (planogram name)":                "Cluster (Planogram name)",
+    "planogram name":                          "Cluster (Planogram name)",
+    "to be stores applied count":              "To be stores applied count",
+    "mods":                                    "MODS",
+    "fixtures":                                "Fixtures",
+    "fixture":                                 "Fixtures",
+    "range class":                             "Range Class",
+    "total new skus":                          "Total New SKUs",
+    "total delete skus":                       "Total Delete SKUs",
+    "%achieving crd case (as is)":             "%Achieving CRD case (AS is)",
+    "%achieving lrd (as is)":                  "%Achieving LRD (AS is)",
+}
+
+def apply_column_mapping(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename df columns using COLUMN_MAPPING. Skips rename if the target name
+    already exists in the DataFrame (prevents creating duplicate column names)."""
+    rename = {}
+    taken = set(df.columns)       # track names that are already present
+    for col in df.columns:
+        key = str(col).strip().lower()
+        target = COLUMN_MAPPING.get(key)
+        if target and col != target and target not in taken:
+            rename[col] = target
+            taken.add(target)     # reserve the target so no second col gets it
+    return df.rename(columns=rename) if rename else df
+
+def _detect_delimiter(raw: bytes, encoding: str = "utf-8-sig") -> str:
+    """Detect column delimiter in a text file. Returns '|', '\\t', ';', or ','."""
+    try:
+        text = raw.decode(encoding, errors="replace")
+        lines = [ln for ln in text.splitlines()[:20] if ln.strip() and not ln.startswith("#")]
+        if not lines:
+            return ","
+        counts = {d: 0 for d in ("|", "\t", ";", ",")}
+        for ln in lines[:8]:
+            for d in counts:
+                counts[d] += ln.count(d)
+        # Winner must have at least 2 occurrences to be trusted
+        best = max(counts, key=counts.get)
+        return best if counts[best] >= 2 else ","
+    except Exception:
+        return ","
+
+def _dedup_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename duplicate column names by appending .1, .2, … so Arrow/Streamlit
+    never sees two identical column headers."""
+    seen: dict[str, int] = {}
+    new_cols = []
+    for c in df.columns:
+        s = str(c)
+        if s in seen:
+            seen[s] += 1
+            new_cols.append(f"{s}.{seen[s]}")
+        else:
+            seen[s] = 0
+            new_cols.append(s)
+    df = df.copy()
+    df.columns = new_cols
+    return df
+
+def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Strip column names, drop fully-empty rows, apply column mapping, dedup."""
+    df.columns = [str(c).strip().replace('\n', ' ').replace('\r', '') for c in df.columns]
+    df = df.dropna(how="all").reset_index(drop=True)
+    df = apply_column_mapping(df)
+    df = _dedup_columns(df)   # ensure unique headers before storing / displaying
+    return df
+
 def read_uploaded_file(uploaded_file):
     name = uploaded_file.name
     ext  = os.path.splitext(name)[-1].lower()
+    if "_file_read_errors" not in st.session_state:
+        st.session_state._file_read_errors = {}
+    st.session_state._file_read_errors.pop(name, None)
+
+    def _store_err(e):
+        st.session_state._file_read_errors[name] = f"{type(e).__name__}: {e}"
+
     try:
-        if ext == ".csv":
+        if ext in (".csv", ".txt"):
             raw = uploaded_file.read()
             uploaded_file.seek(0)
+            sep = _detect_delimiter(raw)
+            last_err = None
             for enc in ["utf-8-sig", "utf-8", "cp874", "latin1"]:
                 try:
-                    header_row = _detect_header_row(raw, enc)
-                    df = pd.read_csv(io.BytesIO(raw), encoding=enc,
-                                     skiprows=header_row, header=0)
-                    df.columns = [str(c).strip().replace('\n', ' ').replace('\r', '')
-                                  for c in df.columns]
-                    if "Department" in df.columns:
-                        df = df[df["Department"].notna() &
-                                (df["Department"].astype(str).str.strip() != "")]
-                    df = df.reset_index(drop=True)
+                    header_row = _detect_header_row(raw, enc, sep=sep)
+                    df = pd.read_csv(io.BytesIO(raw), encoding=enc, sep=sep,
+                                     skiprows=header_row, header=0,
+                                     on_bad_lines="skip")
+                    df = _clean_df(df)
                     if header_row > 0 and "rangesheet_meta" in st.session_state:
                         try:
                             st.session_state.rangesheet_meta = _extract_rangesheet_meta(
@@ -835,23 +1023,79 @@ def read_uploaded_file(uploaded_file):
                         except Exception:
                             pass
                     return df
-                except Exception:
-                    continue
+                except Exception as e:
+                    last_err = e
+            if last_err:
+                _store_err(last_err)
+
         elif ext in (".xlsx", ".xls", ".xlsb"):
             raw = uploaded_file.read()
-            engine = "pyxlsb" if ext == ".xlsb" else None
-            header_row = _detect_header_row_excel(raw, engine=engine)
-            kwargs = {"engine": engine} if engine else {}
-            df = pd.read_excel(io.BytesIO(raw), header=header_row, **kwargs)
-            df.columns = [str(c).strip().replace('\n', ' ').replace('\r', '')
-                          for c in df.columns]
-            if "Department" in df.columns:
-                df = df[df["Department"].notna() &
-                        (df["Department"].astype(str).str.strip() != "")]
-            df = df.reset_index(drop=True)
-            return df
-    except Exception:
-        pass
+            last_err = None
+
+            if ext == ".xlsb":
+                try:
+                    header_row = _detect_header_row_excel(raw, engine="pyxlsb")
+                    df = pd.read_excel(io.BytesIO(raw), header=header_row, engine="pyxlsb")
+                    return _clean_df(df)
+                except Exception as e:
+                    _store_err(e); return None
+
+            # Strategy 1: auto-detected header row
+            try:
+                header_row = _detect_header_row_excel(raw)
+                df = pd.read_excel(io.BytesIO(raw), header=header_row)
+                df = _clean_df(df)
+                if not df.empty:
+                    return df
+            except Exception as e:
+                last_err = e
+
+            # Strategy 2: force header=0
+            try:
+                df = pd.read_excel(io.BytesIO(raw), header=0)
+                df = _clean_df(df)
+                if not df.empty:
+                    return df
+            except Exception as e:
+                last_err = e
+
+            # Strategy 3: read all sheets, return first non-empty
+            try:
+                all_sheets = pd.read_excel(io.BytesIO(raw), sheet_name=None, dtype=str)
+                for _sdf in all_sheets.values():
+                    _sdf = _clean_df(_sdf)
+                    if not _sdf.empty and len(_sdf.columns) > 1:
+                        return _sdf
+            except Exception as e:
+                last_err = e
+
+            # Strategy 4: xlrd engine (handles some legacy .xls/.xlsx)
+            try:
+                df = pd.read_excel(io.BytesIO(raw), header=0, engine="xlrd")
+                df = _clean_df(df)
+                if not df.empty:
+                    return df
+            except Exception as e:
+                last_err = e
+
+            # Strategy 5: dtype=str to bypass type-inference failures
+            try:
+                df = pd.read_excel(io.BytesIO(raw), header=0, dtype=str)
+                df = _clean_df(df)
+                if not df.empty:
+                    return df
+            except Exception as e:
+                last_err = e
+
+            if last_err:
+                _store_err(last_err)
+
+        else:
+            _store_err(Exception(f"Unsupported file type: {ext}"))
+
+    except Exception as e:
+        _store_err(e)
+
     return None
 
 def auto_merge(files_info: list) -> tuple:
@@ -859,10 +1103,14 @@ def auto_merge(files_info: list) -> tuple:
     if not dfs:
         return None, []
     if len(dfs) == 1:
-        return dfs[0][1].copy(), [f"📄 Single file — {dfs[0][0]}"]
+        return _dedup_columns(dfs[0][1].copy()), [f"📄 Single file — {dfs[0][0]}"]
     merged = pd.concat([d for _, d in dfs], ignore_index=True, sort=False)
+    merged = _dedup_columns(merged)          # remove any dupes produced by concat
     before = len(merged)
-    merged = merged.drop_duplicates(ignore_index=True)
+    try:
+        merged = merged.drop_duplicates(ignore_index=True)
+    except Exception:
+        pass                                  # drop_duplicates fails on unhashable types
     log = [f"✅ Merged {len(dfs)} files → {len(merged):,} rows"]
     if len(merged) < before:
         log.append(f"🧹 Removed {before - len(merged):,} duplicates")
@@ -975,6 +1223,139 @@ def save_file(file_bytes: bytes, filename: str) -> str:
         return path
     except Exception:
         return ""
+
+# ── Admin-pinned file manifest ────────────────────────────────────────────────
+_ADMIN_MANIFEST = os.path.join(BASE_DIR, "admin_files.json")
+
+def load_admin_manifest() -> list:
+    """Return list of pinned-file metadata dicts from disk."""
+    try:
+        if os.path.exists(_ADMIN_MANIFEST):
+            with open(_ADMIN_MANIFEST, "r", encoding="utf-8") as _f:
+                return json.load(_f)
+    except Exception:
+        pass
+    return []
+
+def save_admin_manifest(entries: list):
+    """Persist pinned-file metadata list to disk."""
+    try:
+        _ensure_dirs()
+        with open(_ADMIN_MANIFEST, "w", encoding="utf-8") as _f:
+            json.dump(entries, _f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+def _read_file_from_path(path: str):
+    """Read a saved file from disk using the same logic as read_uploaded_file."""
+    class _F:
+        name = os.path.basename(path)
+        _buf = None
+        def read(self):
+            if self._buf is None:
+                with open(path, "rb") as fh:
+                    self._buf = fh.read()
+            return self._buf
+        def seek(self, n): pass
+    return read_uploaded_file(_F())
+
+def get_admin_file_entries() -> list:
+    """Load all admin-pinned files from disk and return full entry dicts (with df)."""
+    entries = []
+    for meta in load_admin_manifest():
+        _path = os.path.join(BASE_DIR, "uploads", meta["name"])
+        if not os.path.exists(_path):
+            continue
+        try:
+            df = _read_file_from_path(_path)
+            if df is not None:
+                entries.append({
+                    **meta,
+                    "df":     df,
+                    "rows":   len(df),
+                    "cols":   len(df.columns),
+                    "pinned": True,
+                })
+        except Exception:
+            pass
+    return entries
+
+def remove_admin_file(name: str):
+    """Remove a file from the admin manifest (does not delete the file bytes)."""
+    manifest = [m for m in load_admin_manifest() if m["name"] != name]
+    save_admin_manifest(manifest)
+
+# ── Shared cross-session database cache ───────────────────────────────────────
+# Bump this integer whenever file-parsing logic changes so every running process
+# discards its cached data and re-reads from disk automatically.
+_CACHE_VERSION = 4
+
+def _manifest_sig() -> str:
+    """Short fingerprint of the admin manifest — changes when files are added/removed."""
+    try:
+        m = load_admin_manifest()
+        if not m:
+            return ""
+        raw = "|".join(sorted(f"{x.get('name','')}:{x.get('date','')}" for x in m))
+        # Also include the file on-disk mtime of each upload so edits are detected
+        for x in m:
+            _p = os.path.join(BASE_DIR, "uploads", x.get("name", ""))
+            if os.path.exists(_p):
+                raw += f"|{os.path.getmtime(_p):.0f}"
+        import hashlib
+        return hashlib.md5(raw.encode()).hexdigest()[:12]
+    except Exception:
+        return ""
+
+@st.cache_resource(show_spinner=False)
+def _shared_db_cache():
+    """Single mutable dict shared across ALL user sessions in this process."""
+    return {"df": None, "files_info": [], "version": 0, "cache_v": -1, "manifest_sig": ""}
+
+def bump_shared_db():
+    """Invalidate the shared database — call after admin pins or unpins a file."""
+    _s = _shared_db_cache()
+    _s["df"] = None
+    _s["files_info"] = []
+    _s["version"] += 1
+
+def get_shared_db():
+    """Return (merged_df, files_info) from the shared admin database.
+    Auto-reloads when: parser code version changes, manifest changes, or after a bump.
+    Returns (None, []) when no pinned files exist."""
+    _s = _shared_db_cache()
+
+    # Invalidate if the parser code version changed (code was updated)
+    if _s.get("cache_v") != _CACHE_VERSION:
+        _s["df"] = None
+        _s["files_info"] = []
+        _s["cache_v"] = _CACHE_VERSION
+
+    # Invalidate if the manifest changed (files added / removed / updated on disk)
+    _sig = _manifest_sig()
+    if _sig and _s.get("manifest_sig") != _sig:
+        _s["df"] = None
+        _s["files_info"] = []
+        _s["manifest_sig"] = _sig
+
+    # Legacy self-heal: ≤2 columns + many rows = mis-parsed pipe file
+    if (_s["df"] is not None and not _s["df"].empty
+            and len(_s["df"].columns) <= 2 and len(_s["df"]) > 10):
+        _s["df"] = None
+        _s["files_info"] = []
+
+    if _s["df"] is None:
+        _entries = get_admin_file_entries()
+        if _entries:
+            _merged, _finfo = auto_merge(_entries)
+            _s["df"] = _merged if (_merged is not None and len(_merged) > 0) else pd.DataFrame()
+            _s["files_info"] = _finfo
+        else:
+            _s["df"] = pd.DataFrame()
+            _s["files_info"] = []
+
+    _df = _s["df"]
+    return (_df if len(_df) > 0 else None), _s["files_info"]
 
 def load_audit_log():
     try:
