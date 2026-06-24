@@ -6,7 +6,8 @@ import streamlit as st
 import pandas as pd
 from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
-    get_admin_file_entries, get_shared_db,
+    load_admin_manifest, load_admin_file_df, get_shared_db,
+    is_large_file, get_large_file_preview, BASE_DIR,
 )
 
 inject_css()
@@ -78,17 +79,23 @@ button[data-testid="stTabScrollRight"] { display: none !important; }
     display: flex; align-items: center; justify-content: center;
     font-size: 12px; color: #555;
 }
+.large-file-badge {
+    font-size: 11px; background: #FFF3E0; color: #E65100;
+    border-radius: 4px; padding: 2px 8px; font-weight: 700; margin-left: 6px;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Sync admin-pinned files ───────────────────────────────────────────────────
-_existing_names = {f["name"] for f in st.session_state.raw_files}
-for _ae in get_admin_file_entries():
-    if _ae["name"] not in _existing_names:
-        st.session_state.raw_files.insert(0, _ae)
-        _existing_names.add(_ae["name"])
+# ── Sync admin-pinned files from manifest — no file parsing, instant ─────────
+if not st.session_state.get("_admin_synced"):
+    _existing_names = {f["name"] for f in st.session_state.raw_files}
+    for _meta in load_admin_manifest():
+        if _meta["name"] not in _existing_names:
+            st.session_state.raw_files.insert(0, {**_meta, "df": None, "pinned": True})
+            _existing_names.add(_meta["name"])
+    st.session_state._admin_synced = True
 
-_all_files = [f for f in st.session_state.raw_files if f.get("df") is not None]
+_all_files = st.session_state.raw_files  # include df=None; lazy-loaded per tab
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 def _dedup(df: pd.DataFrame) -> pd.DataFrame:
@@ -116,8 +123,44 @@ def _find_col(df, *candidates):
     return None
 
 def _render_data(entry: dict, tab_key: str):
-    _df = entry.get("df")
     _fname = entry.get("name", "")
+    _path = os.path.join(BASE_DIR, "uploads", _fname)
+
+    # ── Large-file branch (e.g. HDET, ~6.7M rows) ────────────────────────────
+    # Never call load_admin_file_df() for these — that would trigger a full
+    # parse of a multi-GB file. Show a cheap preview instead: total row
+    # count via line-counting + first N rows only.
+    if os.path.exists(_path) and is_large_file(_path):
+        with st.spinner(f"Scanning {_fname}…"):
+            _info = get_large_file_preview(_path)
+        st.markdown(
+            f'<div style="font-size:13px;font-weight:700;color:#1A1A1A;padding:8px 0 2px;">'
+            f'{_fname}<span class="large-file-badge">large file — preview only</span></div>'
+            f'<div style="font-size:12px;color:#888;margin-bottom:10px;">'
+            f'{_info["total_rows"]:,} rows total &nbsp;·&nbsp; '
+            f'{len(_info["columns"])} columns &nbsp;·&nbsp; '
+            f'{_info["file_size_mb"]:,} MB &nbsp;·&nbsp; '
+            f'showing first {len(_info["preview_df"]):,} rows'
+            f'</div>', unsafe_allow_html=True,
+        )
+        st.dataframe(_dedup(_info["preview_df"]), use_container_width=True,
+                     height=580, hide_index=True)
+        st.caption(
+            "This file is too large to load in full here. Use "
+            "**Rangesheet Review** to filter it down by DG / DG_CODE."
+        )
+        return
+
+    # ── Normal-size file path — unchanged from before ────────────────────────
+    _df = entry.get("df")
+    # Lazy-load: only parse the file when this tab is actually opened
+    if _df is None:
+        with st.spinner(f"Loading {_fname}…"):
+            _df = load_admin_file_df(_fname)
+            if _df is not None:
+                entry["df"]   = _df
+                entry["rows"] = len(_df)
+                entry["cols"] = len(_df.columns)
     if _df is None or len(_df) == 0:
         st.warning("No data could be read from this file.")
         return

@@ -1828,3 +1828,100 @@ if False:
             st.warning("Status column not found in the data.")
 
 render_page_nav("viewdata")
+"""
+Snippet to add to pages/viewdata.py (RangeSheet Review)
+=========================================================
+This replaces the "upload HDET through the browser" idea with
+"point at a file that already exists on disk / network drive".
+
+WHY: a 2.9GB file gets stuck at Streamlit's upload limit before any
+Python code runs. Since the app and the HDET file are on the same
+machine / network, there's no need to upload it through the browser
+at all — just read it directly from where it already sits.
+
+WHAT TO DO WITH THIS FILE:
+  Copy the block below into pages/viewdata.py, wherever the DG_CODE
+  selector should appear. It calls get_dg_options() and
+  load_large_file_by_dg() — both already added to utils/shared.py
+  in the earlier patch. No further changes to shared.py are needed
+  for this to work.
+"""
+
+"""
+Snippet to add to pages/viewdata.py (RangeSheet Review)
+=========================================================
+This replaces the "upload HDET through the browser" idea with
+"point at a file that already exists on disk / network drive".
+
+WHY: a 2.9GB file gets stuck at Streamlit's upload limit before any
+Python code runs. Since the app and the HDET file are on the same
+machine / network, there's no need to upload it through the browser
+at all — just read it directly from where it already sits.
+
+WHAT TO DO WITH THIS FILE:
+  Copy the block below into pages/viewdata.py, wherever the DG_CODE
+  selector should appear. It calls get_dg_options() and
+  load_large_file_by_dg() — both already added to utils/shared.py
+  in the earlier patch. No further changes to shared.py are needed
+  for this to work.
+"""
+
+import os
+import streamlit as st
+from utils.shared import get_dg_options, load_large_file_by_dg, is_large_file
+
+# ── Step 1: let the user point at the HDET file's location on disk ──────────
+# This is a text path, not a file upload — nothing travels through the
+# browser's upload mechanism, so the 2.9GB size is a non-issue here.
+
+st.markdown("### Select HDET source file")
+
+# Remember the last path used, so the user doesn't have to retype it
+# every time they come back to this page.
+if "hdet_path" not in st.session_state:
+    st.session_state.hdet_path = ""
+
+hdet_path = st.text_input(
+    "Path to HDET file (local path or network drive)",
+    value=st.session_state.hdet_path,
+    placeholder=r"C:\Users\TH90383638\Downloads\HDET_Range Sheet_WK23.txt",
+    help="Paste the same path you'd use to open this file in File Explorer.",
+)
+st.session_state.hdet_path = hdet_path
+
+if hdet_path:
+    if not os.path.exists(hdet_path):
+        st.error("File not found at that path. Check spelling and that the drive is connected.")
+    else:
+        size_mb = os.path.getsize(hdet_path) / (1024 * 1024)
+        st.caption(f"Found file — {size_mb:,.0f} MB")
+
+        # ── Step 2: scan for available DG / DG_CODE values ──────────────────
+        # This reads the file in chunks (see get_dg_options in shared.py) —
+        # it does NOT load the full 6.7M rows into memory just to list DGs.
+        with st.spinner("Scanning for DG codes… this reads the file once, in chunks."):
+            dg_col, dg_values = get_dg_options(hdet_path)
+
+        if dg_col is None:
+            st.error(
+                "Couldn't find a DG or DG_CODE column in this file. "
+                "Check the file has the expected header."
+            )
+        else:
+            st.caption(f"Found DG column: `{dg_col}` · {len(dg_values):,} unique values")
+
+            selected_dg = st.selectbox("Select DG_CODE to load", dg_values)
+
+            if st.button("Load data for this DG_CODE"):
+                # ── Step 3: filter down to ~20k rows for the chosen DG ──────
+                # Cached as Parquet after the first run — re-selecting the
+                # same DG later in the session loads almost instantly.
+                with st.spinner(f"Loading rows for DG_CODE = {selected_dg}…"):
+                    review_df = load_large_file_by_dg(hdet_path, selected_dg)
+
+                if review_df.empty:
+                    st.warning(f"No rows found for DG_CODE = {selected_dg}.")
+                else:
+                    st.session_state.review_df = review_df
+                    st.success(f"Loaded {len(review_df):,} rows for DG_CODE = {selected_dg}.")
+                    st.dataframe(review_df, use_container_width=True, height=500, hide_index=True)

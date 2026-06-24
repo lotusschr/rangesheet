@@ -8,8 +8,8 @@ from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
     APP_CONFIG, read_uploaded_file, auto_merge, save_merged_snapshot,
     clear_merged_snapshot, save_file, add_audit, current_user, is_admin,
-    load_admin_manifest, save_admin_manifest, get_admin_file_entries, remove_admin_file,
-    bump_shared_db,
+    load_admin_manifest, save_admin_manifest, remove_admin_file,
+    bump_shared_db, load_admin_file_df,
 )
 
 inject_css()
@@ -19,11 +19,14 @@ if "uploader_key"     not in st.session_state: st.session_state.uploader_key    
 if "dup_pending"      not in st.session_state: st.session_state.dup_pending       = []
 if "_upload_sig_last" not in st.session_state: st.session_state._upload_sig_last  = set()
 
-# Sync admin-pinned files
-_existing_names = {f["name"] for f in st.session_state.raw_files}
-for _ae in get_admin_file_entries():
-    if _ae["name"] not in _existing_names:
-        st.session_state.raw_files.insert(0, _ae)
+# Sync admin-pinned files from manifest only — no file parsing, instant JSON read
+if not st.session_state.get("_admin_synced"):
+    _existing_names = {f["name"] for f in st.session_state.raw_files}
+    for _meta in load_admin_manifest():
+        if _meta["name"] not in _existing_names:
+            # Store metadata only; df loaded on demand when user views the file
+            st.session_state.raw_files.insert(0, {**_meta, "df": None, "pinned": True})
+    st.session_state._admin_synced = True
 
 render_sidebar("landpage")
 render_topbar("My Files")
@@ -160,6 +163,7 @@ def _process_uploads(files_list, pin: bool = False):
                 _manifest.append({k: v for k, v in _entry.items() if k != "df"})
                 save_admin_manifest(_manifest)
                 bump_shared_db()
+                st.session_state._admin_synced = False
         if f.name in _ex:
             if not any(p["name"] == f.name for p in st.session_state.dup_pending):
                 st.session_state.dup_pending.append(_entry)
@@ -180,8 +184,7 @@ with col_upload:
     st.markdown("""
 <div style="font-size:12px;color:#999;margin-bottom:8px;text-align:center;">
     Max <strong style="color:#555;">5 files</strong> per upload &nbsp;·&nbsp;
-    Each file max <strong style="color:#555;">1 GB</strong>
-    &nbsp;·&nbsp; csv, txt, xls, xlsx, xlsb accepted
+    csv, txt, xls, xlsx, xlsb accepted
 </div>""", unsafe_allow_html=True)
 
     uploaded = st.file_uploader(
@@ -358,12 +361,15 @@ with col_files:
                     if st.button("🗑️ Remove", key=f"unpin_{_pf['name']}",
                                  use_container_width=True,
                                  type="primary"):
+                        from utils.shared import _invalidate_file_cache
+                        _invalidate_file_cache(_pf["name"])
                         remove_admin_file(_pf["name"])
                         bump_shared_db()
                         st.session_state.raw_files = [
                             f for f in st.session_state.raw_files
                             if f["name"] != _pf["name"]
                         ]
+                        st.session_state._admin_synced = False
                         add_audit("Admin Remove Pinned File", _pf["name"])
                         st.rerun()
 
@@ -382,15 +388,32 @@ with col_files:
         if _selected:
             if st.button("View Data →", key="go_to_viewdata",
                          use_container_width=True, type="primary"):
-                _sel_raw = [f for f in st.session_state.raw_files if f["name"] in _selected]
-                st.session_state.selected_files = _selected
-                merged, log = auto_merge(_sel_raw)
-                st.session_state.upload_df  = merged
-                st.session_state.merge_log  = log
-                st.session_state.display_cols = None
-                save_merged_snapshot(merged)
-                add_audit("View Data", f"{len(_selected)} file(s) selected")
-                st.switch_page("pages/viewdata.py")
+                _sel_raw = []
+                for _fname in _selected:
+                    _ent = next((f for f in st.session_state.raw_files
+                                 if f["name"] == _fname), None)
+                    if _ent is None:
+                        continue
+                    if _ent.get("df") is None:
+                        with st.spinner(f"Loading {_fname}…"):
+                            _df = load_admin_file_df(_fname)
+                            if _df is not None:
+                                _ent["df"]   = _df
+                                _ent["rows"] = len(_df)
+                                _ent["cols"] = len(_df.columns)
+                    if _ent.get("df") is not None:
+                        _sel_raw.append(_ent)
+                if not _sel_raw:
+                    st.error("Could not load selected file(s).")
+                else:
+                    st.session_state.selected_files = _selected
+                    merged, log = auto_merge(_sel_raw)
+                    st.session_state.upload_df    = merged
+                    st.session_state.merge_log    = log
+                    st.session_state.display_cols = None
+                    save_merged_snapshot(merged)
+                    add_audit("View Data", f"{len(_sel_raw)} file(s) selected")
+                    st.switch_page("pages/viewdata.py")
         else:
             if st.session_state.merged_df is not None:
                 st.session_state.merged_df = None

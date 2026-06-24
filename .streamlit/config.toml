@@ -1,2 +1,38 @@
+# Streamlit server configuration for this project.
+#
+# PROBLEM THIS FIXES:
+#   Streamlit's default maxUploadSize is 200 (MB). A 2.9GB file is ~14x over
+#   that limit, so the upload hangs/fails at the progress bar before any
+#   Python code in the app ever runs. No amount of code in shared.py or
+#   rawfiles.py can fix this — it's a server-level cutoff that happens
+#   before read_uploaded_file() is even called.
+#
+# WHERE THIS FILE GOES:
+#   C:\Users\TH90383638\OneDrive - Lotus's\Documents\GitHub\rangesheet\.streamlit\config.toml
+#
+#   Streamlit only reads .streamlit/config.toml from:
+#     1. The current working directory you launch `streamlit run` from, OR
+#     2. The user's home directory (~/.streamlit/config.toml), as a global fallback.
+#   Since this project is launched as `streamlit run app.py` from the
+#   `rangesheet` folder, the `.streamlit` folder must sit directly inside
+#   `rangesheet/`, as a SIBLING of app.py — not inside utils/ or pages/.
+#
+# AFTER CREATING/EDITING THIS FILE:
+#   You must fully stop and restart `streamlit run app.py`. Config is only
+#   read at process startup — editing config.toml while Streamlit is already
+#   running has no effect until restart (same restart requirement as the
+#   shared.py changes from before).
+
 [server]
-maxUploadSize = 1024
+# Max size, in MB, for any single uploaded file. Set well above the largest
+# expected HDET file. 2.9GB -> ~2970MB, so 4000 gives headroom for growth.
+maxUploadSize = 4000
+
+# Max size, in MB, for messages passed between browser and server in general.
+# Large file uploads also count against this — must be >= maxUploadSize.
+maxMessageSize = 4000
+
+[runner]
+# Avoids Streamlit re-running magic/output-capturing logic on every large
+# file read, which adds overhead on big DataFrames/chunks.
+fastReruns = true

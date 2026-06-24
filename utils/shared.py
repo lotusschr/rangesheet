@@ -14,7 +14,7 @@ ROOT_DIR = os.path.dirname(_HERE)
 BASE_DIR = os.path.join(ROOT_DIR, "rangesheet_data")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-APP_CONFIG = {"allowed_extensions": ["csv", "txt", "xlsx", "xls", "xlsb"], "max_file_mb": 1024}
+APP_CONFIG = {"allowed_extensions": ["csv", "txt", "xlsx", "xls", "xlsb"], "max_file_mb": 0}
 
 RS_SHEETS = [
     "Range Sheet_Non-SSPOG", "Range Sheet_SSPOG",
@@ -43,14 +43,12 @@ NAV_ITEMS = [
 ]
 
 RS_COL_GROUPS = [
-    # ── Gray: item identifiers ────────────────────────────────────────────────
     {"group": "Item Info", "color": "#D9D9D9", "hdr_color": "#333333", "cols": [
         "Department", "Section", "Subclass", "Barcode", "TPNA", "ID",
         "No. of Unit in Case", "No. of Unit in Inner", "Tray total number",
         "Express Picking Type", "HDET Picking Type",
         "EDLP Price by Format", "Item Name",
     ]},
-    # ── Beige: AS-IS & TO-BE columns ─────────────────────────────────────────
     {"group": "Range Info", "color": "#E8E3DC", "hdr_color": "#444444", "cols": [
         "AS IS planograms applied",
         "TO-BE planograms applied",
@@ -61,20 +59,16 @@ RS_COL_GROUPS = [
         "Range Tail YYYY",
         "AVG Selling Price by Format",
     ]},
-    # ── Black: star line separator ────────────────────────────────────────────
     {"group": "Star Line", "color": "#000000", "hdr_color": "#FFFFFF", "cols": [
         "Star Line",
     ]},
-    # ── Green: priority / JDA ─────────────────────────────────────────────────
     {"group": "Priority", "color": "#00CC44", "hdr_color": "#003300", "cols": [
         "Item Priority", "JDA vs Actual", "Actual-Actual",
     ]},
-    # ── Light gray: status + waterfall ────────────────────────────────────────
     {"group": "Status", "color": "#F5F5F5", "hdr_color": "#555555", "cols": [
         "Status", "Check Range To-be Waterfall",
         "(name of the planogram+productname+store)",
     ]},
-    # ── Purple: cluster summary ───────────────────────────────────────────────
     {"group": "Cluster Summary", "color": "#C9A0DC", "hdr_color": "#3D0070", "cols": [
         "Cluster (Planogram name)", "To be stores applied count", "AS IS",
         "MODS", "Fixtures", "Range Class", "Total New SKUs", "Total Delete SKUs",
@@ -88,7 +82,6 @@ FILL_COLORS = {
     "formula": {"bg": "#F5F5F5", "text": "#616161"},
 }
 
-# Desired display labels for each column (keyed by lowercase/stripped name)
 COLUMN_LABELS = {
     "department":                                "Department",
     "section":                                   "Section",
@@ -137,52 +130,33 @@ TARGET_COLUMNS = list(COLUMN_LABELS.values())
 
 def find_best_match(upload_col, target_cols, threshold=0.75):
     upload_col = normalize_col(upload_col)
-
     best_score = 0
     best_match = None
-
     for target in target_cols:
-        score = SequenceMatcher(
-            None,
-            upload_col,
-            normalize_col(target)
-        ).ratio()
-
+        score = SequenceMatcher(None, upload_col, normalize_col(target)).ratio()
         if score > best_score:
             best_score = score
             best_match = target
-
     if best_score >= threshold:
         return best_match
-
     return None
 
 def build_column_mapping(df):
     mapping = {}
     questions = []
-
     target_cols = list(COLUMN_LABELS.values())
-
     for col in df.columns:
-
         match = find_best_match(col, target_cols)
-
         if match:
             mapping[col] = match
-
         else:
             questions.append(col)
-
     return mapping, questions
 
 def create_review_df(df, mapping):
-
     review_df = pd.DataFrame()
-
     for source_col, target_col in mapping.items():
-
         review_df[target_col] = df[source_col]
-
     return review_df
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -241,7 +215,6 @@ def init_session_state():
         "column_mapping": {},
         "mapping_completed": False,
     }
-
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -252,8 +225,6 @@ def init_session_state():
             st.session_state.merge_log = [f"💾 Loaded snapshot ({len(snap):,} rows)"]
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0
-    
-   
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 def inject_css():
@@ -265,7 +236,6 @@ html, body, [class*="css"] {
     font-family: 'Inter', 'Sarabun', system-ui, sans-serif !important;
 }
 
-/* ── Main content background ── */
 .main { background: #EDE8DF !important; }
 .block-container { padding: 0 !important; max-width: 100% !important; }
 [data-testid="stMainBlockContainer"] {
@@ -273,7 +243,6 @@ html, body, [class*="css"] {
     margin-top: 0 !important;
 }
 
-/* ── Dark Sidebar ── */
 section[data-testid="stSidebar"] {
     background-color: #1C1C1E !important;
     border-right: none !important;
@@ -285,11 +254,9 @@ section[data-testid="stSidebar"] > div {
     padding-top: 0 !important;
     margin-top: 0 !important;
 }
-/* Sidebar text override */
 [data-testid="stSidebar"] p { color: rgba(255,255,255,0.45) !important; margin: 0 !important; }
 [data-testid="stSidebar"] .stMarkdown { color: rgba(255,255,255,0.45) !important; }
 
-/* ── Sidebar NAV Buttons (inactive) ── */
 [data-testid="stSidebar"] .stButton > button {
     background: transparent !important;
     color: rgba(255,255,255,0.7) !important;
@@ -317,7 +284,6 @@ section[data-testid="stSidebar"] > div {
     outline: none !important;
 }
 
-/* ── Main content buttons (teal) ── */
 .stButton > button {
     background: #2BBFA4 !important;
     color: #fff !important;
@@ -329,7 +295,6 @@ section[data-testid="stSidebar"] > div {
 }
 .stButton > button:hover { background: #22A08A !important; }
 
-/* ── Download buttons ── */
 .stDownloadButton > button {
     background: transparent !important;
     color: #2BBFA4 !important;
@@ -343,7 +308,6 @@ section[data-testid="stSidebar"] > div {
     background: #E8F8F5 !important;
 }
 
-/* ── Metric cards ── */
 [data-testid="stMetric"] {
     background: #fff !important;
     border: 1px solid #E8E3DC !important;
@@ -365,7 +329,6 @@ section[data-testid="stSidebar"] > div {
 }
 [data-testid="stMetricDelta"] { font-size: 12px !important; }
 
-/* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] {
     border-bottom: 2px solid #E0D9D2 !important;
     gap: 4px;
@@ -384,14 +347,12 @@ section[data-testid="stSidebar"] > div {
     background: transparent !important;
 }
 
-/* ── Expander ── */
 [data-testid="stExpander"] {
     border: 1px solid #E0D9D2 !important;
     border-radius: 12px !important;
     background: #fff !important;
 }
 
-/* ── File uploader — styled as the dashed drop box ── */
 [data-testid="stFileUploaderDropzone"] {
     background: white !important;
     border: 2px dashed #D0CAC2 !important;
@@ -429,13 +390,11 @@ section[data-testid="stSidebar"] > div {
     color: #2BBFA4 !important;
 }
 
-/* ── Dataframe ── */
 [data-testid="stDataFrame"] {
     border-radius: 12px !important;
     border: 1px solid #E0D9D2 !important;
 }
 
-/* ── Select / Text inputs ── */
 [data-testid="stTextInput"] input {
     border-radius: 10px !important;
     border-color: #E0D9D2 !important;
@@ -445,14 +404,12 @@ section[data-testid="stSidebar"] > div {
     border-radius: 10px !important;
 }
 
-/* ── Progress bar ── */
 [data-testid="stProgress"] > div {
     border-radius: 99px !important;
 }
 
 hr { border-color: #E0D9D2 !important; margin: 8px 0 !important; }
 
-/* ── Sheet tabs — horizontal radio styled as clickable tabs ── */
 div[data-testid="stRadio"] > div[role="radiogroup"] {
     flex-wrap: nowrap !important;
     gap: 0 !important;
@@ -484,7 +441,6 @@ div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
     display: none !important;
 }
 
-/* ── Page nav buttons (bottom) — outlined style ── */
 .page-nav-btn > button {
     background: transparent !important;
     color: #2BBFA4 !important;
@@ -497,7 +453,6 @@ div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
     background: #E8F8F5 !important;
 }
 
-/* ── Global UPPERCASE for all UI labels / buttons / tabs / nav ── */
 .stButton > button,
 .stDownloadButton > button { text-transform: uppercase !important; }
 .stTabs [data-baseweb="tab"] { text-transform: uppercase !important; }
@@ -507,7 +462,6 @@ div[role="radiogroup"] > label > div:last-child p { text-transform: uppercase !i
 [data-testid="stMetricLabel"] { text-transform: uppercase !important; }
 [data-testid="stSidebar"] .stMarkdown p { text-transform: uppercase !important; }
 
-/* ── Hide Streamlit chrome but keep sidebar toggle ── */
 #MainMenu, footer { visibility: hidden; }
 header { visibility: hidden; }
 header button { visibility: visible !important; }
@@ -517,7 +471,6 @@ header button { visibility: visible !important; }
 .stDeployButton { display: none; }
 [data-testid="stSidebarNav"] { display: none !important; }
 
-/* ── Logout confirm dialog — No=red filled, Yes=white ── */
 .dlg-yes-btn button {
     background: #fff !important;
     border: 1.5px solid #C8C0B8 !important;
@@ -536,7 +489,6 @@ header button { visibility: visible !important; }
     background: #C62828 !important;
     border-color: #B71C1C !important;
 }
-/* ── Duplicate file dialog — Add=white, Replace=green ── */
 .dup-add-btn button {
     background: #fff !important;
     border: 1.5px solid #C8C0B8 !important;
@@ -558,7 +510,6 @@ header button { visibility: visible !important; }
 </style>
 """, unsafe_allow_html=True)
 
-    # ── Logout button icon — base64-encoded SVG (safe across all browsers) ────
     _ICON_GREY = (
         "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1"
         "MTIgNTEyIj48cGF0aCBmaWxsPSIjNTU1NTU1IiBkPSJNNTAyLjYgMjc4LjZjMTIuNS0xMi41"
@@ -759,8 +710,6 @@ _HEADER_KEYWORDS = {
 }
 
 def _detect_header_row(raw: bytes, encoding: str, sep: str = ",") -> int:
-    # Use pandas to parse so multi-line quoted fields are handled correctly.
-    # The returned index is a LOGICAL CSV row number (matches what skiprows= expects).
     try:
         preview = pd.read_csv(
             io.BytesIO(raw), encoding=encoding, sep=sep,
@@ -821,37 +770,29 @@ def _extract_rangesheet_meta(raw: bytes, encoding: str, header_row: int) -> dict
     return meta
 
 # ── Column alias mapping ──────────────────────────────────────────────────────
-# Maps raw column names (lowercase/stripped) → standard app column names.
-# Edit this dict to support new file formats or spelling variants.
 COLUMN_MAPPING = {
-    # Department / DG Code
     "dept":                                    "Department",
     "department":                              "Department",
     "department code & desc":                  "Department",
     "department code&desc":                    "Department",
     "dg code":                                 "Department",
     "dg_code":                                 "Department",
-    # Section / DG Name
     "section":                                 "Section",
     "dg name":                                 "Section",
     "dg_name":                                 "Section",
     "department name":                         "Section",
-    # Subclass
     "sub class":                               "Subclass",
     "sub-class":                               "Subclass",
     "subclass":                                "Subclass",
-    # Barcode
     "barcode":                                 "Barcode",
     "upc":                                     "Barcode",
     "ean":                                     "Barcode",
     "ean code":                                "Barcode",
     "sku":                                     "Barcode",
-    # TPNA / ID
     "tpna":                                    "TPNA",
     "item id":                                 "ID",
     "item_id":                                 "ID",
     "itemid":                                  "ID",
-    # Units
     "no. of unit in case":                     "No. of Unit in Case",
     "no of unit in case":                      "No. of Unit in Case",
     "units per case":                          "No. of Unit in Case",
@@ -862,12 +803,10 @@ COLUMN_MAPPING = {
     "no_of_unit_in_inner":                     "No. of Unit in Inner",
     "tray total number":                       "Tray total number",
     "tray_total_number":                       "Tray total number",
-    # Picking types
     "express picking type":                    "Express Picking Type",
     "express_picking_type":                    "Express Picking Type",
     "hdet picking type":                       "HDET Picking Type",
     "hdet_picking_type":                       "HDET Picking Type",
-    # Prices
     "edlp price by format":                    "EDLP Price by Format",
     "edlp_price_by_format":                    "EDLP Price by Format",
     "edlp price":                              "EDLP Price by Format",
@@ -875,40 +814,33 @@ COLUMN_MAPPING = {
     "avg_selling_price_by_format":             "AVG Selling Price by Format",
     "avg selling price":                       "AVG Selling Price by Format",
     "average selling price":                   "AVG Selling Price by Format",
-    # Item name
     "item name":                               "Item Name",
     "item_name":                               "Item Name",
     "product name":                            "Item Name",
     "product_name":                            "Item Name",
     "description":                             "Item Name",
-    # Planograms
     "as is planograms applied":                "AS IS planograms applied",
     "asis planograms applied":                 "AS IS planograms applied",
     "as-is planograms applied":                "AS IS planograms applied",
     "to-be planograms applied":                "TO-BE planograms applied",
     "tobe planograms applied":                 "TO-BE planograms applied",
     "to be planograms applied":                "TO-BE planograms applied",
-    # Stores applied
     "as-is stores applied":                    "AS-IS Stores Applied",
     "as is stores applied":                    "AS-IS Stores Applied",
     "asis stores applied":                     "AS-IS Stores Applied",
     "to-be stores applied":                    "TO-Be stores applied",
     "to be stores applied":                    "TO-Be stores applied",
     "tobe stores applied":                     "TO-Be stores applied",
-    # Sales / forecast
     "avg units 52wk/ forecast new item sales": "Avg Units 52wk/ Forecast new item sales",
     "avg units 52wk/forecast new item sales":  "Avg Units 52wk/ Forecast new item sales",
     "avg unit 52wk":                           "Avg Units 52wk/ Forecast new item sales",
     "avg units 52wk":                          "Avg Units 52wk/ Forecast new item sales",
-    # Supplier
     "supplier pack size":                      "Supplier Pack Size",
     "supplier_pack_size":                      "Supplier Pack Size",
     "pack size":                               "Supplier Pack Size",
-    # Range tail
     "range tail yyyy":                         "Range Tail YYYY",
     "range_tail_yyyy":                         "Range Tail YYYY",
     "range tail":                              "Range Tail YYYY",
-    # Priority / status
     "star line":                               "Star Line",
     "star_line":                               "Star Line",
     "starline":                                "Star Line",
@@ -920,11 +852,9 @@ COLUMN_MAPPING = {
     "actual-actual":                           "Actual-Actual",
     "actual_actual":                           "Actual-Actual",
     "status":                                  "Status",
-    # Waterfall
     "check range to-be waterfall":             "Check Range To-be Waterfall",
     "check range to be waterfall":             "Check Range To-be Waterfall",
     "check range":                             "Check Range To-be Waterfall",
-    # Cluster
     "cluster (planogram name)":                "Cluster (Planogram name)",
     "planogram name":                          "Cluster (Planogram name)",
     "to be stores applied count":              "To be stores applied count",
@@ -942,13 +872,13 @@ def apply_column_mapping(df: pd.DataFrame) -> pd.DataFrame:
     """Rename df columns using COLUMN_MAPPING. Skips rename if the target name
     already exists in the DataFrame (prevents creating duplicate column names)."""
     rename = {}
-    taken = set(df.columns)       # track names that are already present
+    taken = set(df.columns)
     for col in df.columns:
         key = str(col).strip().lower()
         target = COLUMN_MAPPING.get(key)
         if target and col != target and target not in taken:
             rename[col] = target
-            taken.add(target)     # reserve the target so no second col gets it
+            taken.add(target)
     return df.rename(columns=rename) if rename else df
 
 def _detect_delimiter(raw: bytes, encoding: str = "utf-8-sig") -> str:
@@ -962,7 +892,6 @@ def _detect_delimiter(raw: bytes, encoding: str = "utf-8-sig") -> str:
         for ln in lines[:8]:
             for d in counts:
                 counts[d] += ln.count(d)
-        # Winner must have at least 2 occurrences to be trusted
         best = max(counts, key=counts.get)
         return best if counts[best] >= 2 else ","
     except Exception:
@@ -971,7 +900,7 @@ def _detect_delimiter(raw: bytes, encoding: str = "utf-8-sig") -> str:
 def _dedup_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Rename duplicate column names by appending .1, .2, … so Arrow/Streamlit
     never sees two identical column headers."""
-    seen: dict[str, int] = {}
+    seen: dict = {}
     new_cols = []
     for c in df.columns:
         s = str(c)
@@ -990,7 +919,7 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [str(c).strip().replace('\n', ' ').replace('\r', '') for c in df.columns]
     df = df.dropna(how="all").reset_index(drop=True)
     df = apply_column_mapping(df)
-    df = _dedup_columns(df)   # ensure unique headers before storing / displaying
+    df = _dedup_columns(df)
     return df
 
 def read_uploaded_file(uploaded_file):
@@ -1040,7 +969,6 @@ def read_uploaded_file(uploaded_file):
                 except Exception as e:
                     _store_err(e); return None
 
-            # Strategy 1: auto-detected header row
             try:
                 header_row = _detect_header_row_excel(raw)
                 df = pd.read_excel(io.BytesIO(raw), header=header_row)
@@ -1050,7 +978,6 @@ def read_uploaded_file(uploaded_file):
             except Exception as e:
                 last_err = e
 
-            # Strategy 2: force header=0
             try:
                 df = pd.read_excel(io.BytesIO(raw), header=0)
                 df = _clean_df(df)
@@ -1059,7 +986,6 @@ def read_uploaded_file(uploaded_file):
             except Exception as e:
                 last_err = e
 
-            # Strategy 3: read all sheets, return first non-empty
             try:
                 all_sheets = pd.read_excel(io.BytesIO(raw), sheet_name=None, dtype=str)
                 for _sdf in all_sheets.values():
@@ -1069,7 +995,6 @@ def read_uploaded_file(uploaded_file):
             except Exception as e:
                 last_err = e
 
-            # Strategy 4: xlrd engine (handles some legacy .xls/.xlsx)
             try:
                 df = pd.read_excel(io.BytesIO(raw), header=0, engine="xlrd")
                 df = _clean_df(df)
@@ -1078,7 +1003,6 @@ def read_uploaded_file(uploaded_file):
             except Exception as e:
                 last_err = e
 
-            # Strategy 5: dtype=str to bypass type-inference failures
             try:
                 df = pd.read_excel(io.BytesIO(raw), header=0, dtype=str)
                 df = _clean_df(df)
@@ -1098,6 +1022,179 @@ def read_uploaded_file(uploaded_file):
 
     return None
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── NEW: Large-file support (e.g. HDET, ~6.7M rows / 3GB) ───────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# Added so files far bigger than normal range-sheet uploads (HDET-style
+# master files) never go through the full pd.read_csv(io.BytesIO(raw), ...)
+# path above, and never get pulled into auto_merge()'s pd.concat(). Instead:
+#   - View Data shows a cheap preview (row count via line-counting + first
+#     N rows), without ever building a DataFrame out of the full file.
+#   - RangeSheet Review filters by a single DG/DG_CODE value using a
+#     chunked scan, producing only the matching subset (~20k rows expected),
+#     cached to Parquet so re-selecting the same DG is near-instant.
+# Everything below reuses _detect_delimiter / _detect_header_row /
+# apply_column_mapping / _dedup_columns / _clean_df from above so large-file
+# results have exactly the same column names/shape as normal-file results.
+
+LARGE_FILE_THRESHOLD_MB = 100
+LARGE_FILE_CHUNK_SIZE = 250_000
+
+# Candidate column names for the DG selector — checked in order, first
+# match found in the actual file wins. Extend this list if a new file
+# uses a different spelling.
+DG_COLUMN_CANDIDATES = ["DG_CODE", "DG_Code", "DG Code", "DG"]
+
+_LARGE_FILE_CACHE_DIR = os.path.join(BASE_DIR, "cache_large")
+
+
+def _ensure_large_cache_dir():
+    try:
+        os.makedirs(_LARGE_FILE_CACHE_DIR, exist_ok=True)
+    except Exception:
+        pass
+
+
+def is_large_file(path: str) -> bool:
+    """True if the file at `path` is at/above LARGE_FILE_THRESHOLD_MB."""
+    try:
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        return size_mb >= LARGE_FILE_THRESHOLD_MB
+    except Exception:
+        return False
+
+
+def _detect_large_file_params(path: str):
+    """Sniff delimiter + header row using only a sample of bytes, reusing
+    the existing _detect_delimiter / _detect_header_row helpers so behavior
+    matches normal-sized files exactly."""
+    with open(path, "rb") as f:
+        raw_sample = f.read(2_000_000)  # ~2MB sample is plenty for sniffing
+    sep = _detect_delimiter(raw_sample)
+    encoding = "utf-8-sig"
+    try:
+        raw_sample.decode(encoding)
+    except Exception:
+        encoding = "cp874"
+        try:
+            raw_sample.decode(encoding)
+        except Exception:
+            encoding = "latin1"
+    header_row = _detect_header_row(raw_sample, encoding, sep=sep)
+    return sep, encoding, header_row
+
+
+def get_large_file_preview(path: str, n_rows: int = 200) -> dict:
+    """
+    Lightweight preview for the View Data page — never loads the full file.
+    Returns total row count (via line counting, not parsing), columns,
+    and the first n_rows as a small DataFrame for st.dataframe().
+    """
+    sep, encoding, header_row = _detect_large_file_params(path)
+
+    try:
+        with open(path, "rb") as f:
+            total_lines = sum(1 for _ in f)
+        total_rows = max(total_lines - header_row - 1, 0)
+    except Exception:
+        total_rows = None
+
+    preview_df = pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        nrows=n_rows, on_bad_lines="skip",
+        dtype=str, low_memory=False,
+    )
+    preview_df = _clean_df(preview_df)
+
+    return {
+        "total_rows": total_rows,
+        "columns": list(preview_df.columns),
+        "preview_df": preview_df,
+        "file_size_mb": round(os.path.getsize(path) / (1024 * 1024), 1),
+    }
+
+
+def get_dg_options(path: str) -> tuple:
+    """
+    Scan a large file in chunks and return (dg_column_name, sorted unique values)
+    for populating the DG/DG_CODE dropdown on RangeSheet Review.
+    Does NOT load the full file into one DataFrame — chunked scan only.
+    """
+    sep, encoding, header_row = _detect_large_file_params(path)
+    dg_col = None
+    seen_values = set()
+
+    for chunk in pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=LARGE_FILE_CHUNK_SIZE,
+        dtype=str, low_memory=False, on_bad_lines="skip",
+    ):
+        if dg_col is None:
+            for cand in DG_COLUMN_CANDIDATES:
+                if cand in chunk.columns:
+                    dg_col = cand
+                    break
+            if dg_col is None:
+                return None, []  # no DG-like column in this file
+        seen_values.update(chunk[dg_col].dropna().astype(str).unique())
+
+    return dg_col, sorted(seen_values)
+
+
+def load_large_file_by_dg(path: str, dg_value: str, use_cache: bool = True) -> pd.DataFrame:
+    """
+    Filter a large file (e.g. HDET) down to rows matching a single
+    DG/DG_CODE value, reading in chunks so memory stays bounded regardless
+    of total file size. Result is cached as Parquet keyed by file + DG value,
+    so re-selecting the same DG is near-instant on subsequent loads.
+    """
+    _ensure_large_cache_dir()
+    dg_value = str(dg_value)
+    file_tag = os.path.splitext(os.path.basename(path))[0]
+    cache_file = os.path.join(_LARGE_FILE_CACHE_DIR, f"{file_tag}__dg_{dg_value}.parquet")
+
+    file_mtime = os.path.getmtime(path)
+    if use_cache and os.path.exists(cache_file):
+        if os.path.getmtime(cache_file) >= file_mtime:
+            return pd.read_parquet(cache_file)
+
+    sep, encoding, header_row = _detect_large_file_params(path)
+    matched_chunks = []
+    dg_col = None
+
+    for chunk in pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=LARGE_FILE_CHUNK_SIZE,
+        dtype=str, low_memory=False, on_bad_lines="skip",
+    ):
+        if dg_col is None:
+            for cand in DG_COLUMN_CANDIDATES:
+                if cand in chunk.columns:
+                    dg_col = cand
+                    break
+            if dg_col is None:
+                return pd.DataFrame()
+
+        filtered = chunk[chunk[dg_col].astype(str) == dg_value]
+        if not filtered.empty:
+            matched_chunks.append(filtered)
+
+    result = pd.concat(matched_chunks, ignore_index=True) if matched_chunks else pd.DataFrame()
+    result = _clean_df(result)
+
+    if use_cache and not result.empty:
+        try:
+            result.to_parquet(cache_file)
+        except Exception:
+            pass
+
+    return result
+
+
 def auto_merge(files_info: list) -> tuple:
     dfs = [(f["name"], f["df"]) for f in files_info if f.get("df") is not None]
     if not dfs:
@@ -1105,12 +1202,12 @@ def auto_merge(files_info: list) -> tuple:
     if len(dfs) == 1:
         return _dedup_columns(dfs[0][1].copy()), [f"📄 Single file — {dfs[0][0]}"]
     merged = pd.concat([d for _, d in dfs], ignore_index=True, sort=False)
-    merged = _dedup_columns(merged)          # remove any dupes produced by concat
+    merged = _dedup_columns(merged)
     before = len(merged)
     try:
         merged = merged.drop_duplicates(ignore_index=True)
     except Exception:
-        pass                                  # drop_duplicates fails on unhashable types
+        pass
     log = [f"✅ Merged {len(dfs)} files → {len(merged):,} rows"]
     if len(merged) < before:
         log.append(f"🧹 Removed {before - len(merged):,} duplicates")
@@ -1259,23 +1356,87 @@ def _read_file_from_path(path: str):
         def seek(self, n): pass
     return read_uploaded_file(_F())
 
+@st.cache_resource(show_spinner=False)
+def _parsed_file_cache():
+    """Process-wide cache: filename → {mtime, entry}.
+    Files are only parsed once per server process (or when mtime changes)."""
+    return {}
+
+def _invalidate_file_cache(name: str):
+    """Force a specific file to be re-parsed next time."""
+    _parsed_file_cache().pop(name, None)
+
+def load_admin_file_df(name: str):
+    """Load one admin file's DataFrame on demand, using the process-wide cache.
+    Returns None if the file doesn't exist or can't be parsed.
+
+    NOTE: large files (e.g. HDET) should be checked with is_large_file()
+    by the caller and routed to get_large_file_preview() /
+    load_large_file_by_dg() instead of this function. This function itself
+    is unchanged from before, so behavior for normal-sized files is identical.
+    """
+    cache = _parsed_file_cache()
+    _path = os.path.join(BASE_DIR, "uploads", name)
+    if not os.path.exists(_path):
+        return None
+    _mtime = os.path.getmtime(_path)
+    hit = cache.get(name)
+    if hit and hit["mtime"] == _mtime:
+        return hit["entry"].get("df")
+    df = _read_file_from_path(_path)
+    if df is not None:
+        cache[name] = {"mtime": _mtime, "entry": {"df": df}}
+    return df
+
 def get_admin_file_entries() -> list:
-    """Load all admin-pinned files from disk and return full entry dicts (with df)."""
+    """Return entry dicts for all admin-pinned files.
+    Parsed DataFrames are cached by file mtime — no disk read on repeat calls.
+
+    CHANGED: large files (e.g. HDET) are now skipped here on purpose — they
+    never enter auto_merge()'s pd.concat(). They get a metadata-only entry
+    (df=None, is_large=True) instead. auto_merge() already ignores entries
+    where df is None, so this alone keeps HDET out of merged_df without
+    touching auto_merge() itself. The View Data page should check
+    entry.get("is_large") and call get_large_file_preview() for those.
+    """
+    cache   = _parsed_file_cache()
     entries = []
     for meta in load_admin_manifest():
-        _path = os.path.join(BASE_DIR, "uploads", meta["name"])
+        _name  = meta["name"]
+        _path  = os.path.join(BASE_DIR, "uploads", _name)
         if not os.path.exists(_path):
+            cache.pop(_name, None)
+            continue
+
+        if is_large_file(_path):
+            entries.append({
+                **meta,
+                "df": None,
+                "rows": None,
+                "cols": None,
+                "pinned": True,
+                "is_large": True,
+            })
+            continue
+
+        _mtime = os.path.getmtime(_path)
+        hit    = cache.get(_name)
+        if hit and hit["mtime"] == _mtime:
+            entries.append(hit["entry"])
             continue
         try:
             df = _read_file_from_path(_path)
             if df is not None:
-                entries.append({
+                _entry = {
                     **meta,
                     "df":     df,
                     "rows":   len(df),
                     "cols":   len(df.columns),
                     "pinned": True,
-                })
+                    "is_large": False,
+                }
+                cache[_name] = {"mtime": _mtime, "entry": _entry}
+                entries.append(_entry)
         except Exception:
             pass
     return entries
@@ -1288,7 +1449,7 @@ def remove_admin_file(name: str):
 # ── Shared cross-session database cache ───────────────────────────────────────
 # Bump this integer whenever file-parsing logic changes so every running process
 # discards its cached data and re-reads from disk automatically.
-_CACHE_VERSION = 4
+_CACHE_VERSION = 5  # bumped 4 -> 5: get_admin_file_entries() now routes large files away
 
 def _manifest_sig() -> str:
     """Short fingerprint of the admin manifest — changes when files are added/removed."""
@@ -1297,7 +1458,6 @@ def _manifest_sig() -> str:
         if not m:
             return ""
         raw = "|".join(sorted(f"{x.get('name','')}:{x.get('date','')}" for x in m))
-        # Also include the file on-disk mtime of each upload so edits are detected
         for x in m:
             _p = os.path.join(BASE_DIR, "uploads", x.get("name", ""))
             if os.path.exists(_p):
@@ -1322,23 +1482,25 @@ def bump_shared_db():
 def get_shared_db():
     """Return (merged_df, files_info) from the shared admin database.
     Auto-reloads when: parser code version changes, manifest changes, or after a bump.
-    Returns (None, []) when no pinned files exist."""
+    Returns (None, []) when no pinned files exist.
+
+    Large files (is_large=True entries from get_admin_file_entries) carry
+    df=None, and auto_merge() already skips entries where df is None — so
+    they're automatically excluded from merged_df without any change here.
+    """
     _s = _shared_db_cache()
 
-    # Invalidate if the parser code version changed (code was updated)
     if _s.get("cache_v") != _CACHE_VERSION:
         _s["df"] = None
         _s["files_info"] = []
         _s["cache_v"] = _CACHE_VERSION
 
-    # Invalidate if the manifest changed (files added / removed / updated on disk)
     _sig = _manifest_sig()
     if _sig and _s.get("manifest_sig") != _sig:
         _s["df"] = None
         _s["files_info"] = []
         _s["manifest_sig"] = _sig
 
-    # Legacy self-heal: ≤2 columns + many rows = mis-parsed pipe file
     if (_s["df"] is not None and not _s["df"].empty
             and len(_s["df"].columns) <= 2 and len(_s["df"]) > 10):
         _s["df"] = None
