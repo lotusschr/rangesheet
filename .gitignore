@@ -9,3 +9,4 @@ Plaintext
 rangesheet_data/uploads/
 rangesheet_data/merged/
 *.csv
+/utils/__pycache__/*
