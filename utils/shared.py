@@ -1116,6 +1116,20 @@ def get_large_file_preview(path: str, n_rows: int = 200) -> dict:
     }
 
 
+def read_large_file_head(path: str, n_rows: int = 500) -> pd.DataFrame:
+    """Read the first n_rows from a large file without scanning the full file.
+    Much faster than get_large_file_preview() for auto-loading because it
+    skips the slow full-file line count."""
+    sep, encoding, header_row = _detect_large_file_params(path)
+    df = pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        nrows=n_rows, on_bad_lines="skip",
+        dtype=str, low_memory=False,
+    )
+    return _clean_df(df)
+
+
 def get_dg_options(path: str) -> tuple:
     """
     Scan a large file in chunks and return (dg_column_name, sorted unique values)

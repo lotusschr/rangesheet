@@ -2,6 +2,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
 import streamlit as st
 import pandas as pd
 import re as _re
@@ -11,6 +12,8 @@ from utils.shared import (
     RS_SHEETS, RS_COL_GROUPS, STATUS_COLORS, FILL_COLORS, COLUMN_LABELS,
     get_fill, df_to_xlsx_bytes, df_to_csv_bytes, add_audit,
     get_shared_db,
+    load_large_file_by_dg, read_large_file_head, load_admin_file_df,
+    is_large_file, BASE_DIR, load_admin_manifest,
 )
 
 inject_css()
@@ -898,6 +901,8 @@ with _sheet_tabs[3]:   # 5.1 ItembyStore
         "ForecastSales", "TH_Tot_Sales_Value_52WK", "TH_Tot_Sales_Volume_52WK",
         "DaysSupply", "MaxDOS",
     ]
+    _IB_TEXT_COLS = ["store_no", "store_name", "ID", "ProductDescription",
+                     "POG_STATUS", "Display Group", "Display group desc"]
     _IB_COL_CFG = {
         "store_no":                 st.column_config.TextColumn("store_no",                 width="small"),
         "store_name":               st.column_config.TextColumn("store_name",               width="medium"),
@@ -912,13 +917,97 @@ with _sheet_tabs[3]:   # 5.1 ItembyStore
         "DaysSupply":               st.column_config.NumberColumn("DaysSupply",             width="small", format="%.0f"),
         "MaxDOS":                   st.column_config.NumberColumn("MaxDOS",                 width="small", format="%.0f"),
     }
-    if "ib_data" not in st.session_state or st.session_state.get("_ib_db_sig") != _db_sig:
-        _ib_raw = _fill_from_db(_IB_COLS, merged)
-        st.session_state.ib_data = _cast_text_cols(
-            _ib_raw, ["store_no", "store_name", "ID", "ProductDescription",
-                      "POG_STATUS", "Display Group", "Display group desc"])
-        st.session_state["_ib_db_sig"] = _db_sig
 
+    # ── Find HDET file (large .txt pinned by admin) ───────────────────────────
+    _hdet_path = None
+    for _hmeta in load_admin_manifest():
+        _hp = os.path.join(BASE_DIR, "uploads", _hmeta["name"])
+        if "hdet" in _hmeta["name"].lower() and os.path.exists(_hp) and is_large_file(_hp):
+            _hdet_path = _hp
+            break
+
+    def _build_ib(hdet_df: pd.DataFrame) -> pd.DataFrame:
+        """Map hdet_df columns → _IB_COLS. For columns absent in HDET, backfill
+        from the main rangesheet data (merged). Leave null if both are missing."""
+        _hmap = {col: next((c for c in hdet_df.columns if _nca(c) == _nca(col)), None)
+                 for col in _IB_COLS}
+        _mmap = {col: next((c for c in merged.columns if _nca(c) == _nca(col)), None)
+                 for col in _IB_COLS}
+        _hn = len(hdet_df)
+        _out = {}
+        for col in _IB_COLS:
+            if _hmap[col] is not None:
+                _out[col] = hdet_df[_hmap[col]].reset_index(drop=True)
+            elif _mmap[col] is not None:
+                _mv = merged[_mmap[col]].reset_index(drop=True)
+                if len(_mv) >= _hn:
+                    _out[col] = _mv.iloc[:_hn].reset_index(drop=True)
+                else:
+                    _out[col] = pd.concat(
+                        [_mv, pd.Series([None] * (_hn - len(_mv)))], ignore_index=True)
+            else:
+                _out[col] = pd.Series([None] * _hn)
+        return _cast_text_cols(pd.DataFrame(_out), _IB_TEXT_COLS)
+
+    # ── Auto-load on first access only (never auto-clear; keep last version) ──
+    _hdet_mtime = (f"{os.path.getmtime(_hdet_path):.0f}" if _hdet_path else None)
+    if "ib_data" not in st.session_state:
+        if _hdet_path:
+            with st.spinner("Loading Item by Store data from HDET…"):
+                _auto_df = read_large_file_head(_hdet_path, n_rows=500)
+            st.session_state.ib_data = _build_ib(_auto_df)
+            st.session_state["_ib_hdet_mtime"] = _hdet_mtime
+            st.session_state["_ib_source"] = f"HDET preview (500 rows)"
+        else:
+            st.session_state.ib_data = _cast_text_cols(
+                _fill_from_db(_IB_COLS, merged), _IB_TEXT_COLS)
+            st.session_state["_ib_source"] = "Rangesheet data"
+
+    # ── HDET controls (DG filter + reset) ────────────────────────────────────
+    if _hdet_path:
+        _hfname = os.path.basename(_hdet_path)
+        _src_label = st.session_state.get("_ib_source", "")
+        st.markdown(
+            f"<div style='font-size:11px;color:#2BBFA4;margin-bottom:6px;'>"
+            f"Source: <strong>{_hfname}</strong>"
+            + (f" · {_src_label}" if _src_label else "")
+            + " · Enter DG code below to load a full filtered slice.</div>",
+            unsafe_allow_html=True,
+        )
+        _hc1, _hc2, _hc3, _ = st.columns([1.8, 1.4, 1.6, 3.2])
+        with _hc1:
+            _ib_dg_inp = st.text_input(
+                "DG Code", key="ib_hdet_dg",
+                placeholder="e.g. 101",
+                label_visibility="collapsed",
+            )
+        with _hc2:
+            _ib_reload = st.button("Load by DG", key="ib_hdet_reload", use_container_width=True)
+        with _hc3:
+            _ib_reset_hdet = st.button("↺ Reload HDET Preview", key="ib_hdet_reset", use_container_width=True)
+
+        if _ib_reset_hdet:
+            with st.spinner(f"Reloading preview from {_hfname}…"):
+                _auto_df = read_large_file_head(_hdet_path, n_rows=500)
+            st.session_state.ib_data = _build_ib(_auto_df)
+            st.session_state["_ib_source"] = "HDET preview (500 rows)"
+            st.rerun()
+
+        if _ib_reload:
+            _dg_val = _ib_dg_inp.strip()
+            if _dg_val:
+                with st.spinner(f"Loading DG={_dg_val} from {_hfname}…"):
+                    _hdet_df = load_large_file_by_dg(_hdet_path, _dg_val)
+                if not _hdet_df.empty:
+                    st.session_state.ib_data = _build_ib(_hdet_df)
+                    st.session_state["_ib_source"] = f"HDET · DG={_dg_val} ({len(_hdet_df):,} rows)"
+                    st.rerun()
+                else:
+                    st.warning(f"No rows found for DG={_dg_val!r} in {_hfname}")
+            else:
+                st.info("Enter a DG code first, then click Load by DG.")
+
+    # ── Toolbar ───────────────────────────────────────────────────────────────
     _ib_c1, _ib_c2, _ib_c3, _ = st.columns([1.1, 1.0, 1.4, 4.5])
     with _ib_c1:
         if st.button("＋ Add Row", key="ib_add_row", use_container_width=True):
@@ -929,9 +1018,8 @@ with _sheet_tabs[3]:   # 5.1 ItembyStore
     with _ib_c2:
         if st.button("↺ Reset", key="ib_clear", use_container_width=True):
             st.session_state.ib_data = _cast_text_cols(
-                _fill_from_db(_IB_COLS, merged),
-                ["store_no", "store_name", "ID", "ProductDescription",
-                 "POG_STATUS", "Display Group", "Display group desc"])
+                _fill_from_db(_IB_COLS, merged), _IB_TEXT_COLS)
+            st.session_state["_ib_source"] = "Rangesheet data"
             st.session_state.pop("vw_submit_51", None)
             st.rerun()
     with _ib_c3:
@@ -1060,6 +1148,7 @@ with _sheet_tabs[6]:   # 5.4 Upload to Citrix
         "POG_WIDTH", "POG_HEIGHT", "POG_DEPTH",
         "SQM", "FP_status", "Capacity",
     ]
+    _CX_TEXT_COLS = ["POGName", "store_no", "store_name", "FP_status"]
     _CITRIX_COL_CFG = {
         "POGName":    st.column_config.TextColumn("POGName",    width="medium"),
         "store_no":   st.column_config.TextColumn("store_no",   width="small"),
@@ -1071,11 +1160,93 @@ with _sheet_tabs[6]:   # 5.4 Upload to Citrix
         "FP_status":  st.column_config.TextColumn("FP_status",  width="small"),
         "Capacity":   st.column_config.NumberColumn("Capacity",   width="small", format="%.0f"),
     }
-    if "vw_citrix_data" not in st.session_state or st.session_state.get("_cx_db_sig") != _db_sig:
-        _cx_raw = _fill_from_db(_CITRIX_COLS, merged)
-        st.session_state.vw_citrix_data = _cast_text_cols(
-            _cx_raw, ["POGName", "store_no", "store_name", "FP_status"])
-        st.session_state["_cx_db_sig"] = _db_sig
+
+    # ── Find HDET file ────────────────────────────────────────────────────────
+    _cx_hdet_path = None
+    for _cxmeta in load_admin_manifest():
+        _cxp = os.path.join(BASE_DIR, "uploads", _cxmeta["name"])
+        if "hdet" in _cxmeta["name"].lower() and os.path.exists(_cxp) and is_large_file(_cxp):
+            _cx_hdet_path = _cxp
+            break
+
+    def _build_cx(hdet_df: pd.DataFrame) -> pd.DataFrame:
+        """Fill _CITRIX_COLS: Capacity (and any other matching cols) come from
+        HDET; remaining cols fall back to merged. Null if neither has them."""
+        _hmap = {col: next((c for c in hdet_df.columns if _nca(c) == _nca(col)), None)
+                 for col in _CITRIX_COLS}
+        _mmap = {col: next((c for c in merged.columns if _nca(c) == _nca(col)), None)
+                 for col in _CITRIX_COLS}
+        _hn = len(hdet_df)
+        _out = {}
+        for col in _CITRIX_COLS:
+            if _hmap[col] is not None:
+                _out[col] = hdet_df[_hmap[col]].reset_index(drop=True)
+            elif _mmap[col] is not None:
+                _mv = merged[_mmap[col]].reset_index(drop=True)
+                if len(_mv) >= _hn:
+                    _out[col] = _mv.iloc[:_hn].reset_index(drop=True)
+                else:
+                    _out[col] = pd.concat(
+                        [_mv, pd.Series([None] * (_hn - len(_mv)))], ignore_index=True)
+            else:
+                _out[col] = pd.Series([None] * _hn)
+        return _cast_text_cols(pd.DataFrame(_out), _CX_TEXT_COLS)
+
+    # ── Auto-load on first access; never auto-clear ───────────────────────────
+    if "vw_citrix_data" not in st.session_state:
+        if _cx_hdet_path:
+            with st.spinner("Loading 5.4 data from HDET…"):
+                _cx_auto = read_large_file_head(_cx_hdet_path, n_rows=500)
+            st.session_state.vw_citrix_data = _build_cx(_cx_auto)
+            st.session_state["_cx_source"] = "HDET preview (500 rows)"
+        else:
+            st.session_state.vw_citrix_data = _cast_text_cols(
+                _fill_from_db(_CITRIX_COLS, merged), _CX_TEXT_COLS)
+            st.session_state["_cx_source"] = "Rangesheet data"
+
+    # ── HDET controls ─────────────────────────────────────────────────────────
+    if _cx_hdet_path:
+        _cx_hfname = os.path.basename(_cx_hdet_path)
+        _cx_src = st.session_state.get("_cx_source", "")
+        st.markdown(
+            f"<div style='font-size:11px;color:#2BBFA4;margin-bottom:6px;'>"
+            f"Source: <strong>{_cx_hfname}</strong>"
+            + (f" · {_cx_src}" if _cx_src else "")
+            + " · <em>Capacity</em> column pulled from HDET · enter DG to load filtered slice.</div>",
+            unsafe_allow_html=True,
+        )
+        _cxh1, _cxh2, _cxh3, _ = st.columns([1.8, 1.4, 1.6, 3.2])
+        with _cxh1:
+            _cx_dg_inp = st.text_input(
+                "DG Code", key="cx_hdet_dg",
+                placeholder="e.g. 101",
+                label_visibility="collapsed",
+            )
+        with _cxh2:
+            _cx_reload = st.button("Load by DG", key="cx_hdet_reload", use_container_width=True)
+        with _cxh3:
+            _cx_reset_hdet = st.button("↺ Reload HDET Preview", key="cx_hdet_reset", use_container_width=True)
+
+        if _cx_reset_hdet:
+            with st.spinner(f"Reloading preview from {_cx_hfname}…"):
+                _cx_auto = read_large_file_head(_cx_hdet_path, n_rows=500)
+            st.session_state.vw_citrix_data = _build_cx(_cx_auto)
+            st.session_state["_cx_source"] = "HDET preview (500 rows)"
+            st.rerun()
+
+        if _cx_reload:
+            _cx_dg = _cx_dg_inp.strip()
+            if _cx_dg:
+                with st.spinner(f"Loading DG={_cx_dg} from {_cx_hfname}…"):
+                    _cx_hdet_df = load_large_file_by_dg(_cx_hdet_path, _cx_dg)
+                if not _cx_hdet_df.empty:
+                    st.session_state.vw_citrix_data = _build_cx(_cx_hdet_df)
+                    st.session_state["_cx_source"] = f"HDET · DG={_cx_dg} ({len(_cx_hdet_df):,} rows)"
+                    st.rerun()
+                else:
+                    st.warning(f"No rows found for DG={_cx_dg!r} in {_cx_hfname}")
+            else:
+                st.info("Enter a DG code first, then click Load by DG.")
 
     # ── Toolbar ──────────────────────────────────────────────────────────────
     _cx_c1, _cx_c2, _cx_c3, _ = st.columns([1.1, 1.0, 1.4, 4.5])
@@ -1089,8 +1260,8 @@ with _sheet_tabs[6]:   # 5.4 Upload to Citrix
     with _cx_c2:
         if st.button("↺ Reset", key="cx_clear", use_container_width=True):
             st.session_state.vw_citrix_data = _cast_text_cols(
-                _fill_from_db(_CITRIX_COLS, merged),
-                ["POGName", "store_no", "store_name", "FP_status"])
+                _fill_from_db(_CITRIX_COLS, merged), _CX_TEXT_COLS)
+            st.session_state["_cx_source"] = "Rangesheet data"
             st.session_state.pop("vw_submit_54", None)
             st.rerun()
     with _cx_c3:
@@ -1116,7 +1287,90 @@ with _sheet_tabs[6]:   # 5.4 Upload to Citrix
         st.caption(f"✅ {len(st.session_state['vw_submit_54']):,} rows submitted to Report")
 
 with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
-    _render_sheet_content(merged, "ns")
+    # ── Find HDET (large) and A5 (normal-sized) pinned files ─────────────────
+    _ns_hdet_path = None
+    _ns_a5_name   = None
+    for _nsmeta in load_admin_manifest():
+        _nsp = os.path.join(BASE_DIR, "uploads", _nsmeta["name"])
+        if not os.path.exists(_nsp):
+            continue
+        if "hdet" in _nsmeta["name"].lower() and is_large_file(_nsp):
+            _ns_hdet_path = _nsp
+        elif "a5" in _nsmeta["name"].lower() and not is_large_file(_nsp):
+            _ns_a5_name = _nsmeta["name"]
+
+    # ── Auto-load HDET preview once per session ───────────────────────────────
+    if _ns_hdet_path and "ns_hdet_df" not in st.session_state:
+        with st.spinner("Loading HDET preview for Non-SSPOG…"):
+            st.session_state.ns_hdet_df = read_large_file_head(_ns_hdet_path, n_rows=500)
+        st.session_state["_ns_hdet_src"] = "HDET preview (500 rows)"
+
+    # ── Load A5 on demand (cached via load_admin_file_df) ────────────────────
+    _ns_a5_df = load_admin_file_df(_ns_a5_name) if _ns_a5_name else None
+
+    # ── HDET controls ─────────────────────────────────────────────────────────
+    if _ns_hdet_path:
+        _ns_hfname = os.path.basename(_ns_hdet_path)
+        _ns_src_lbl = st.session_state.get("_ns_hdet_src", "")
+        _info_parts = [f"HDET: <strong>{_ns_hfname}</strong>"]
+        if _ns_src_lbl:
+            _info_parts.append(_ns_src_lbl)
+        if _ns_a5_name:
+            _info_parts.append(f"A5: <strong>{_ns_a5_name}</strong>")
+        st.markdown(
+            "<div style='font-size:11px;color:#2BBFA4;margin-bottom:6px;'>"
+            + " · ".join(_info_parts)
+            + " · Columns matched by header name.</div>",
+            unsafe_allow_html=True,
+        )
+        _nsh1, _nsh2, _nsh3, _ = st.columns([1.8, 1.4, 1.6, 3.2])
+        with _nsh1:
+            _ns_dg = st.text_input(
+                "DG Code", key="ns_hdet_dg",
+                placeholder="e.g. 101",
+                label_visibility="collapsed",
+            )
+        with _nsh2:
+            _ns_load_btn = st.button("Load by DG", key="ns_hdet_load", use_container_width=True)
+        with _nsh3:
+            _ns_prev_btn = st.button("↺ Reload Preview", key="ns_hdet_prev", use_container_width=True)
+
+        if _ns_prev_btn:
+            with st.spinner(f"Reloading HDET preview…"):
+                st.session_state.ns_hdet_df = read_large_file_head(_ns_hdet_path, n_rows=500)
+            st.session_state["_ns_hdet_src"] = "HDET preview (500 rows)"
+            st.rerun()
+
+        if _ns_load_btn:
+            _ns_dg_val = _ns_dg.strip()
+            if _ns_dg_val:
+                with st.spinner(f"Loading DG={_ns_dg_val} from {_ns_hfname}…"):
+                    _ns_hdet_new = load_large_file_by_dg(_ns_hdet_path, _ns_dg_val)
+                if not _ns_hdet_new.empty:
+                    st.session_state.ns_hdet_df = _ns_hdet_new
+                    st.session_state["_ns_hdet_src"] = (
+                        f"HDET · DG={_ns_dg_val} ({len(_ns_hdet_new):,} rows)")
+                    st.rerun()
+                else:
+                    st.warning(f"No rows found for DG={_ns_dg_val!r} in {_ns_hfname}")
+            else:
+                st.info("Enter a DG code first, then click Load by DG.")
+
+    # ── Build combined DataFrame: merged + HDET + A5, match by header ─────────
+    _ns_parts = [merged]
+    if st.session_state.get("ns_hdet_df") is not None:
+        _ns_parts.append(st.session_state.ns_hdet_df)
+    if _ns_a5_df is not None and not _ns_a5_df.empty:
+        _ns_parts.append(_ns_a5_df)
+
+    if len(_ns_parts) > 1:
+        _ns_combined = _dedup(
+            pd.concat(_ns_parts, ignore_index=True, sort=False)
+        )
+    else:
+        _ns_combined = merged
+
+    _render_sheet_content(_ns_combined, "ns")
 
 if False:
     _meta = st.session_state.rangesheet_meta
@@ -1828,100 +2082,3 @@ if False:
             st.warning("Status column not found in the data.")
 
 render_page_nav("viewdata")
-"""
-Snippet to add to pages/viewdata.py (RangeSheet Review)
-=========================================================
-This replaces the "upload HDET through the browser" idea with
-"point at a file that already exists on disk / network drive".
-
-WHY: a 2.9GB file gets stuck at Streamlit's upload limit before any
-Python code runs. Since the app and the HDET file are on the same
-machine / network, there's no need to upload it through the browser
-at all — just read it directly from where it already sits.
-
-WHAT TO DO WITH THIS FILE:
-  Copy the block below into pages/viewdata.py, wherever the DG_CODE
-  selector should appear. It calls get_dg_options() and
-  load_large_file_by_dg() — both already added to utils/shared.py
-  in the earlier patch. No further changes to shared.py are needed
-  for this to work.
-"""
-
-"""
-Snippet to add to pages/viewdata.py (RangeSheet Review)
-=========================================================
-This replaces the "upload HDET through the browser" idea with
-"point at a file that already exists on disk / network drive".
-
-WHY: a 2.9GB file gets stuck at Streamlit's upload limit before any
-Python code runs. Since the app and the HDET file are on the same
-machine / network, there's no need to upload it through the browser
-at all — just read it directly from where it already sits.
-
-WHAT TO DO WITH THIS FILE:
-  Copy the block below into pages/viewdata.py, wherever the DG_CODE
-  selector should appear. It calls get_dg_options() and
-  load_large_file_by_dg() — both already added to utils/shared.py
-  in the earlier patch. No further changes to shared.py are needed
-  for this to work.
-"""
-
-import os
-import streamlit as st
-from utils.shared import get_dg_options, load_large_file_by_dg, is_large_file
-
-# ── Step 1: let the user point at the HDET file's location on disk ──────────
-# This is a text path, not a file upload — nothing travels through the
-# browser's upload mechanism, so the 2.9GB size is a non-issue here.
-
-st.markdown("### Select HDET source file")
-
-# Remember the last path used, so the user doesn't have to retype it
-# every time they come back to this page.
-if "hdet_path" not in st.session_state:
-    st.session_state.hdet_path = ""
-
-hdet_path = st.text_input(
-    "Path to HDET file (local path or network drive)",
-    value=st.session_state.hdet_path,
-    placeholder=r"C:\Users\TH90383638\Downloads\HDET_Range Sheet_WK23.txt",
-    help="Paste the same path you'd use to open this file in File Explorer.",
-)
-st.session_state.hdet_path = hdet_path
-
-if hdet_path:
-    if not os.path.exists(hdet_path):
-        st.error("File not found at that path. Check spelling and that the drive is connected.")
-    else:
-        size_mb = os.path.getsize(hdet_path) / (1024 * 1024)
-        st.caption(f"Found file — {size_mb:,.0f} MB")
-
-        # ── Step 2: scan for available DG / DG_CODE values ──────────────────
-        # This reads the file in chunks (see get_dg_options in shared.py) —
-        # it does NOT load the full 6.7M rows into memory just to list DGs.
-        with st.spinner("Scanning for DG codes… this reads the file once, in chunks."):
-            dg_col, dg_values = get_dg_options(hdet_path)
-
-        if dg_col is None:
-            st.error(
-                "Couldn't find a DG or DG_CODE column in this file. "
-                "Check the file has the expected header."
-            )
-        else:
-            st.caption(f"Found DG column: `{dg_col}` · {len(dg_values):,} unique values")
-
-            selected_dg = st.selectbox("Select DG_CODE to load", dg_values)
-
-            if st.button("Load data for this DG_CODE"):
-                # ── Step 3: filter down to ~20k rows for the chosen DG ──────
-                # Cached as Parquet after the first run — re-selecting the
-                # same DG later in the session loads almost instantly.
-                with st.spinner(f"Loading rows for DG_CODE = {selected_dg}…"):
-                    review_df = load_large_file_by_dg(hdet_path, selected_dg)
-
-                if review_df.empty:
-                    st.warning(f"No rows found for DG_CODE = {selected_dg}.")
-                else:
-                    st.session_state.review_df = review_df
-                    st.success(f"Loaded {len(review_df):,} rows for DG_CODE = {selected_dg}.")
-                    st.dataframe(review_df, use_container_width=True, height=500, hide_index=True)
