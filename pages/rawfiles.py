@@ -8,7 +8,101 @@ from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
     load_admin_manifest, load_admin_file_df, get_shared_db,
     is_large_file, get_large_file_preview, BASE_DIR,
+    scan_hdet_dg_cascade,
+    summarize_hdet_by_cluster,
+    _detect_large_file_params, LARGE_FILE_CHUNK_SIZE,
 )
+
+# Inline: scan small FP/POG CSV for StoreCount per cluster
+def _scan_csv_store_counts(path, filter_cols=None):
+    sep, enc, hr = _detect_large_file_params(path)
+    first = next(iter(pd.read_csv(path, sep=sep, encoding=enc, skiprows=hr,
+        header=0, chunksize=1000, dtype=str, low_memory=False, on_bad_lines="skip")))
+    low_map = {str(c).strip().lower(): c for c in first.columns}
+    def _res(cands):
+        for c in cands:
+            if c in first.columns: return c
+            if str(c).strip().lower() in low_map: return low_map[str(c).strip().lower()]
+        return None
+    cls_col   = _res(["POG_Cluster","ClusterName","Cluster_Name","cluster_name","Cluster Name"])
+    store_col = _res(["store_no","StoreNo","store_id","Store_No","store_number","PG_Store_Number"])
+    if not cls_col or not store_col:
+        return {}, 0
+    actual_filters = {}
+    if filter_cols:
+        for _k, (cands, vals) in filter_cols.items():
+            col = _res(cands)
+            if col and vals:
+                actual_filters[col] = set(str(v) for v in vals)
+    use_cols = list({cls_col, store_col} | set(actual_filters.keys()))
+    agg, global_stores = {}, set()
+    for chunk in pd.read_csv(path, sep=sep, encoding=enc, skiprows=hr, header=0,
+            chunksize=LARGE_FILE_CHUNK_SIZE, usecols=use_cols, dtype=str,
+            low_memory=False, on_bad_lines="skip"):
+        mask = pd.Series(True, index=chunk.index)
+        for col, vals in actual_filters.items():
+            if col in chunk.columns:
+                mask &= chunk[col].str.strip().isin(vals)
+        chunk = chunk[mask]
+        if chunk.empty: continue
+        chunk[cls_col] = chunk[cls_col].fillna("").str.strip()
+        global_stores.update(chunk[store_col].dropna().str.strip().unique())
+        for cv, grp in chunk.groupby(cls_col, sort=False):
+            if not cv: continue
+            if cv not in agg: agg[cv] = set()
+            agg[cv].update(grp[store_col].dropna().str.strip().unique())
+    return {k: len(v-{""}) for k, v in agg.items()}, len(global_stores-{""})
+
+
+@st.cache_data(show_spinner="Building POG table…")
+def _scan_hdet_for_pivot(path: str, cl_sel: tuple, dg_sel: tuple,
+                          div_sel: tuple, fmt_sel: tuple, mtime: int = 0):
+    """Scan HDET (chunked) filtered by ClusterName — return pivot-ready DataFrame."""
+    _sep, _enc, _hr = _detect_large_file_params(path)
+    _c = {k: None for k in ("cls","dg","id","desc","pog","fmt","div","val")}
+    _rows = []
+    for _ck in pd.read_csv(path, sep=_sep, encoding=_enc, skiprows=_hr,
+                            chunksize=LARGE_FILE_CHUNK_SIZE, dtype=str,
+                            low_memory=False, on_bad_lines="skip"):
+        if _c["cls"] is None:
+            _lm = {str(x).strip().lower(): x for x in _ck.columns}
+            def _fc(*cs, _lm=_lm, _ck=_ck):
+                for c in cs:
+                    if c in _ck.columns: return c
+                    if c.lower() in _lm: return _lm[c.lower()]
+                return None
+            _c["cls"]  = _fc("ClusterName","Cluster_Name","cluster_name","Cluster Name")
+            _c["dg"]   = _fc("DG","DG_CODE","dg_code","Display Group","Display_Group")
+            _c["id"]   = _fc("ID","id","Barcode","barcode","TPNA")
+            _c["desc"] = _fc("Item Name","item_name","ProductDescription","Description",
+                              "Name_TH","product_name","Item_Name","TPNA_Name")
+            _c["pog"]  = _fc("Name","FP_Name","FP Name","POGName","pog_name","FPName")
+            _c["fmt"]  = _fc("store_Format","store_format","StoreFormat","Format")
+            _c["div"]  = _fc("Div Code&Desc","Div Code & Desc","DivCode&Desc")
+            _c["val"]  = _fc("Capacity","capacity","ForecastSales","forecast_new_item_sales",
+                              "Avg_unit","avg_unit","Facing","facings","Value","value","qty","Qty")
+        if not _c["cls"] or not _c["pog"]:
+            continue
+        _ck = _ck[_ck[_c["cls"]].astype(str).str.strip().isin(set(cl_sel))]
+        if _ck.empty: continue
+        if fmt_sel and _c["fmt"]:
+            _ck = _ck[_ck[_c["fmt"]].astype(str).str.strip().isin(set(fmt_sel))]
+        if div_sel and _c["div"]:
+            _ck = _ck[_ck[_c["div"]].astype(str).str.strip().isin(set(div_sel))]
+        if dg_sel and _c["dg"]:
+            _ck = _ck[_ck[_c["dg"]].astype(str).str.strip().isin(set(dg_sel))]
+        if _ck.empty: continue
+        _keep = list(dict.fromkeys(v for v in _c.values() if v and v in _ck.columns))
+        _rows.append(_ck[_keep].copy())
+    if not _rows:
+        return pd.DataFrame()
+    _df = pd.concat(_rows, ignore_index=True)
+    _rename = {v: k2 for k2, v in [
+        ("DG_CODE", _c["dg"]), ("ID", _c["id"]),
+        ("ProductDescription", _c["desc"]), ("POGName", _c["pog"]), ("Value", _c["val"]),
+    ] if v and v != k2}
+    return _df.rename(columns=_rename)
+
 
 inject_css()
 init_session_state()
@@ -82,6 +176,22 @@ button[data-testid="stTabScrollRight"] { display: none !important; }
 .large-file-badge {
     font-size: 11px; background: #FFF3E0; color: #E65100;
     border-radius: 4px; padding: 2px 8px; font-weight: 700; margin-left: 6px;
+}
+
+/* ── Multiselect: plain text tags (no red pill background) ──────────── */
+[data-testid="stMultiSelect"] [data-baseweb="tag"] {
+    background-color: transparent !important;
+    border: none !important;
+    padding: 0 2px 0 0 !important;
+    margin: 1px 2px !important;
+}
+[data-testid="stMultiSelect"] [data-baseweb="tag"] span:first-child {
+    color: #333 !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
+}
+[data-testid="stMultiSelect"] [data-baseweb="tag"] [role="presentation"] {
+    color: #888 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -213,25 +323,143 @@ def _render_minor():
 
     _df = _dedup(_db_df.copy())
 
-    # Detect columns
-    _fmt_col  = _find_col(_df, "store_Format", "store_format", "StoreFormat", "Format")
-    _div_col  = _find_col(_df, "Department", "Section", "Div", "DivCode")
-    _dg_col   = _find_col(_df, "Department", "DG_CODE", "dg_code", "DG", "Section")
-    _cl_col   = _find_col(_df, "Cluster (Planogram name)", "ClusterName", "cluster_name",
-                          "Cluster", "FP_Name", "pog_name")
-    _store_col = _find_col(_df, "store_no", "StoreNo", "store_id")
-    _pog_col  = _find_col(_df, "FP_Name", "pog_name", "PogName", "Cluster (Planogram name)")
-    _id_col   = _find_col(_df, "ID", "id", "Barcode", "barcode", "TPNA")
-    _desc_col = _find_col(_df, "Item Name", "item_name", "ProductDescription", "Description")
+    # ── Column detection ──────────────────────────────────────────────────────
+    # Never fall back to "Department" for div — that's a different column.
+    # Never mix "Display Group" into dg_col — it conflicts with disp_col.
+    _fmt_col   = _find_col(_df, "store_Format", "store_format", "StoreFormat", "Format")
+    _div_col   = _find_col(_df, "Div Code&Desc", "Div Code & Desc", "DivCode&Desc", "DivCode")
+    _dg_col    = _find_col(_df, "DG", "DG_CODE", "dg_code")
+    _cl_col    = _find_col(_df, "ClusterName", "cluster_name", "Cluster_Name",
+                           "Cluster (Planogram name)", "Cluster", "FP_Name", "pog_name")
+    _store_col = _find_col(_df, "store_no", "StoreNo", "store_id", "Store_No")
+    _pog_col   = _find_col(_df, "FP_Name", "pog_name", "PogName", "Cluster (Planogram name)")
+    _id_col    = _find_col(_df, "ID", "id", "Barcode", "barcode", "TPNA")
+    _desc_col  = _find_col(_df, "Item Name", "item_name", "ProductDescription", "Description")
+    _disp_col  = _find_col(_df, "displaygroup", "Display Group", "DisplayGroup",
+                           "Display_Group", "displayGroup")
 
-    # ── Filter bar (4 columns across full width) ──────────────────────────────
+    # ── DIAGNOSTIC — expand to confirm column names, then remove this block ───
+    with st.expander("🔍 Column diagnostic (remove when confirmed)", expanded=False):
+        st.write("**All columns in _df:**", list(_df.columns))
+        st.write(f"fmt=`{_fmt_col}` | div=`{_div_col}` | dg=`{_dg_col}` "
+                 f"| cl=`{_cl_col}` | disp=`{_disp_col}` | store=`{_store_col}`")
+
+    # ── HDET cascade scan ─────────────────────────────────────────────────────
+    # Scans HDET once per session and builds a bidirectional map:
+    #   cascade[dg]  → {div:[...], cls:[...], fmt:[...]}
+    #   cls_cascade[cls] → {dg:[...], div:[...], fmt:[...]}
+    # This powers cross-filtering even for columns not in _df.
+    _RF_HDET_KEY  = "rawfiles_hdet_cascade_v1"
+    _RF_HDET_PATH = "rawfiles_hdet_path"
+    if _RF_HDET_KEY not in st.session_state:
+        _rf_hdet_path = None
+        for _rfm in load_admin_manifest():
+            _rfp = os.path.join(BASE_DIR, "uploads", _rfm["name"])
+            if "hdet" in _rfm["name"].lower() and os.path.exists(_rfp) and is_large_file(_rfp):
+                _rf_hdet_path = _rfp
+                break
+        st.session_state[_RF_HDET_PATH] = _rf_hdet_path  # persist for totals lookup
+        if _rf_hdet_path:
+            with st.spinner("Scanning HDET cascade for filter options…"):
+                _scanned = scan_hdet_dg_cascade(_rf_hdet_path, {
+                    "dg":  ["DG", "DG_CODE", "dg_code", "Display Group", "Display_Group"],
+                    "div": ["Div Code&Desc", "Div Code & Desc", "DivCode&Desc"],
+                    "cls": ["ClusterName", "Cluster_Name", "Cluster Name"],
+                    "fmt": ["store_Format", "store_format", "StoreFormat", "Format"],
+                })
+            st.session_state[_RF_HDET_KEY] = _scanned
+        else:
+            st.session_state[_RF_HDET_KEY] = {
+                "dg_vals": [], "fmt_vals": [], "div_vals": [], "cls_vals": [],
+                "cascade": {}, "cls_cascade": {},
+            }
+    _rf_hdet      = st.session_state[_RF_HDET_KEY]
+    _hdet_path    = st.session_state.get(_RF_HDET_PATH)
+    _h_casc    = _rf_hdet.get("cascade",     {})
+    _h_cls_c   = _rf_hdet.get("cls_cascade", {})
+
+    # ── Cross-filter helpers ──────────────────────────────────────────────────
+    _cur_fmt = st.session_state.get("minor_fmt", [])
+    _cur_div = st.session_state.get("minor_div", [])
+    _cur_dg  = st.session_state.get("minor_dg",  [])
+    _cur_cl  = st.session_state.get("minor_cl",  [])
+
+    def _xf(skip: str) -> pd.DataFrame:
+        """Filter _df by all dropdowns except `skip` (only cols present in _df)."""
+        _f = _df
+        if skip != "fmt" and _cur_fmt and _fmt_col:
+            _f = _f[_f[_fmt_col].astype(str).isin(_cur_fmt)]
+        if skip != "div" and _cur_div and _div_col:
+            _f = _f[_f[_div_col].astype(str).isin(_cur_div)]
+        if skip != "dg"  and _cur_dg  and _dg_col:
+            _f = _f[_f[_dg_col].astype(str).isin(_cur_dg)]
+        if skip != "cl"  and _cur_cl  and _cl_col:
+            _f = _f[_f[_cl_col].astype(str).isin(_cur_cl)]
+        return _f
+
+    def _uniq(df, col):
+        if not col: return []
+        return sorted(df[col].dropna().astype(str).replace("", pd.NA).dropna().unique())
+
+    def _hdet_opts(key: str) -> list:
+        """Compute valid options for `key` using HDET cascade given current selections.
+
+        key is one of "dg", "div", "cls", "fmt".
+        Builds the intersection of allowed values from each active selection.
+        """
+        _full = {
+            "dg":  _rf_hdet.get("dg_vals",  []),
+            "div": _rf_hdet.get("div_vals", []),
+            "cls": _rf_hdet.get("cls_vals", []),
+            "fmt": _rf_hdet.get("fmt_vals", []),
+        }
+        _sels = {"dg": _cur_dg, "div": _cur_div, "cls": _cur_cl, "fmt": _cur_fmt}
+        result = set(_full.get(key, []))
+
+        for src, vals in _sels.items():
+            if src == key or not vals:
+                continue
+            allowed: set = set()
+            for v in vals:
+                if src == "dg":
+                    allowed.update(_h_casc.get(v, {}).get(key, []))
+                elif src == "cls":
+                    allowed.update(_h_cls_c.get(v, {}).get(key, []))
+                elif src in ("div", "fmt"):
+                    # Reverse-lookup: walk cascade to find entries with this value
+                    for dg_v, rel in _h_casc.items():
+                        if v in rel.get(src, []):
+                            if key == "dg":
+                                allowed.add(dg_v)
+                            else:
+                                allowed.update(rel.get(key, []))
+                    if src == "div" and key == "cls":
+                        for cl_v, cd in _h_cls_c.items():
+                            if v in cd.get("div", []):
+                                allowed.add(cl_v)
+            if allowed:
+                result &= allowed
+
+        return sorted(result)
+
+    # ── Compute each dropdown's options ───────────────────────────────────────
+    # If the column is in _df: cross-filter via _xf() (fast, exact row match).
+    # If not in _df: cross-filter via HDET cascade (handles HDET-only columns).
+    _fmt_opts = _uniq(_xf("fmt"), _fmt_col) if _fmt_col else _hdet_opts("fmt")
+    _div_opts = _uniq(_xf("div"), _div_col) if _div_col else _hdet_opts("div")
+    _dg_opts  = _uniq(_xf("dg"),  _dg_col)  if _dg_col  else _hdet_opts("dg")
+    _cl_opts  = _uniq(_xf("cl"),  _cl_col)  if _cl_col  else _hdet_opts("cls")
+
+    # Drop stale selections no longer present in narrowed option lists
+    for _ss, _opts in [("minor_fmt", _fmt_opts), ("minor_div", _div_opts),
+                        ("minor_dg",  _dg_opts),  ("minor_cl",  _cl_opts)]:
+        if _ss in st.session_state:
+            _valid = [v for v in st.session_state[_ss] if v in _opts]
+            if _valid != st.session_state[_ss]:
+                st.session_state[_ss] = _valid
+
+    # ── Filter bar (4 dropdowns) ──────────────────────────────────────────────
     _fc1, _fc2, _fc3, _fc4 = st.columns(4)
-
-    _fmt_opts = sorted(_df[_fmt_col].dropna().astype(str).unique()) if _fmt_col else []
-    _div_opts = sorted(_df[_div_col].dropna().astype(str).unique()) if _div_col else []
-    _dg_opts  = sorted(_df[_dg_col].dropna().astype(str).unique())  if _dg_col  else []
-    _cl_opts  = sorted(_df[_cl_col].dropna().astype(str).unique())  if _cl_col  else []
-
     with _fc1:
         _fmt_sel = st.multiselect("store_Format", _fmt_opts, key="minor_fmt",
                                   placeholder="All formats")
@@ -245,139 +473,280 @@ def _render_minor():
         _cl_sel = st.multiselect("ClusterName", _cl_opts, key="minor_cl",
                                  placeholder="All clusters")
 
-    # Apply filters
+    # Apply all 4 filters → _fdf used by every panel below
     _fdf = _df.copy()
     if _fmt_sel and _fmt_col:  _fdf = _fdf[_fdf[_fmt_col].astype(str).isin(_fmt_sel)]
     if _div_sel and _div_col:  _fdf = _fdf[_fdf[_div_col].astype(str).isin(_div_sel)]
     if _dg_sel  and _dg_col:   _fdf = _fdf[_fdf[_dg_col].astype(str).isin(_dg_sel)]
     if _cl_sel  and _cl_col:   _fdf = _fdf[_fdf[_cl_col].astype(str).isin(_cl_sel)]
 
-    # ── 3-panel body ──────────────────────────────────────────────────────────
-    # Proportions: cluster table [2] | stats [1] | main table [4]
-    _col_l, _col_c, _col_r = st.columns([2, 1, 4], gap="small")
+    # ── Cluster summary (computed before columns — feeds both pivot + left panel) ─
+    _summary_df = None
+    if _hdet_path:
+        _sum_cache_key = (f"hdet_sum_v8|dg={_dg_sel}|cl={_cl_sel}"
+                          f"|div={_div_sel}|fmt={_fmt_sel}")
+        if _sum_cache_key not in st.session_state:
+            _sf_txt: dict = {}
+            if _dg_sel:
+                _sf_txt["dg"] = (["Display Group", "DG", "DG_CODE", "dg_code",
+                                   "Display_Group"], _dg_sel)
+            if _cl_sel:
+                _sf_txt["cls"] = (["ClusterName", "Cluster_Name",
+                                    "cluster_name", "Cluster Name"], _cl_sel)
+            if _div_sel:
+                _sf_txt["div"] = (["Div Code&Desc", "Div Code & Desc",
+                                    "DivCode&Desc"], _div_sel)
+            if _fmt_sel:
+                _sf_txt["fmt"] = (["store_Format", "store_format",
+                                    "StoreFormat", "Format"], _fmt_sel)
 
-    # ── LEFT: Cluster summary table ───────────────────────────────────────────
+            with st.spinner("Loading cluster summary…"):
+                _pog_df = summarize_hdet_by_cluster(
+                    _hdet_path,
+                    col_candidates={
+                        "cls":   ["ClusterName", "Cluster_Name", "cluster_name",
+                                  "Cluster Name"],
+                        "store": ["PG_Store_Number","store_no","StoreNo","Store_No",
+                                  "store_number","Store_Number","StoreID","store_id"],
+                        "pog":   ["Name", "FP_Name", "FP Name", "FPName",
+                                  "pog_name", "POGName"],
+                        "id":    ["ID", "id", "Barcode", "barcode", "TPNA"],
+                    },
+                    filter_cols=_sf_txt if _sf_txt else None,
+                )
+                _tot_mask = _pog_df["ClusterName"] == "Total"
+                _d = (_pog_df[~_tot_mask]
+                      .sort_values("StoreCount", ascending=False)
+                      .reset_index(drop=True))
+                st.session_state[_sum_cache_key] = pd.concat(
+                    [_d, _pog_df[_tot_mask]], ignore_index=True)
+
+        _summary_df = st.session_state[_sum_cache_key]
+        if "ItemCount" not in _summary_df.columns:
+            _summary_df = _summary_df.copy()
+            _summary_df["ItemCount"] = 0
+
+    # ── Horizontal pivot: Total Store Apply + Total Item per cluster ───────────
+    if _summary_df is not None and not _summary_df.empty:
+        _is_tot2   = _summary_df["ClusterName"] == "Total"
+        _data_p    = _summary_df[~_is_tot2]
+        _tot_p     = _summary_df[_is_tot2]
+        _cls_names = list(_data_p["ClusterName"])
+        _store_map = dict(zip(_data_p["ClusterName"], _data_p["StoreCount"].astype(int)))
+        _item_map  = dict(zip(_data_p["ClusterName"], _data_p["ItemCount"].astype(int)))
+        if not _tot_p.empty:
+            _cls_names.append("Total")
+            _store_map["Total"] = int(_tot_p.iloc[0]["StoreCount"])
+            _item_map["Total"]  = int(_tot_p.iloc[0]["ItemCount"])
+        _th = "".join(
+            f"<th style='padding:3px 10px;white-space:nowrap;text-align:right;"
+            f"border-right:1px solid #2d3350;'>{c}</th>"
+            for c in _cls_names
+        )
+        _sr = "".join(
+            f"<td style='padding:3px 10px;text-align:right;"
+            f"border-right:1px solid #2d3350;'>{_store_map[c]:,}</td>"
+            for c in _cls_names
+        )
+        _ir = "".join(
+            f"<td style='padding:3px 10px;text-align:right;"
+            f"border-right:1px solid #2d3350;'>{_item_map[c]:,}</td>"
+            for c in _cls_names
+        )
+        st.markdown(
+            f"<div style='overflow-x:auto;font-size:0.78rem;margin-bottom:6px;'>"
+            f"<table style='border-collapse:collapse;'>"
+            f"<thead><tr style='background:#1e2130;color:#9ba3c2;'>"
+            f"<th style='padding:3px 10px;text-align:left;white-space:nowrap;"
+            f"border-right:1px solid #2d3350;'></th>{_th}</tr></thead>"
+            f"<tbody>"
+            f"<tr style='background:#161b2e;color:#e0e4f7;'>"
+            f"<td style='padding:3px 10px;font-weight:600;white-space:nowrap;"
+            f"border-right:1px solid #2d3350;'>Total Store Apply</td>{_sr}</tr>"
+            f"<tr style='background:#1a1f33;color:#e0e4f7;'>"
+            f"<td style='padding:3px 10px;font-weight:600;white-space:nowrap;"
+            f"border-right:1px solid #2d3350;'>Total Item</td>{_ir}</tr>"
+            f"</tbody></table></div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── 2-panel body: cluster table [2] | main table [5] ─────────────────────
+    _col_l, _col_r = st.columns([2, 5], gap="small")
+
+    # ── LEFT: Cluster table (data already computed above) ─────────────────────
     with _col_l:
-        if _cl_col:
-            _grp = _fdf.groupby(_cl_col, dropna=False)
-            _s_cnt = (_grp[_store_col].nunique()
-                      if _store_col else _grp.size())
-            _p_cnt = (_grp[_pog_col].nunique()
-                      if _pog_col and _pog_col != _cl_col else _grp.size())
-            _summary = pd.DataFrame({
-                "ClusterName":      _s_cnt.index.astype(str),
-                "StoreCount":       _s_cnt.values.astype(int),
-                "Count of POGName": _p_cnt.values.astype(int),
-            }).reset_index(drop=True)
-            _total_row = pd.DataFrame([{
-                "ClusterName":      "Total",
-                "StoreCount":       int(_summary["StoreCount"].sum()),
-                "Count of POGName": int(_summary["Count of POGName"].sum()),
-            }])
-            _disp = pd.concat([_summary, _total_row], ignore_index=True)
+        if _summary_df is not None:
+            _is_total  = _summary_df["ClusterName"] == "Total"
+            _data_rows = _summary_df[~_is_total].reset_index(drop=True)
+            _total_row = _summary_df[_is_total]
+            _disp_cols3 = ["ClusterName","StoreCount","Count of POGName"]
+            _disp_rows3 = _data_rows[[c for c in _disp_cols3 if c in _data_rows.columns]]
             st.dataframe(
-                _disp, hide_index=True, use_container_width=True,
-                height=min(36 * (len(_disp) + 1) + 3, 520),
+                _disp_rows3,
+                hide_index=True,
+                use_container_width=True,
+                height=520,
+                column_config={
+                    "ClusterName":      st.column_config.TextColumn(
+                                            "ClusterName", width="medium"),
+                    "StoreCount":       st.column_config.NumberColumn(
+                                            "StoreCount", width="small", format="%d"),
+                    "Count of POGName": st.column_config.NumberColumn(
+                                            "Count of POGName", width="small", format="%d"),
+                },
             )
+            if not _total_row.empty:
+                _tr = _total_row.iloc[0]
+                st.markdown(
+                    f"<div style='font-weight:700;border-top:2px solid #555;"
+                    f"padding:4px 2px;font-size:0.82rem;display:flex;gap:8px;'>"
+                    f"<span style='flex:2'>Total</span>"
+                    f"<span style='flex:1;text-align:right'>"
+                    f"{int(_tr['StoreCount']):,}</span>"
+                    f"<span style='flex:1;text-align:right'>"
+                    f"{int(_tr['Count of POGName']):,}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
         else:
-            st.caption("No cluster column found in data.")
+            st.caption("HDET file not found.")
 
-    # ── CENTER: nav arrows + Total Store Apply + Total Item ───────────────────
-    with _col_c:
-        # Decorative navigation arrows (matching the Excel-style controls)
-        st.markdown("""
-        <div class="nav-arrows" style="margin-top:4px;">
-            <div class="nav-arrow">↓</div>
-            <div class="nav-arrow">↓</div>
-            <div class="nav-arrow">↑</div>
-            <div class="filter-icon">▽</div>
-            <div class="filter-icon">⊞</div>
-            <div class="filter-icon">⋯</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Determine which cluster is "active" for the stats
-        _active_cl = _cl_sel[0] if _cl_sel else (_cl_opts[0] if _cl_opts else None)
-
-        # Total Store Apply
-        if _store_col and _cl_col and _active_cl:
-            _sub_cl = _fdf[_fdf[_cl_col].astype(str) == _active_cl]
-            _store_val = int(_sub_cl[_store_col].nunique())
-        elif _store_col:
-            _store_val = int(_fdf[_store_col].nunique())
-        else:
-            _store_val = len(_fdf)
-        _store_total = (_fdf[_store_col].nunique()
-                        if _store_col else len(_fdf))
-        _cl_label = _active_cl if _active_cl else "All"
-
-        st.markdown(f"""
-        <div class="minor-sub-label">Total Store Apply</div>
-        <table class="mini-tbl">
-            <tr>
-                <th>{_cl_label}</th>
-                <th class="total-col">Total</th>
-            </tr>
-            <tr>
-                <td>{_store_val:,}</td>
-                <td class="total-col">{int(_store_total):,}</td>
-            </tr>
-        </table>
-        """, unsafe_allow_html=True)
-
-        # Total Item
-        if _id_col and _cl_col and _active_cl:
-            _sub_cl2 = _fdf[_fdf[_cl_col].astype(str) == _active_cl]
-            _item_val = int(_sub_cl2[_id_col].nunique())
-        elif _id_col:
-            _item_val = int(_fdf[_id_col].nunique())
-        else:
-            _item_val = len(_fdf)
-        _item_total = (_fdf[_id_col].nunique() if _id_col else len(_fdf))
-
-        st.markdown(f"""
-        <div class="minor-sub-label">Total Item</div>
-        <table class="mini-tbl">
-            <tr>
-                <th>{_cl_label}</th>
-                <th class="total-col">Total</th>
-            </tr>
-            <tr>
-                <td>{_item_val:,}</td>
-                <td class="total-col">{int(_item_total):,}</td>
-            </tr>
-        </table>
-        """, unsafe_allow_html=True)
-
-    # ── RIGHT: POG_Cluster main table ─────────────────────────────────────────
+    # ── RIGHT: POG_Cluster pivot from A5 file ─────────────────────────────────
     with _col_r:
         st.markdown('<div class="pog-cluster-header">POG_Cluster</div>',
                     unsafe_allow_html=True)
 
-        # Fixed columns: DG_CODE | ID | ProductDescription
-        _fixed: dict[str, pd.Series] = {}
-        if _dg_col:   _fixed["DG_CODE"]             = _fdf[_dg_col].astype(str)
-        if _id_col:   _fixed["ID"]                  = _fdf[_id_col].astype(str)
-        if _desc_col: _fixed["ProductDescription"]  = _fdf[_desc_col].astype(str)
-
-        if _fixed:
-            _main_df = pd.DataFrame(_fixed).drop_duplicates().reset_index(drop=True)
+        if not _hdet_path:
+            st.caption("HDET file not found — upload and pin the HDET file.")
+        elif not _cl_sel:
+            st.info("Select a **ClusterName** to display the POG_Cluster table.")
         else:
-            _main_df = pd.DataFrame({"DG_CODE": [], "ID": [], "ProductDescription": []})
+            _h_mtime = int(os.path.getmtime(_hdet_path))
+            _raw_pvt = _scan_hdet_for_pivot(
+                _hdet_path,
+                cl_sel=tuple(sorted(_cl_sel)),
+                dg_sel=tuple(sorted(_dg_sel)),
+                div_sel=tuple(sorted(_div_sel)),
+                fmt_sel=tuple(sorted(_fmt_sel)),
+                mtime=_h_mtime,
+            )
+            if _raw_pvt.empty or "POGName" not in _raw_pvt.columns:
+                st.caption("No data for current filters (or POGName column not found in HDET).")
+            else:
+                _row_keys   = [c for c in ["DG_CODE","ID","ProductDescription"]
+                               if c in _raw_pvt.columns]
+                _raw_pvt["POGName"] = _raw_pvt["POGName"].fillna("").str.strip()
+                if "Value" in _raw_pvt.columns:
+                    _raw_pvt["Value"] = pd.to_numeric(_raw_pvt["Value"], errors="coerce")
+                if _row_keys and "Value" in _raw_pvt.columns:
+                    try:
+                        _pvt = (
+                            _raw_pvt.groupby(_row_keys + ["POGName"], sort=False)["Value"]
+                            .sum().unstack("POGName")
+                        ).reset_index()
+                        _pvt.columns.name = None
+                    except Exception:
+                        _pvt = _raw_pvt[_row_keys].drop_duplicates().reset_index(drop=True)
+                else:
+                    _pvt = (_raw_pvt[_row_keys].drop_duplicates().reset_index(drop=True)
+                            if _row_keys else pd.DataFrame())
+                _row_labels = _row_keys
+                if _row_labels:
+                    _pvt = _pvt.sort_values(_row_labels[0]).reset_index(drop=True)
 
-        # Empty POG-cluster columns — leave blank, to be filled from data later
-        if not _main_df.empty and _cl_col:
-            _clusters = sorted(_fdf[_cl_col].dropna().astype(str).unique())
-            for _c in _clusters:
-                _main_df[_c] = None
-
-        st.dataframe(
-            _dedup(_main_df),
-            use_container_width=True,
-            height=540,
-            hide_index=True,
-        )
-        st.caption(f"{len(_main_df):,} items")
+                _pog_cols = [c for c in _pvt.columns if c not in _row_labels]
+                _N        = len(_pog_cols)
+                _has_desc = "ProductDescription" in _pvt.columns
+                # ── Fixed-column widths & sticky left offsets ─────────────────
+                _TH = "#1e2130"; _TC = "#2BBFA4"; _TC2 = "#1a9e8b"; _B = "#2d3350"
+                _COL_W = {"DG_CODE": 74, "ID": 108, "ProductDescription": 230}
+                _left_px = {}; _acc = 0
+                for _cn in ["DG_CODE", "ID", "ProductDescription"]:
+                    if _cn in _pvt.columns:
+                        _left_px[_cn] = _acc
+                        _acc += _COL_W[_cn]
+                def _stkH(col, top="0px"):
+                    _w = _COL_W.get(col, 100)
+                    _l = _left_px.get(col, 0)
+                    return (f"position:sticky;left:{_l}px;top:{top};z-index:5;"
+                            f"background:{_TH};color:#9ba3c2;padding:4px 8px;"
+                            f"border:1px solid {_B};font-weight:700;"
+                            f"text-align:left;white-space:nowrap;min-width:{_w}px;")
+                def _stkB(col, bg):
+                    _w = _COL_W.get(col, 100)
+                    _l = _left_px.get(col, 0)
+                    return (f"position:sticky;left:{_l}px;z-index:1;"
+                            f"background:{bg};padding:3px 8px;"
+                            f"border:1px solid {_B};white-space:nowrap;min-width:{_w}px;")
+                _grS = (f"position:sticky;top:0;z-index:3;"
+                        f"background:{_TC};color:#fff;padding:4px 8px;"
+                        f"border:1px solid #1a8a74;font-weight:700;text-align:center;")
+                _pgS = (f"position:sticky;top:33px;z-index:3;"
+                        f"background:{_TC2};color:#fff;padding:3px 6px;"
+                        f"border:1px solid #1a8a74;font-weight:600;text-align:center;"
+                        f"font-size:0.70rem;max-width:130px;overflow:hidden;"
+                        f"text-overflow:ellipsis;white-space:nowrap;")
+                # ── Build HTML ───────────────────────────────────────────────
+                _ht = [
+                    "<div style='overflow-x:auto;overflow-y:auto;"
+                    "max-height:520px;font-size:0.78rem;'>",
+                    "<table style='border-collapse:collapse;'>",
+                    "<thead><tr>",
+                ]
+                # Row 1: DG_CODE + ID (rowspan=2, sticky) + group headers
+                for _lbl in [c for c in ["DG_CODE","ID"] if c in _pvt.columns]:
+                    _ht.append(f"<th rowspan='2' style='{_stkH(_lbl)}'>{_lbl}</th>")
+                if _has_desc:
+                    _ht.append(f"<th colspan='1' style='{_grS}'>POG CLUSTER</th>")
+                if _N:
+                    _cl_label = " / ".join(_cl_sel) if _cl_sel else "POG Cluster MOD fixture"
+                    _ht.append(f"<th colspan='{_N}' style='{_grS}'>{_cl_label}</th>")
+                _ht.append("</tr><tr>")
+                # Row 2: ProductDescription (sticky) + each POGName
+                if _has_desc:
+                    _desc_h_style = _stkH("ProductDescription", "33px")
+                    _ht.append(f"<th style='{_desc_h_style}'>ProductDescription</th>")
+                for _pc in _pog_cols:
+                    _spc = str(_pc).replace("<","&lt;").replace(">","&gt;")
+                    _ht.append(f"<th title='{_spc}' style='{_pgS}'>{_spc}</th>")
+                _ht.append("</tr></thead><tbody>")
+                # Data rows — DG_CODE shown only on first row of each DG group
+                _prev_dg4 = object()
+                for _ri, _row in _pvt.iterrows():
+                    _rbg = "#0e1120" if _ri % 2 == 0 else "#141829"
+                    _ht.append(f"<tr style='background:{_rbg};'>")
+                    if "DG_CODE" in _pvt.columns:
+                        _dv4 = str(_row["DG_CODE"])
+                        _bs = _stkB("DG_CODE", _rbg)
+                        if _dv4 != _prev_dg4:
+                            _ht.append(
+                                f"<td style='{_bs}color:#e0e4f7;font-weight:600;"
+                                f"vertical-align:top;'>{_dv4}</td>")
+                            _prev_dg4 = _dv4
+                        else:
+                            _ht.append(f"<td style='{_bs}'></td>")
+                    if "ID" in _pvt.columns:
+                        _id_b_style = _stkB("ID", _rbg)
+                        _ht.append(
+                            f"<td style='{_id_b_style}color:#c8cde8;'>"
+                            f"{_row['ID']}</td>")
+                    if _has_desc:
+                        _dsc = str(_row["ProductDescription"]).replace("<","&lt;").replace(">","&gt;")
+                        _desc_b_style = _stkB("ProductDescription", _rbg)
+                        _ht.append(
+                            f"<td style='{_desc_b_style}color:#c8cde8;"
+                            f"max-width:230px;overflow:hidden;text-overflow:ellipsis;'>"
+                            f"{_dsc}</td>")
+                    for _pc in _pog_cols:
+                        _v = _row.get(_pc, float("nan"))
+                        _ht.append(
+                            f"<td style='color:#e0e4f7;padding:3px 8px;"
+                            f"border:1px solid {_B};text-align:right;'>"
+                            f"{'%.2f' % _v if pd.notna(_v) and _v != 0 else ''}</td>")
+                    _ht.append("</tr>")
+                _ht.append("</tbody></table></div>")
+                st.markdown("".join(_ht), unsafe_allow_html=True)
+                st.caption(f"{len(_pvt):,} items · {_N} POGs")
 
 
 # ── Tab label list: [Minor] + one per uploaded file ───────────────────────────

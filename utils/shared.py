@@ -778,18 +778,23 @@ COLUMN_MAPPING = {
     "dg code":                                 "Department",
     "dg_code":                                 "Department",
     "section":                                 "Section",
+    "section code&desc":                       "Section",
+    "section code & desc":                     "Section",
     "dg name":                                 "Section",
     "dg_name":                                 "Section",
     "department name":                         "Section",
     "sub class":                               "Subclass",
     "sub-class":                               "Subclass",
     "subclass":                                "Subclass",
+    "subclass code & desc":                    "Subclass",
+    "subclass code&desc":                      "Subclass",
     "barcode":                                 "Barcode",
     "upc":                                     "Barcode",
     "ean":                                     "Barcode",
     "ean code":                                "Barcode",
     "sku":                                     "Barcode",
     "tpna":                                    "TPNA",
+    "style number":                            "TPNA",
     "item id":                                 "ID",
     "item_id":                                 "ID",
     "itemid":                                  "ID",
@@ -798,15 +803,20 @@ COLUMN_MAPPING = {
     "units per case":                          "No. of Unit in Case",
     "case units":                              "No. of Unit in Case",
     "no_of_unit_in_case":                      "No. of Unit in Case",
+    "casetotalnumber":                         "No. of Unit in Case",
     "no. of unit in inner":                    "No. of Unit in Inner",
     "no of unit in inner":                     "No. of Unit in Inner",
     "no_of_unit_in_inner":                     "No. of Unit in Inner",
+    "innerqty":                                "No. of Unit in Inner",
     "tray total number":                       "Tray total number",
     "tray_total_number":                       "Tray total number",
+    "traytotalnumber":                         "Tray total number",
     "express picking type":                    "Express Picking Type",
     "express_picking_type":                    "Express Picking Type",
+    "minipicktype":                            "Express Picking Type",
     "hdet picking type":                       "HDET Picking Type",
     "hdet_picking_type":                       "HDET Picking Type",
+    "hyper&superpickingtype":                  "HDET Picking Type",
     "edlp price by format":                    "EDLP Price by Format",
     "edlp_price_by_format":                    "EDLP Price by Format",
     "edlp price":                              "EDLP Price by Format",
@@ -818,6 +828,7 @@ COLUMN_MAPPING = {
     "item_name":                               "Item Name",
     "product name":                            "Item Name",
     "product_name":                            "Item Name",
+    "productdescription":                      "Item Name",
     "description":                             "Item Name",
     "as is planograms applied":                "AS IS planograms applied",
     "asis planograms applied":                 "AS IS planograms applied",
@@ -1158,6 +1169,429 @@ def get_dg_options(path: str) -> tuple:
     return dg_col, sorted(seen_values)
 
 
+def scan_hdet_dg_cascade(path: str, col_candidates: dict) -> dict:
+    """Scan full HDET in chunks and build a cascade map keyed by DG value.
+
+    col_candidates keys: "dg", "fmt", "div", "cls"  — each maps to a list of
+    candidate column names tried in order.
+
+    Returns:
+        {
+          "dg_vals":  [...],   # all unique DG values
+          "fmt_vals": [...],   # all unique fmt values
+          "div_vals": [...],   # all unique div values
+          "cls_vals": [...],   # all unique cls values
+          "cascade":  {dg_val: {"fmt": [...], "div": [...], "cls": [...]}},
+        }
+    """
+    sep, encoding, header_row = _detect_large_file_params(path)
+
+    # Resolve actual column names from first chunk
+    first_chunk = next(iter(pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=1000, dtype=str, low_memory=False, on_bad_lines="skip",
+    )))
+    actual = {}
+    low_map = {str(c).strip().lower(): c for c in first_chunk.columns}
+    for key, candidates in col_candidates.items():
+        for cand in candidates:
+            if cand in first_chunk.columns:
+                actual[key] = cand
+                break
+            if cand.strip().lower() in low_map:
+                actual[key] = low_map[cand.strip().lower()]
+                break
+
+    dg_key = actual.get("dg")
+    if not dg_key:
+        return {"dg_vals": [], "fmt_vals": [], "div_vals": [], "cls_vals": [], "cascade": {}}
+
+    use_cols = list({v for v in actual.values() if v})
+    other_keys = [k for k in ("fmt", "div", "cls") if k in actual]
+
+    # {dg_val: {other_key: set of values}}
+    cascade: dict = {}
+    all_vals: dict = {k: set() for k in other_keys}
+    all_dg: set = set()
+
+    for chunk in pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=LARGE_FILE_CHUNK_SIZE,
+        usecols=use_cols,
+        dtype=str, low_memory=False, on_bad_lines="skip",
+    ):
+        chunk = chunk.fillna("").apply(lambda c: c.str.strip())
+        dg_series = chunk[dg_key]
+        mask = dg_series != ""
+        chunk = chunk[mask]
+        dg_series = chunk[dg_key]
+
+        all_dg.update(dg_series.unique())
+
+        for k in other_keys:
+            col = actual[k]
+            all_vals[k].update(chunk[col][chunk[col] != ""].unique())
+
+            # group by DG, collect unique values of this column
+            for dg_val, grp in chunk.groupby(dg_key, sort=False):
+                if dg_val not in cascade:
+                    cascade[dg_val] = {kk: set() for kk in other_keys}
+                cascade[dg_val][k].update(grp[col][grp[col] != ""].unique())
+
+    # Finalise dg_cascade with sorted lists
+    dg_cascade = {dg: {k: sorted(v) for k, v in sets.items()}
+                  for dg, sets in cascade.items()}
+
+    # Derive reverse: cls_val → {dg: [...], fmt: [...], div: [...]}
+    cls_cascade: dict = {}
+    for dg_val, related in dg_cascade.items():
+        for cls_val in related.get("cls", []):
+            if cls_val not in cls_cascade:
+                cls_cascade[cls_val] = {"dg": set(), "fmt": set(), "div": set()}
+            cls_cascade[cls_val]["dg"].add(dg_val)
+            cls_cascade[cls_val]["fmt"].update(related.get("fmt", []))
+            cls_cascade[cls_val]["div"].update(related.get("div", []))
+    cls_cascade = {cls: {k: sorted(v) for k, v in sets.items()}
+                   for cls, sets in cls_cascade.items()}
+
+    return {
+        "dg_vals":  sorted(all_dg),
+        "fmt_vals": sorted(all_vals.get("fmt", [])),
+        "div_vals": sorted(all_vals.get("div", [])),
+        "cls_vals": sorted(all_vals.get("cls", [])),
+        "cascade":     dg_cascade,   # dg  → {fmt, div, cls}
+        "cls_cascade": cls_cascade,  # cls → {dg,  fmt, div}
+    }
+
+
+def summarize_hdet_by_cluster(
+    path: str,
+    col_candidates: dict,
+    filter_cols: dict = None,
+) -> pd.DataFrame:
+    """Scan HDET in chunks, return cluster-level summary DataFrame.
+
+    col_candidates: {
+        "cls":   [...],   # ClusterName column candidates
+        "store": [...],   # store identifier column candidates (for StoreCount)
+        "pog":   [...],   # POG name column candidates (for Count of POGName)
+    }
+    filter_cols: same format as count_hdet_totals (optional).
+
+    Returns DataFrame: ClusterName | StoreCount | Count of POGName
+    with a Total row appended. Totals are COUNT(DISTINCT) across ALL rows,
+    not sum of per-cluster counts (stores/POGs can appear in multiple clusters).
+    Sorted by StoreCount descending.
+    """
+    sep, encoding, header_row = _detect_large_file_params(path)
+
+    first = next(iter(pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=1000, dtype=str, low_memory=False, on_bad_lines="skip",
+    )))
+    low_map = {str(c).strip().lower(): c for c in first.columns}
+
+    def _resolve(candidates):
+        for c in candidates:
+            if c in first.columns:
+                return c
+            if str(c).strip().lower() in low_map:
+                return low_map[str(c).strip().lower()]
+        return None
+
+    cls_col   = _resolve(col_candidates.get("cls",   []))
+    store_col = _resolve(col_candidates.get("store", []))
+    pog_col   = _resolve(col_candidates.get("pog",   []))
+    id_col    = _resolve(col_candidates.get("id",    []))
+
+    if not cls_col:
+        return pd.DataFrame({"ClusterName": [], "StoreCount": [],
+                             "Count of POGName": [], "ItemCount": []})
+
+    actual_filters = {}
+    if filter_cols:
+        for _key, (cands, vals) in filter_cols.items():
+            col = _resolve(cands)
+            if col and vals:
+                actual_filters[col] = set(str(v) for v in vals)
+
+    use_cols = list({cls_col}
+                    | ({store_col} if store_col else set())
+                    | ({pog_col}   if pog_col   else set())
+                    | ({id_col}    if id_col    else set())
+                    | set(actual_filters.keys()))
+
+    agg: dict = {}
+
+    for chunk in pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=LARGE_FILE_CHUNK_SIZE,
+        usecols=use_cols,
+        dtype=str, low_memory=False, on_bad_lines="skip",
+    ):
+        mask = pd.Series(True, index=chunk.index)
+        for col, vals in actual_filters.items():
+            if col in chunk.columns:
+                mask &= chunk[col].str.strip().isin(vals)
+        chunk = chunk[mask]
+        if chunk.empty:
+            continue
+
+        chunk[cls_col] = chunk[cls_col].fillna("").str.strip()
+
+        for cls_val, grp in chunk.groupby(cls_col, sort=False):
+            if not cls_val:
+                continue
+            if cls_val not in agg:
+                agg[cls_val] = {"store": set(), "pog": set(), "pog_pairs": set(), "id": set()}
+            if store_col and store_col in grp.columns:
+                _sv = grp[store_col].fillna("").str.strip()
+                agg[cls_val]["store"].update(_sv.unique())
+            if pog_col and pog_col in grp.columns:
+                _pv = grp[pog_col].fillna("").str.strip()
+                agg[cls_val]["pog"].update(_pv.unique())
+                if store_col and store_col in grp.columns:
+                    agg[cls_val]["pog_pairs"].update(zip(_sv, _pv))
+            if id_col and id_col in grp.columns:
+                agg[cls_val]["id"].update(grp[id_col].dropna().str.strip().unique())
+
+    if not agg:
+        return pd.DataFrame({"ClusterName": [], "StoreCount": [],
+                             "Count of POGName": [], "ItemCount": []})
+
+    _null = {"", "nan", "NaN", "none", "None", "NULL", "null", "N/A", "n/a"}
+
+    def _pog_count(v):
+        # Use (store, pog) pairs when available — matches Power BI COUNT(POGName)
+        if v["pog_pairs"]:
+            return sum(1 for s, p in v["pog_pairs"] if s not in _null and p not in _null)
+        return len(v["pog"] - _null)
+
+    rows = [
+        {
+            "ClusterName":      cls_val,
+            "StoreCount":       len(v["store"] - _null),
+            "Count of POGName": _pog_count(v),
+            "ItemCount":        len(v["id"]     - _null),
+        }
+        for cls_val, v in agg.items()
+    ]
+    df = (pd.DataFrame(rows)
+            .sort_values("StoreCount", ascending=False)
+            .reset_index(drop=True))
+
+    # Total = union across all clusters
+    _all_pairs = set().union(*(v["pog_pairs"] for v in agg.values()))
+    _all_store = set().union(*(v["store"]     for v in agg.values()))
+    _all_id    = set().union(*(v["id"]        for v in agg.values()))
+    _tot_pog   = (sum(1 for s, p in _all_pairs if s not in _null and p not in _null)
+                  if _all_pairs
+                  else len(set().union(*(v["pog"] for v in agg.values())) - _null))
+    total_row = pd.DataFrame([{
+        "ClusterName":      "Total",
+        "StoreCount":       len(_all_store - _null),
+        "Count of POGName": _tot_pog,
+        "ItemCount":        len(_all_id    - _null),
+    }])
+    return pd.concat([df, total_row], ignore_index=True)
+
+
+def scan_csv_store_counts(
+    path: str,
+    filter_cols: dict = None,
+) -> tuple:
+    """Scan small FP/POG CSV (store-level, <100 MB) for StoreCount per cluster.
+
+    Returns (cluster_dict, global_count):
+      cluster_dict  – {cluster_name: COUNT(DISTINCT store_no)}
+      global_count  – total COUNT(DISTINCT store_no) across all clusters after filter
+    """
+    sep, encoding, header_row = _detect_large_file_params(path)
+    first = next(iter(pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=1000, dtype=str, low_memory=False, on_bad_lines="skip",
+    )))
+    low_map = {str(c).strip().lower(): c for c in first.columns}
+
+    def _res(candidates):
+        for c in candidates:
+            if c in first.columns:
+                return c
+            if str(c).strip().lower() in low_map:
+                return low_map[str(c).strip().lower()]
+        return None
+
+    cls_col   = _res(["POG_Cluster", "ClusterName", "Cluster_Name",
+                       "cluster_name", "Cluster Name", "Store_Cluster"])
+    store_col = _res(["store_no", "StoreNo", "store_id", "Store_No",
+                       "store_number", "PG_Store_Number"])
+
+    if not cls_col or not store_col:
+        return {}, 0
+
+    actual_filters: dict = {}
+    if filter_cols:
+        for _key, (cands, vals) in filter_cols.items():
+            col = _res(cands)
+            if col and vals:
+                actual_filters[col] = set(str(v) for v in vals)
+
+    use_cols = list({cls_col, store_col} | set(actual_filters.keys()))
+
+    agg: dict = {}
+    global_stores: set = set()
+
+    for chunk in pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=LARGE_FILE_CHUNK_SIZE,
+        usecols=use_cols, dtype=str,
+        low_memory=False, on_bad_lines="skip",
+    ):
+        mask = pd.Series(True, index=chunk.index)
+        for col, vals in actual_filters.items():
+            if col in chunk.columns:
+                mask &= chunk[col].str.strip().isin(vals)
+        chunk = chunk[mask]
+        if chunk.empty:
+            continue
+
+        chunk[cls_col] = chunk[cls_col].fillna("").str.strip()
+        global_stores.update(chunk[store_col].dropna().str.strip().unique())
+
+        for cls_val, grp in chunk.groupby(cls_col, sort=False):
+            if not cls_val:
+                continue
+            if cls_val not in agg:
+                agg[cls_val] = set()
+            agg[cls_val].update(grp[store_col].dropna().str.strip().unique())
+
+    return (
+        {k: len(v - {""}) for k, v in agg.items()},
+        len(global_stores - {""}),
+    )
+
+
+def count_hdet_totals(
+    path: str,
+    count_cols: dict,
+    filter_cols: dict,
+) -> dict:
+    """Chunked HDET scan: apply filters, return COUNT(DISTINCT) for named columns.
+
+    count_cols  : {key: [candidate_col_names, ...]}
+                  e.g. {"id": ["ID","Barcode"], "name": ["FP_Name","FP Name"]}
+    filter_cols : {key: ([candidate_col_names], [filter_values])}
+                  e.g. {"dg": (["DG","DG_CODE","Display Group"], ["K3K"])}
+
+    Returns: {key: int}  — 0 when column not found in file.
+    """
+    sep, encoding, header_row = _detect_large_file_params(path)
+
+    first = next(iter(pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=1000, dtype=str, low_memory=False, on_bad_lines="skip",
+    )))
+    low_map = {str(c).strip().lower(): c for c in first.columns}
+
+    def _resolve(candidates):
+        for c in candidates:
+            if c in first.columns:
+                return c
+            if str(c).strip().lower() in low_map:
+                return low_map[str(c).strip().lower()]
+        return None
+
+    # Resolve count columns
+    actual_count = {k: _resolve(v) for k, v in count_cols.items()}
+    actual_count = {k: v for k, v in actual_count.items() if v}
+
+    # Resolve filter columns → {actual_col: set_of_values}
+    actual_filters = {}
+    for _key, (cands, vals) in filter_cols.items():
+        col = _resolve(cands)
+        if col and vals:
+            actual_filters[col] = set(str(v) for v in vals)
+
+    if not actual_count:
+        return {k: 0 for k in count_cols}
+
+    use_cols = list(set(actual_count.values()) | set(actual_filters.keys()))
+    seen = {k: set() for k in actual_count}
+
+    for chunk in pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=LARGE_FILE_CHUNK_SIZE,
+        usecols=use_cols,
+        dtype=str, low_memory=False, on_bad_lines="skip",
+    ):
+        mask = pd.Series(True, index=chunk.index)
+        for col, vals in actual_filters.items():
+            if col in chunk.columns:
+                mask &= chunk[col].str.strip().isin(vals)
+        chunk = chunk[mask]
+        for k, col in actual_count.items():
+            if col in chunk.columns:
+                seen[k].update(chunk[col].dropna().str.strip().unique())
+
+    return {k: len(v - {""}) for k, v in seen.items()}
+
+
+def scan_hdet_unique_vals(path: str, col_candidates: dict) -> dict:
+    """Scan the full large file in chunks and return unique values for multiple columns.
+
+    col_candidates: {key: [list of candidate column names in priority order]}
+    Returns: {key: sorted list of unique string values}
+
+    Reads only the matched columns (usecols) so memory stays low even on large files.
+    """
+    sep, encoding, header_row = _detect_large_file_params(path)
+
+    # First chunk: discover which actual column names match each key
+    first_chunk = next(iter(pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=1000, dtype=str, low_memory=False, on_bad_lines="skip",
+    )))
+    actual_cols = {}  # key → actual column name found
+    for key, candidates in col_candidates.items():
+        for cand in candidates:
+            if cand in first_chunk.columns:
+                actual_cols[key] = cand
+                break
+            # case-insensitive fallback
+            low_map = {str(c).strip().lower(): c for c in first_chunk.columns}
+            if cand.strip().lower() in low_map:
+                actual_cols[key] = low_map[cand.strip().lower()]
+                break
+
+    if not actual_cols:
+        return {k: [] for k in col_candidates}
+
+    use_cols = list(set(actual_cols.values()))
+    seen = {key: set() for key in actual_cols}
+
+    for chunk in pd.read_csv(
+        path, sep=sep, encoding=encoding,
+        skiprows=header_row, header=0,
+        chunksize=LARGE_FILE_CHUNK_SIZE,
+        usecols=use_cols,
+        dtype=str, low_memory=False, on_bad_lines="skip",
+    ):
+        for key, col in actual_cols.items():
+            if col in chunk.columns:
+                seen[key].update(chunk[col].dropna().astype(str).str.strip().unique())
+
+    return {key: sorted(v - {""}) for key, v in seen.items()}
+
+
 def load_large_file_by_dg(path: str, dg_value: str, use_cache: bool = True) -> pd.DataFrame:
     """
     Filter a large file (e.g. HDET) down to rows matching a single
@@ -1210,7 +1644,7 @@ def load_large_file_by_dg(path: str, dg_value: str, use_cache: bool = True) -> p
 
 
 def auto_merge(files_info: list) -> tuple:
-    dfs = [(f["name"], f["df"]) for f in files_info if f.get("df") is not None]
+    dfs = [(f.get("name", ""), f["df"]) for f in files_info if f.get("df") is not None]
     if not dfs:
         return None, []
     if len(dfs) == 1:
@@ -1399,7 +1833,7 @@ def load_admin_file_df(name: str):
         return hit["entry"].get("df")
     df = _read_file_from_path(_path)
     if df is not None:
-        cache[name] = {"mtime": _mtime, "entry": {"df": df}}
+        cache[name] = {"mtime": _mtime, "entry": {"name": name, "df": df}}
     return df
 
 def get_admin_file_entries() -> list:

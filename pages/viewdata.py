@@ -13,7 +13,7 @@ from utils.shared import (
     get_fill, df_to_xlsx_bytes, df_to_csv_bytes, add_audit,
     get_shared_db,
     load_large_file_by_dg, read_large_file_head, load_admin_file_df,
-    is_large_file, BASE_DIR, load_admin_manifest,
+    is_large_file, BASE_DIR, load_admin_manifest, scan_hdet_dg_cascade,
 )
 
 inject_css()
@@ -613,6 +613,49 @@ def _render_sheet_content(df_src, p):
         m1.metric("Total SKUs",f"{len(df_view):,}"); m2.metric("MAINTAIN",f"{_m_maintain:,}")
         m3.metric("SSPOG",f"{_m_sspog:,}"); m4.metric("Non-SSPOG",f"{_m_nonsspog:,}"); m5.metric("Null Values",f"{_m_null:,}")
 
+        # ── Cluster summary demo (always visible, left panel) ─────────────────
+        _demo_rows_cl = [
+            ("N_G2_A", 161, 161), ("H_G2_A", 24, 24), ("N_G1_A", 20, 20),
+            ("H_G1_5012", 1, 1), ("H_G1_5184", 1, 1), ("H_G1_5189", 1, 1),
+            ("H_G2_5029", 1, 1), ("H_G2_5086", 1, 1), ("H_G2_5088", 1, 1),
+            ("H_G2_5090", 1, 1), ("H_G2_5102", 1, 1), ("H_G2_5145", 1, 1),
+            ("H_G2_5162", 1, 1), ("H_G2_5170", 1, 1), ("H_G2_5177", 1, 1),
+            ("H_G2_5187", 1, 1), ("H_G2_5188", 1, 1), ("H_G2_6401", 1, 1),
+            ("H_G1_5018", 1, 1), ("N_G1_5022", 1, 1), ("N_G1_5028", 1, 1),
+            ("N_G1_5032", 1, 1), ("N_G1_5055", 1, 1), ("N_G1_5112", 1, 1),
+            ("N_G1_5185", 1, 1), ("N_G2_5039", 1, 1),
+        ]
+        _tot_s_cl = sum(r[1] for r in _demo_rows_cl)
+        _tot_p_cl = sum(r[2] for r in _demo_rows_cl)
+        _sh_cl = [
+            '<div style="overflow-y:auto;max-height:480px;border-radius:10px;border:1px solid #E0D9D2;margin-top:12px;">',
+            '<table style="border-collapse:collapse;font-size:12px;width:100%;">',
+            '<thead><tr style="background:#1C1C1E;">',
+            '<th style="padding:8px 10px;text-align:left;color:rgba(255,255,255,.85);font-size:10px;font-weight:700;white-space:nowrap;">ClusterName</th>',
+            '<th style="padding:8px 10px;text-align:center;color:rgba(255,255,255,.85);font-size:10px;font-weight:700;white-space:nowrap;">StoreCount</th>',
+            '<th style="padding:8px 10px;text-align:center;color:rgba(255,255,255,.85);font-size:10px;font-weight:700;white-space:nowrap;">Count of POGName</th>',
+            '</tr></thead><tbody>',
+        ]
+        for _di_cl, (_dn_cl, _ds_cl, _dp_cl) in enumerate(_demo_rows_cl):
+            _rb_cl = "#FFFFFF" if _di_cl % 2 == 0 else "#F8F4F0"
+            _sh_cl.append(
+                f'<tr style="background:{_rb_cl};">'
+                f'<td style="padding:7px 10px;border-bottom:1px solid #E8E3DC;font-weight:500;">{_dn_cl}</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid #E8E3DC;text-align:center;">{_ds_cl:,}</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid #E8E3DC;text-align:center;">{_dp_cl:,}</td>'
+                f'</tr>'
+            )
+        _sh_cl.append(
+            f'<tr style="background:#F5F0EA;font-weight:700;">'
+            f'<td style="padding:8px 10px;border-top:2px solid #C8B9A2;">Total</td>'
+            f'<td style="padding:8px 10px;border-top:2px solid #C8B9A2;text-align:center;">{_tot_s_cl:,}</td>'
+            f'<td style="padding:8px 10px;border-top:2px solid #C8B9A2;text-align:center;">{_tot_p_cl:,}</td>'
+            f'</tr></tbody></table></div>'
+        )
+        _cl_demo_col, _ = st.columns([1, 2.5])
+        with _cl_demo_col:
+            st.markdown(''.join(_sh_cl), unsafe_allow_html=True)
+
         # ── Table ─────────────────────────────────────────────────────────────
         if _subview == "📋 Table":
             _MAX = int(_n_rows)
@@ -639,11 +682,113 @@ def _render_sheet_content(df_src, p):
                      if _t_col_map.get(sc) else pd.Series([""] * _n))
                 for sc in _std_all
             })
-            st.dataframe(_tdf, use_container_width=True, height=560, hide_index=True)
+            # ── Append POG columns from A5 to the same table ─────────────────
+            _twf_a5 = st.session_state.get(f"_wf_ext_a5_{p}")
+            _twf_pog_col = None
+            _twf_dg_col  = None
+            _twf_dgn_col = None
+            _twf_pog_names = []
+            if _twf_a5 is not None and not _twf_a5.empty:
+                for _wc2 in _twf_a5.columns:
+                    _wn2 = _nca(_wc2)
+                    if _twf_pog_col is None and _wn2 in (
+                        "pogname", "pog", "planogramname",
+                        "clusterprogramname", "clusterplanogramname", "pognames",
+                    ):
+                        _twf_pog_col = _wc2
+                    elif _twf_dg_col is None and _wn2 in ("dg", "dgcode", "displaygroup", "dg_code"):
+                        _twf_dg_col = _wc2
+                    elif _twf_dgn_col is None and _wn2 in (
+                        "dgdes", "dgname", "dgdesc", "dgdescription",
+                        "displaygroupname", "dg_des",
+                    ):
+                        _twf_dgn_col = _wc2
+                if _twf_pog_col:
+                    _a5f3 = _twf_a5.copy()
+                    if _sel_dg_code and _twf_dg_col:
+                        _a5f3 = _a5f3[
+                            _a5f3[_twf_dg_col].astype(str).str.contains(
+                                _sel_dg_code, case=False, na=False)
+                        ]
+                    if _sel_dg_name != "ALL" and _twf_dgn_col:
+                        _a5f3 = _a5f3[
+                            _a5f3[_twf_dgn_col].astype(str).str.strip() == _sel_dg_name
+                        ]
+                    _twf_pog_names = (
+                        _a5f3[_twf_pog_col].dropna().astype(str).str.strip()
+                        .replace("", pd.NA).dropna().unique().tolist()
+                    )
+
+            # Session state for editable Status + POG columns
+            _twf_key = f"{p}_tbl_wf_data"
+            _twf_sig_key = f"{p}_tbl_wf_sig"
+            _twf_sig = (_n, tuple(_twf_pog_names))
+            if _twf_key not in st.session_state or st.session_state.get(_twf_sig_key) != _twf_sig:
+                _twf_init = {"Status": ["MAINTAIN"] * _n}
+                for _pc3 in _twf_pog_names:
+                    _twf_init[_pc3] = [None] * _n
+                _new_twf = pd.DataFrame(_twf_init)
+                _new_twf.insert(1, "Check Range To-be Waterfall", 0)
+                _old_twf = st.session_state.get(_twf_key)
+                if _old_twf is not None and len(_old_twf) == _n and "Status" in _old_twf.columns:
+                    _new_twf["Status"] = _old_twf["Status"].values
+                    for _pc3 in _twf_pog_names:
+                        if _pc3 in _old_twf.columns:
+                            _new_twf[_pc3] = _old_twf[_pc3].values
+                st.session_state[_twf_key] = _new_twf
+                st.session_state[_twf_sig_key] = _twf_sig
+
+            # Build combined df: RS columns (left, read-only) + Status + POG (right, editable)
+            _wf_state = st.session_state[_twf_key].reset_index(drop=True)
+            # Drop columns from _tdf that collide with waterfall (Status, Check Range)
+            _tdf_clean = _tdf.drop(
+                columns=[c for c in ("Status", "Check Range To-be Waterfall") if c in _tdf.columns],
+                errors="ignore",
+            ).reset_index(drop=True)
+            _combined = pd.concat([_tdf_clean, _wf_state], axis=1)
+
+            # Column config: RS columns read-only; Status = dropdown; POG = number
+            _rs_only_cols = [c for c in _tdf_clean.columns]
+            _ccfg = {}
+            for _sc2 in _rs_only_cols:
+                _ccfg[_sc2] = st.column_config.TextColumn(_sc2, disabled=True)
+            _ccfg["Status"] = st.column_config.SelectboxColumn(
+                "Status",
+                options=["MAINTAIN", "NEW SOME", "NEW ALL", "DELETE SOME", "DELETE ALL"],
+                width="medium",
+            )
+            _ccfg["Check Range To-be Waterfall"] = st.column_config.NumberColumn(
+                "Check Range To-be Waterfall", width="small", disabled=True,
+            )
+            for _pc3 in _twf_pog_names:
+                _ccfg[_pc3] = st.column_config.NumberColumn(_pc3, width="small", format="%.1f")
+
+            _combined_edited = st.data_editor(
+                _combined,
+                num_rows="fixed",
+                use_container_width=True,
+                height=560,
+                hide_index=True,
+                column_config=_ccfg,
+                key=f"{p}_combined_editor",
+            )
+
+            # Persist editable columns back to session state
+            _save_wf = {"Status": _combined_edited.get("Status", pd.Series(["MAINTAIN"] * _n)).values}
+            for _pc3 in _twf_pog_names:
+                _save_wf[_pc3] = _combined_edited.get(_pc3, pd.Series([None] * _n)).values
+            _save_df = pd.DataFrame(_save_wf)
+            _save_df.insert(
+                1, "Check Range To-be Waterfall",
+                _save_df[_twf_pog_names].notna().sum(axis=1).astype(int)
+                if _twf_pog_names else 0,
+            )
+            st.session_state[_twf_key] = _save_df
+
             if len(df_view) > _MAX:
                 st.caption(f"Showing {_MAX:,} of {len(df_view):,} rows — increase Rows to see more")
             else:
-                st.caption(f"{len(df_view):,} rows · {len(_std_all)} columns")
+                st.caption(f"{len(df_view):,} rows · {len(_tdf_clean.columns) + 2 + len(_twf_pog_names)} columns")
 
         # ── Cluster ───────────────────────────────────────────────────────────
         elif _subview == "🏪 Cluster":
@@ -737,35 +882,97 @@ def _render_sheet_content(df_src, p):
         elif _subview == "📊 Status":
             if _stc:
                 _wf_key = f"{p}_wf_data"
-                # Filter out blank/nan status rows
                 _st_mask = ~df_view[_stc].astype(str).str.strip().isin(["nan", ""])
                 _fdf = df_view[_st_mask].reset_index(drop=True)
                 _st_vals = _fdf[_stc].astype(str).str.strip().reset_index(drop=True)
 
-                # Signature = columns + shape; changes whenever a new file is loaded
-                _df_sig = (tuple(_fdf.columns.tolist()), len(_fdf))
-                _prev_sig = st.session_state.get(f"{p}_wf_sig")
+                # ── POG columns from A5 (passed via session state by caller) ──
+                _ext_a5 = st.session_state.get(f"_wf_ext_a5_{p}")
+                _a5_pog_col = None
+                _a5_dg_col  = None
+                _a5_dgn_col = None
+                if _ext_a5 is not None and not _ext_a5.empty:
+                    for _wc in _ext_a5.columns:
+                        _wn = _nca(_wc)
+                        if _a5_pog_col is None and _wn in (
+                            "pogname", "pog", "planogramname",
+                            "clusterprogramname", "clusterplanogramname", "pognames",
+                        ):
+                            _a5_pog_col = _wc
+                        elif _a5_dg_col is None and _wn in ("dg", "dgcode", "displaygroup", "dg_code"):
+                            _a5_dg_col = _wc
+                        elif _a5_dgn_col is None and _wn in (
+                            "dgdes", "dgname", "dgdesc", "dgdescription",
+                            "displaygroupname", "dg_des",
+                        ):
+                            _a5_dgn_col = _wc
 
-                # Find matching "Check Range To-be Waterfall" column (flexible match)
+                # DG filter inputs — only shown when A5 is available
+                _pog_cols = []
+                if _ext_a5 is not None and not _ext_a5.empty:
+                    _pfc1, _pfc2, _ = st.columns([1.5, 2.2, 4.3])
+                    with _pfc1:
+                        _wf_dg_code_q = st.text_input(
+                            "Filter POG by DG Code", key=f"{p}_wf_dg_code",
+                            placeholder="e.g. 101",
+                        )
+                    with _pfc2:
+                        _wf_dg_name_q = st.text_input(
+                            "Filter POG by DG Name", key=f"{p}_wf_dg_name",
+                            placeholder="e.g. HISENSE",
+                        )
+                    if _a5_pog_col:
+                        _a5f = _ext_a5.copy()
+                        if _wf_dg_code_q.strip() and _a5_dg_col:
+                            _a5f = _a5f[
+                                _a5f[_a5_dg_col].astype(str).str.strip() == _wf_dg_code_q.strip()
+                            ]
+                        if _wf_dg_name_q.strip():
+                            _dgn_search_col = _a5_dgn_col or _a5_pog_col
+                            _a5f = _a5f[
+                                _a5f[_dgn_search_col].astype(str).str.contains(
+                                    _wf_dg_name_q.strip(), case=False, na=False
+                                )
+                            ]
+                        _pog_cols = (
+                            _a5f[_a5_pog_col].dropna().astype(str).str.strip()
+                            .replace("", pd.NA).dropna().unique().tolist()
+                        )
+                    elif _ext_a5 is not None:
+                        st.caption(
+                            f"No POGName column found in A5. "
+                            f"A5 columns: {', '.join(_ext_a5.columns[:6].tolist())}"
+                        )
+
+                # Signature includes POG list so table rebuilds when DG filter changes
                 _target_norm = _nca("Check Range To-be Waterfall")
                 _cr_col = next(
-                    (c for c in _fdf.columns if _nca(c) == _target_norm),
-                    None
+                    (c for c in _fdf.columns if _nca(c) == _target_norm), None
                 )
+                _df_sig = (tuple(_fdf.columns.tolist()), len(_fdf), tuple(_pog_cols))
+                _prev_sig = st.session_state.get(f"{p}_wf_sig")
 
-                # Re-build table whenever the file changes
                 if _wf_key not in st.session_state or _prev_sig != _df_sig:
                     _cr_vals = _fdf[_cr_col].tolist() if _cr_col else [None] * len(_fdf)
-                    st.session_state[_wf_key] = pd.DataFrame({
+                    _wf_init = {
                         "Status": _st_vals.tolist(),
                         "Check Range To-be Waterfall": _cr_vals,
-                    })
+                    }
+                    for _pc in _pog_cols:
+                        _wf_init[_pc] = [None] * len(_fdf)
+                    _new_wf = pd.DataFrame(_wf_init)
+                    # Preserve Status + existing POG values when only filter changed
+                    _old_wf = st.session_state.get(_wf_key)
+                    if _old_wf is not None and len(_old_wf) == len(_fdf) and "Status" in _old_wf.columns:
+                        _new_wf["Status"] = _old_wf["Status"].values
+                        for _pc in _pog_cols:
+                            if _pc in _old_wf.columns:
+                                _new_wf[_pc] = _old_wf[_pc].values
+                    st.session_state[_wf_key] = _new_wf
                     st.session_state[f"{p}_wf_sig"] = _df_sig
 
                 # ── Excel-like HTML display ───────────────────────────────────
                 _wf_df = st.session_state[_wf_key]
-                if _cr_col:
-                    st.caption(f"Auto-filled from column: **{_cr_col}**")
                 _EXCEL_COLORS = {
                     "MAINTAIN":        {"bg": "#D9D9D9", "c": "#000000"},
                     "NEW SOME":        {"bg": "#00B050", "c": "#FFFFFF"},
@@ -783,10 +990,17 @@ def _render_sheet_content(df_src, p):
                     '<th style="padding:10px 24px;border:1px solid #BFBFBF;text-align:center;'
                     'font-weight:700;font-size:12px;color:#000;min-width:160px;">Status</th>',
                     '<th style="padding:10px 24px;border:1px solid #BFBFBF;text-align:center;'
-                    'font-weight:700;font-size:12px;color:#000;min-width:200px;line-height:1.5;">'
+                    'font-weight:700;font-size:12px;color:#000;min-width:140px;line-height:1.5;">'
                     'Check Range To-be<br>Waterfall</th>',
-                    '</tr></thead><tbody>',
                 ]
+                for _pc in _pog_cols:
+                    _sh.append(
+                        f'<th style="padding:4px 6px;border:2px solid #C00000;text-align:center;'
+                        f'font-weight:600;font-size:11px;color:#C00000;width:52px;min-width:52px;">'
+                        f'<div style="writing-mode:vertical-rl;transform:rotate(180deg);'
+                        f'white-space:nowrap;max-height:150px;overflow:hidden;">{_pc}</div></th>'
+                    )
+                _sh.append('</tr></thead><tbody>')
                 for _i, _row in _wf_df.iterrows():
                     _sv = str(_row["Status"])
                     _ec = _EXCEL_COLORS.get(_sv, {"bg": "#D9D9D9", "c": "#000000"})
@@ -798,8 +1012,18 @@ def _render_sheet_content(df_src, p):
                         f'background:{_ec["bg"]};color:{_ec["c"]};font-weight:700;font-size:12px;">{_sv}</td>'
                         f'<td style="padding:7px 24px;border:1px solid #D0D0D0;text-align:center;'
                         f'background:#FFFFFF;font-size:12px;color:#333;">{_val_str}</td>'
-                        f'</tr>'
                     )
+                    for _pc in _pog_cols:
+                        _pv = _row.get(_pc)
+                        _pv_str = (
+                            "" if (_pv is None or str(_pv) in ("nan", "None", ""))
+                            else f"{float(_pv):.1f}"
+                        )
+                        _sh.append(
+                            f'<td style="padding:7px 12px;border:1px solid #D0D0D0;text-align:center;'
+                            f'background:#FFFFFF;font-size:12px;color:#333;">{_pv_str}</td>'
+                        )
+                    _sh.append('</tr>')
                 _sh.append('</tbody></table></div>')
                 st.markdown(''.join(_sh), unsafe_allow_html=True)
 
@@ -808,27 +1032,45 @@ def _render_sheet_content(df_src, p):
                 _we1, _we2, _ = st.columns([1.2, 1.2, 5])
                 with _we1:
                     if st.button("✏️ Edit Table", key=f"{p}_wf_edit_btn", use_container_width=True):
-                        st.session_state[f"{p}_wf_show_editor"] = not st.session_state.get(f"{p}_wf_show_editor", False)
+                        st.session_state[f"{p}_wf_show_editor"] = not st.session_state.get(
+                            f"{p}_wf_show_editor", False)
                         st.rerun()
                 with _we2:
                     if st.button("↺ Sync from Data", key=f"{p}_wf_refresh", use_container_width=True):
                         for _k in [_wf_key, f"{p}_wf_sig"]:
-                            if _k in st.session_state: del st.session_state[_k]
+                            if _k in st.session_state:
+                                del st.session_state[_k]
                         st.rerun()
 
                 if st.session_state.get(f"{p}_wf_show_editor", False):
+                    _wf_ed_cfg = {
+                        "Status": st.column_config.SelectboxColumn(
+                            "Status",
+                            options=["MAINTAIN", "NEW SOME", "NEW ALL", "DELETE SOME", "DELETE ALL"],
+                            width="medium",
+                        ),
+                        "Check Range To-be Waterfall": st.column_config.NumberColumn(
+                            "Check Range To-be Waterfall", width="medium",
+                        ),
+                    }
+                    for _pc in _pog_cols:
+                        _wf_ed_cfg[_pc] = st.column_config.NumberColumn(
+                            _pc, width="small", format="%.1f"
+                        )
                     _edited = st.data_editor(
                         st.session_state[_wf_key],
                         num_rows="dynamic",
                         use_container_width=True,
                         hide_index=True,
-                        column_config={
-                            "Status": st.column_config.TextColumn("Status", width="medium"),
-                            "Check Range To-be Waterfall": st.column_config.NumberColumn(
-                                "Check Range To-be Waterfall", width="large"),
-                        },
+                        column_config=_wf_ed_cfg,
                         key=f"{p}_wf_editor",
+                        height=460,
                     )
+                    # Recompute Check Range To-be Waterfall = count of non-null POG cells
+                    if _pog_cols:
+                        _edited["Check Range To-be Waterfall"] = (
+                            _edited[_pog_cols].notna().sum(axis=1).astype(int)
+                        )
                     st.session_state[_wf_key] = _edited
             else:
                 st.warning("Status column not found in the data.")
@@ -887,6 +1129,118 @@ _sspog_df = (
     ] if _pog_col_main else merged
 )
 
+# Load A5 once before any tab renders so all prefixes (ss, sa, ns) can use it
+_global_a5_name = None
+for _g5meta in load_admin_manifest():
+    _g5p = os.path.join(BASE_DIR, "uploads", _g5meta["name"])
+    if "a5" in _g5meta["name"].lower() and os.path.exists(_g5p) and not is_large_file(_g5p):
+        _global_a5_name = _g5meta["name"]
+        break
+_global_a5_df = load_admin_file_df(_global_a5_name) if _global_a5_name else None
+for _pfx in ("ss", "sa"):
+    st.session_state[f"_wf_ext_a5_{_pfx}"] = _global_a5_df
+
+# ── HDET cascade filters — DG ↔ ClusterName bidirectional ────────────────────
+_HDET_CASCADE_KEY = "hdet_cascade_v2"
+
+_hdet_filt_path = None
+for _hfm in load_admin_manifest():
+    _hfp = os.path.join(BASE_DIR, "uploads", _hfm["name"])
+    if "hdet" in _hfm["name"].lower() and os.path.exists(_hfp) and is_large_file(_hfp):
+        _hdet_filt_path = _hfp
+        break
+
+if _hdet_filt_path and _HDET_CASCADE_KEY not in st.session_state:
+    with st.spinner("Scanning HDET — building filter index…"):
+        st.session_state[_HDET_CASCADE_KEY] = scan_hdet_dg_cascade(
+            _hdet_filt_path,
+            {
+                "dg":  ["Display Group", "Display_Group", "DisplayGroup"],
+                "fmt": ["store_Format", "Store Format", "StoreFormat", "Format"],
+                "div": ["Div Code&Desc", "Div Code & Desc", "DivCode&Desc"],
+                "cls": ["ClusterName", "Cluster_Name", "Cluster Name"],
+            },
+        )
+
+_hf_cas     = st.session_state.get(_HDET_CASCADE_KEY, {})
+_dg_cascade = _hf_cas.get("cascade", {})       # dg  → {fmt, div, cls}
+_cls_cascade = _hf_cas.get("cls_cascade", {})  # cls → {dg,  fmt, div}
+
+# Read previous selections BEFORE rendering widgets (Streamlit sets session
+# state for the changed widget before the rerun, so these reflect user intent)
+_prev_dg  = st.session_state.get("vw_hf_dg",  "All DGs")
+_prev_cls = st.session_state.get("vw_hf_cls", "All clusters")
+_dg_active  = _prev_dg  != "All DGs"
+_cls_active = _prev_cls != "All clusters"
+
+# ── Compute available options given current selections ────────────────────────
+if _dg_active and not _cls_active:
+    # DG chosen → filter ClusterName; DIV/FORMAT from DG
+    _rel = _dg_cascade.get(_prev_dg, {})
+    _dg_opts  = _hf_cas.get("dg_vals", [])          # DG shows all
+    _cls_opts = _rel.get("cls", [])
+    _fmt_opts = _rel.get("fmt", [])
+    _div_opts = _rel.get("div", [])
+
+elif _cls_active and not _dg_active:
+    # ClusterName chosen → filter DG; DIV/FORMAT from ClusterName
+    _rel = _cls_cascade.get(_prev_cls, {})
+    _dg_opts  = _rel.get("dg", [])
+    _cls_opts = _hf_cas.get("cls_vals", [])          # ClusterName shows all
+    _fmt_opts = _rel.get("fmt", [])
+    _div_opts = _rel.get("div", [])
+
+elif _dg_active and _cls_active:
+    # Both chosen → intersect: only keep cls options that also exist for this DG
+    _rel_dg  = _dg_cascade.get(_prev_dg,  {})
+    _rel_cls = _cls_cascade.get(_prev_cls, {})
+    _dg_opts  = _rel_cls.get("dg",  _hf_cas.get("dg_vals",  []))
+    _cls_opts = _rel_dg.get("cls",  _hf_cas.get("cls_vals", []))
+    _fmt_opts = sorted(set(_rel_dg.get("fmt", [])) & set(_rel_cls.get("fmt", [])))
+    _div_opts = sorted(set(_rel_dg.get("div", [])) & set(_rel_cls.get("div", [])))
+
+else:
+    # Nothing chosen → show everything
+    _dg_opts  = _hf_cas.get("dg_vals",  [])
+    _cls_opts = _hf_cas.get("cls_vals", [])
+    _fmt_opts = _hf_cas.get("fmt_vals", [])
+    _div_opts = _hf_cas.get("div_vals", [])
+
+# ── Render widgets ────────────────────────────────────────────────────────────
+_hf_r1a, _hf_r1b, _hf_r1c = st.columns([1.5, 1.5, 0.35])
+with _hf_r1a:
+    _sel_hf_dg = st.selectbox(
+        "DG", ["All DGs"] + _dg_opts, key="vw_hf_dg",
+    )
+with _hf_r1b:
+    _sel_hf_cls = st.selectbox(
+        "CLUSTERNAME", ["All clusters"] + _cls_opts, key="vw_hf_cls",
+    )
+with _hf_r1c:
+    st.markdown("<div style='height:27px;'></div>", unsafe_allow_html=True)
+    if st.button("↺", key="vw_hf_rescan", use_container_width=True,
+                 help="Re-scan HDET"):
+        st.session_state.pop(_HDET_CASCADE_KEY, None)
+        st.rerun()
+
+_hf_r2a, _hf_r2b = st.columns([1.5, 1.5])
+with _hf_r2a:
+    _sel_hf_fmt = st.selectbox(
+        "STORE FORMAT", ["All formats"] + _fmt_opts, key="vw_hf_fmt",
+    )
+with _hf_r2b:
+    _sel_hf_div = st.selectbox(
+        "DIV CODE&DESC", ["All divisions"] + _div_opts, key="vw_hf_div",
+    )
+
+if not _hdet_filt_path:
+    st.caption("⚠️ No HDET file found — pin an HDET file via My Files.")
+
+st.session_state["vw_hdet_sel_dg"]  = _sel_hf_dg
+st.session_state["vw_hdet_sel_cls"] = _sel_hf_cls
+st.session_state["vw_hdet_sel_fmt"] = _sel_hf_fmt
+st.session_state["vw_hdet_sel_div"] = _sel_hf_div
+
 # ── Sheet tabs (scrollable via st.tabs) ───────────────────────────────────────
 _sheet_tabs = st.tabs(RS_SHEETS)
 
@@ -931,6 +1285,10 @@ with _sheet_tabs[3]:   # 5.1 ItembyStore
         from the main rangesheet data (merged). Leave null if both are missing."""
         _hmap = {col: next((c for c in hdet_df.columns if _nca(c) == _nca(col)), None)
                  for col in _IB_COLS}
+        # ProductDescription in 5.1 maps from HDET's ItemName column
+        if _hmap.get("ProductDescription") is None:
+            _hmap["ProductDescription"] = next(
+                (c for c in hdet_df.columns if _nca(c) == "itemname"), None)
         _mmap = {col: next((c for c in merged.columns if _nca(c) == _nca(col)), None)
                  for col in _IB_COLS}
         _hn = len(hdet_df)
@@ -1059,12 +1417,97 @@ with _sheet_tabs[4]:   # 5.2 ItembyStore_SC
         "avg per wk":      st.column_config.NumberColumn("avg per wk",    width="small",  format="%.2f"),
         "Coperate Status": st.column_config.TextColumn("Coperate Status", width="medium"),
     }
-    if "ibs_sc_data" not in st.session_state or st.session_state.get("_ibs_db_sig") != _db_sig:
-        st.session_state.ibs_sc_data = _fill_from_db(_IBS_COLS, merged)
-        st.session_state["_ibs_db_sig"] = _db_sig
+
+    _IBS52_SS_KEY = "ibs_52_hdet_v1"
+
+    # ── Find HDET (large) and A5 (normal) pinned files ────────────────────────
+    _ibs_hdet_path = None
+    _ibs_a5_name   = None
+    for _ibsmeta in load_admin_manifest():
+        _ibsp = os.path.join(BASE_DIR, "uploads", _ibsmeta["name"])
+        if not os.path.exists(_ibsp):
+            continue
+        if "hdet" in _ibsmeta["name"].lower() and is_large_file(_ibsp):
+            _ibs_hdet_path = _ibsp
+        elif "a5" in _ibsmeta["name"].lower() and not is_large_file(_ibsp):
+            _ibs_a5_name = _ibsmeta["name"]
+
+    def _ibs52_load_preview(path: str, want: int = 500, scan: int = 10_000) -> pd.DataFrame:
+        _raw = read_large_file_head(path, n_rows=scan)
+        _id_col = next((c for c in _raw.columns if _nca(c) == "id"), None)
+        if _id_col:
+            _filt = _raw[_raw[_id_col].notna() & (_raw[_id_col].astype(str).str.strip() != "")].reset_index(drop=True)
+            return _filt.head(want) if len(_filt) >= want else _filt
+        return _raw.head(want)
+
+    def _build_ibs52(hdet_df: pd.DataFrame, a5_df) -> pd.DataFrame:
+        """Fill _IBS_COLS: HDET first, A5 second, merged third, null if none."""
+        _hmap = {col: next((c for c in hdet_df.columns if _nca(c) == _nca(col)), None)
+                 for col in _IBS_COLS}
+        if _hmap.get("Item Name") is None:
+            _hmap["Item Name"] = next((c for c in hdet_df.columns if _nca(c) == "itemname"), None)
+
+        _a5map = {}
+        if a5_df is not None and not a5_df.empty:
+            _a5map = {col: next((c for c in a5_df.columns if _nca(c) == _nca(col)), None)
+                      for col in _IBS_COLS}
+            if _a5map.get("Item Name") is None:
+                _a5map["Item Name"] = next((c for c in a5_df.columns if _nca(c) == "itemname"), None)
+
+        _mmap = {col: next((c for c in merged.columns if _nca(c) == _nca(col)), None)
+                 for col in _IBS_COLS}
+        _hn = len(hdet_df)
+        _out = {}
+        for col in _IBS_COLS:
+            if _hmap[col] is not None:
+                _out[col] = hdet_df[_hmap[col]].reset_index(drop=True)
+            elif _a5map.get(col) is not None and a5_df is not None:
+                _av = a5_df[_a5map[col]].reset_index(drop=True)
+                if len(_av) >= _hn:
+                    _out[col] = _av.iloc[:_hn].reset_index(drop=True)
+                else:
+                    _out[col] = pd.concat([_av, pd.Series([None] * (_hn - len(_av)))], ignore_index=True)
+            elif _mmap[col] is not None:
+                _mv = merged[_mmap[col]].reset_index(drop=True)
+                if len(_mv) >= _hn:
+                    _out[col] = _mv.iloc[:_hn].reset_index(drop=True)
+                else:
+                    _out[col] = pd.concat([_mv, pd.Series([None] * (_hn - len(_mv)))], ignore_index=True)
+            else:
+                _out[col] = pd.Series([None] * _hn)
+        return pd.DataFrame(_out)
+
+    # ── Auto-load once per session ────────────────────────────────────────────
+    if _IBS52_SS_KEY not in st.session_state:
+        if _ibs_hdet_path:
+            with st.spinner("Loading HDET data for 5.2…"):
+                _ibs52_raw = _ibs52_load_preview(_ibs_hdet_path)
+            _ibs52_a5 = load_admin_file_df(_ibs_a5_name) if _ibs_a5_name else None
+            st.session_state.ibs_sc_data = _build_ibs52(_ibs52_raw, _ibs52_a5)
+            st.session_state["_ibs52_src"] = f"HDET ({len(_ibs52_raw):,} item rows)"
+        else:
+            st.session_state.ibs_sc_data = _fill_from_db(_IBS_COLS, merged)
+            st.session_state["_ibs52_src"] = "Rangesheet data"
+        st.session_state[_IBS52_SS_KEY] = True
+
+    _ibs_a5_df = load_admin_file_df(_ibs_a5_name) if _ibs_a5_name else None
+
+    # ── Source info ───────────────────────────────────────────────────────────
+    if _ibs_hdet_path:
+        _ibs_src_lbl = st.session_state.get("_ibs52_src", "")
+        _ibs_info = [f"HDET: <strong>{os.path.basename(_ibs_hdet_path)}</strong>"]
+        if _ibs_src_lbl:
+            _ibs_info.append(_ibs_src_lbl)
+        if _ibs_a5_name:
+            _ibs_info.append(f"A5: <strong>{_ibs_a5_name}</strong>")
+        st.markdown(
+            "<div style='font-size:11px;color:#2BBFA4;margin-bottom:6px;'>"
+            + " · ".join(_ibs_info) + "</div>",
+            unsafe_allow_html=True,
+        )
 
     # ── Toolbar ──────────────────────────────────────────────────────────────
-    _ibs_c1, _ibs_c2, _ibs_c3, _ibs_c4 = st.columns([1.1, 1.0, 1.4, 4.5])
+    _ibs_c1, _ibs_c2, _ibs_c3, _ibs_c4, _ = st.columns([1.1, 1.0, 1.6, 1.4, 2.9])
     with _ibs_c1:
         if st.button("＋ Add Row", key="ibs_add_row", use_container_width=True):
             _empty = pd.DataFrame([{c: None for c in _IBS_COLS}])
@@ -1074,10 +1517,24 @@ with _sheet_tabs[4]:   # 5.2 ItembyStore_SC
             st.rerun()
     with _ibs_c2:
         if st.button("↺ Reset", key="ibs_clear", use_container_width=True):
-            st.session_state.ibs_sc_data = _fill_from_db(_IBS_COLS, merged)
+            if _ibs_hdet_path:
+                with st.spinner("Reloading…"):
+                    _ibs52_raw = _ibs52_load_preview(_ibs_hdet_path)
+                st.session_state.ibs_sc_data = _build_ibs52(_ibs52_raw, _ibs_a5_df)
+                st.session_state["_ibs52_src"] = f"HDET ({len(_ibs52_raw):,} item rows)"
+            else:
+                st.session_state.ibs_sc_data = _fill_from_db(_IBS_COLS, merged)
             st.session_state.pop("vw_submit_52", None)
             st.rerun()
     with _ibs_c3:
+        if st.button("↺ Reload HDET", key="ibs_reload_hdet", use_container_width=True,
+                     disabled=not _ibs_hdet_path):
+            with st.spinner("Reloading HDET preview for 5.2…"):
+                _ibs52_raw = _ibs52_load_preview(_ibs_hdet_path)
+            st.session_state.ibs_sc_data = _build_ibs52(_ibs52_raw, _ibs_a5_df)
+            st.session_state["_ibs52_src"] = f"HDET ({len(_ibs52_raw):,} item rows)"
+            st.rerun()
+    with _ibs_c4:
         if st.button("✅ Submit to Report", key="ibs_submit", use_container_width=True,
                      type="primary"):
             _to_send = st.session_state.ibs_sc_data.dropna(how="all")
@@ -1287,6 +1744,23 @@ with _sheet_tabs[6]:   # 5.4 Upload to Citrix
         st.caption(f"✅ {len(st.session_state['vw_submit_54']):,} rows submitted to Report")
 
 with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
+    # HDET column remapping is handled by COLUMN_MAPPING in shared.py.
+    # Version suffix forces reload when mappings change.
+    _NS_SS_KEY = "ns_hdet_df_v5"
+
+    def _ns_load_preview(path: str, want: int = 500, scan: int = 10_000) -> pd.DataFrame:
+        """Read `scan` rows from HDET, drop rows where ID is null (those are
+        category-level PROMOTION PLANO entries without item data), then return
+        the first `want` item-level rows."""
+        _raw = read_large_file_head(path, n_rows=scan)
+        # After COLUMN_MAPPING, the ID column keeps its name "ID"
+        _id_col = next(
+            (c for c in _raw.columns if _nca(c) in ("id",)), None)
+        if _id_col:
+            _filtered = _raw[_raw[_id_col].notna() & (_raw[_id_col].astype(str).str.strip() != "")].reset_index(drop=True)
+            return _filtered.head(want) if len(_filtered) >= want else _filtered
+        return _raw.head(want)
+
     # ── Find HDET (large) and A5 (normal-sized) pinned files ─────────────────
     _ns_hdet_path = None
     _ns_a5_name   = None
@@ -1300,10 +1774,11 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
             _ns_a5_name = _nsmeta["name"]
 
     # ── Auto-load HDET preview once per session ───────────────────────────────
-    if _ns_hdet_path and "ns_hdet_df" not in st.session_state:
-        with st.spinner("Loading HDET preview for Non-SSPOG…"):
-            st.session_state.ns_hdet_df = read_large_file_head(_ns_hdet_path, n_rows=500)
-        st.session_state["_ns_hdet_src"] = "HDET preview (500 rows)"
+    if _ns_hdet_path and _NS_SS_KEY not in st.session_state:
+        with st.spinner("Loading HDET item data for Non-SSPOG…"):
+            _ns_prev = _ns_load_preview(_ns_hdet_path)
+        st.session_state[_NS_SS_KEY] = _ns_prev
+        st.session_state["_ns_hdet_src"] = f"HDET preview ({len(_ns_prev):,} item rows)"
 
     # ── Load A5 on demand (cached via load_admin_file_df) ────────────────────
     _ns_a5_df = load_admin_file_df(_ns_a5_name) if _ns_a5_name else None
@@ -1320,7 +1795,7 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
         st.markdown(
             "<div style='font-size:11px;color:#2BBFA4;margin-bottom:6px;'>"
             + " · ".join(_info_parts)
-            + " · Columns matched by header name.</div>",
+            + " · HDET columns auto-mapped to Rangesheet headers.</div>",
             unsafe_allow_html=True,
         )
         _nsh1, _nsh2, _nsh3, _ = st.columns([1.8, 1.4, 1.6, 3.2])
@@ -1336,9 +1811,10 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
             _ns_prev_btn = st.button("↺ Reload Preview", key="ns_hdet_prev", use_container_width=True)
 
         if _ns_prev_btn:
-            with st.spinner(f"Reloading HDET preview…"):
-                st.session_state.ns_hdet_df = read_large_file_head(_ns_hdet_path, n_rows=500)
-            st.session_state["_ns_hdet_src"] = "HDET preview (500 rows)"
+            with st.spinner("Reloading HDET item preview…"):
+                _ns_prev = _ns_load_preview(_ns_hdet_path)
+            st.session_state[_NS_SS_KEY] = _ns_prev
+            st.session_state["_ns_hdet_src"] = f"HDET preview ({len(_ns_prev):,} item rows)"
             st.rerun()
 
         if _ns_load_btn:
@@ -1347,7 +1823,7 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
                 with st.spinner(f"Loading DG={_ns_dg_val} from {_ns_hfname}…"):
                     _ns_hdet_new = load_large_file_by_dg(_ns_hdet_path, _ns_dg_val)
                 if not _ns_hdet_new.empty:
-                    st.session_state.ns_hdet_df = _ns_hdet_new
+                    st.session_state[_NS_SS_KEY] = _ns_hdet_new
                     st.session_state["_ns_hdet_src"] = (
                         f"HDET · DG={_ns_dg_val} ({len(_ns_hdet_new):,} rows)")
                     st.rerun()
@@ -1356,10 +1832,11 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
             else:
                 st.info("Enter a DG code first, then click Load by DG.")
 
-    # ── Build combined DataFrame: merged + HDET + A5, match by header ─────────
+    # ── Build combined DataFrame: merged + HDET + A5 ─────────────────────────
     _ns_parts = [merged]
-    if st.session_state.get("ns_hdet_df") is not None:
-        _ns_parts.append(st.session_state.ns_hdet_df)
+    _ns_hdet_df = st.session_state.get(_NS_SS_KEY)
+    if _ns_hdet_df is not None and not _ns_hdet_df.empty:
+        _ns_parts.append(_ns_hdet_df)
     if _ns_a5_df is not None and not _ns_a5_df.empty:
         _ns_parts.append(_ns_a5_df)
 
@@ -1370,7 +1847,11 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
     else:
         _ns_combined = merged
 
+    # Expose A5 df to _render_sheet_content so the 📊 Status view can build POG columns
+    st.session_state["_wf_ext_a5_ns"] = _ns_a5_df
+
     _render_sheet_content(_ns_combined, "ns")
+
 
 if False:
     _meta = st.session_state.rangesheet_meta
@@ -1808,6 +2289,47 @@ if False:
         _hdrs     = list(_tdf.columns)
         def _cw(lbl): return max(90, min(240, len(lbl) * 7 + 16))
 
+        # ── Cluster summary table (left panel) — DEMO data ──────────────────
+        _demo_rows = [
+            ("N_G2_A", 161, 161), ("H_G2_A", 24, 24), ("N_G1_A", 20, 20),
+            ("H_G1_5012", 1, 1), ("H_G1_5184", 1, 1), ("H_G1_5189", 1, 1),
+            ("H_G2_5029", 1, 1), ("H_G2_5086", 1, 1), ("H_G2_5088", 1, 1),
+            ("H_G2_5090", 1, 1), ("H_G2_5102", 1, 1), ("H_G2_5145", 1, 1),
+            ("H_G2_5162", 1, 1), ("H_G2_5170", 1, 1), ("H_G2_5177", 1, 1),
+            ("H_G2_5187", 1, 1), ("H_G2_5188", 1, 1), ("H_G2_6401", 1, 1),
+            ("H_G1_5018", 1, 1), ("N_G1_5022", 1, 1), ("N_G1_5028", 1, 1),
+            ("N_G1_5032", 1, 1), ("N_G1_5055", 1, 1), ("N_G1_5112", 1, 1),
+            ("N_G1_5185", 1, 1), ("N_G2_5039", 1, 1),
+        ]
+        _tot_s = sum(r[1] for r in _demo_rows)
+        _tot_p = sum(r[2] for r in _demo_rows)
+        _sh = [
+            '<div style="overflow-y:auto;max-height:560px;border-radius:10px;border:1px solid #E0D9D2;">',
+            '<table style="border-collapse:collapse;font-size:12px;width:100%;">',
+            '<thead><tr style="background:#1C1C1E;">',
+            '<th style="padding:8px 10px;text-align:left;color:rgba(255,255,255,.85);font-size:10px;font-weight:700;white-space:nowrap;">ClusterName</th>',
+            '<th style="padding:8px 10px;text-align:center;color:rgba(255,255,255,.85);font-size:10px;font-weight:700;white-space:nowrap;">StoreCount</th>',
+            '<th style="padding:8px 10px;text-align:center;color:rgba(255,255,255,.85);font-size:10px;font-weight:700;white-space:nowrap;">Count of POGName</th>',
+            '</tr></thead><tbody>',
+        ]
+        for _di, (_dn, _ds, _dp) in enumerate(_demo_rows):
+            _rb2 = "#FFFFFF" if _di % 2 == 0 else "#F8F4F0"
+            _sh.append(
+                f'<tr style="background:{_rb2};">'
+                f'<td style="padding:7px 10px;border-bottom:1px solid #E8E3DC;font-weight:500;">{_dn}</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid #E8E3DC;text-align:center;">{_ds:,}</td>'
+                f'<td style="padding:7px 10px;border-bottom:1px solid #E8E3DC;text-align:center;">{_dp:,}</td>'
+                f'</tr>'
+            )
+        _sh.append(
+            f'<tr style="background:#F5F0EA;font-weight:700;">'
+            f'<td style="padding:8px 10px;border-top:2px solid #C8B9A2;">Total</td>'
+            f'<td style="padding:8px 10px;border-top:2px solid #C8B9A2;text-align:center;">{_tot_s:,}</td>'
+            f'<td style="padding:8px 10px;border-top:2px solid #C8B9A2;text-align:center;">{_tot_p:,}</td>'
+            f'</tr></tbody></table></div>'
+        )
+        _cl_summary_html = ''.join(_sh)
+
         _h = [
             '<div style="overflow-x:auto;border-radius:12px;border:1px solid #E0D9D2;margin-top:14px;">',
             '<table style="border-collapse:collapse;font-size:11px;min-width:100%;">',
@@ -1847,7 +2369,14 @@ if False:
                     f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{_inner}</td>')
             _h.append('</tr>')
         _h.append('</tbody></table></div>')
-        st.markdown(''.join(_h), unsafe_allow_html=True)
+        if _cl_summary_html:
+            _sum_col, _tbl_col = st.columns([1, 2.5])
+            with _sum_col:
+                st.markdown(_cl_summary_html, unsafe_allow_html=True)
+            with _tbl_col:
+                st.markdown(''.join(_h), unsafe_allow_html=True)
+        else:
+            st.markdown(''.join(_h), unsafe_allow_html=True)
 
         if len(df_view) > _MAX:
             st.caption(f"Showing {_MAX:,} of {len(df_view):,} rows — increase Rows input to see more")
