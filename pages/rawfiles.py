@@ -104,6 +104,70 @@ def _scan_hdet_for_pivot(path: str, cl_sel: tuple, dg_sel: tuple,
     return _df.rename(columns=_rename)
 
 
+@st.cache_data(show_spinner="Loading HDET (first load only, ~3 min)…")
+def _build_hdet_mini(path: str, _mtime: int = 0) -> pd.DataFrame:
+    """Scan HDET once; return compact categorical DataFrame with key columns.
+
+    Replaces the cascade scan + cluster summary + pivot scan.
+    After first load everything runs in-memory (instant).
+    """
+    _sep, _enc, _hr = _detect_large_file_params(path)
+    _WANT = {
+        "ClusterName":        ["ClusterName","Cluster_Name","cluster_name","Cluster Name"],
+        "store_Format":       ["store_Format","Store_Format","StoreFormat","Format"],
+        "Div Code&Desc":      ["Div Code&Desc","Div Code & Desc","DivCode&Desc"],
+        "Display Group":      ["Display Group","DG","DG_CODE","Display_Group"],
+        "PG_Store_Number":    ["PG_Store_Number","store_no","StoreNo","Store_No",
+                               "store_number","Store_Number"],
+        "Name":               ["Name","FP_Name","FP Name","FPName","pog_name","POGName"],
+        "ID":                 ["ID","id","Barcode","barcode","TPNA"],
+        "ProductDescription": ["ProductDescription","Product Description",
+                               "item_name","Item Name","Description"],
+        "ForecastSales":      ["ForecastSales","forecast_new_item_sales","Avg_unit",
+                               "avg_unit","Value","value"],
+        "_hdet_tsa":          ["Total Store Apply","TotalStoreApply","total_store_apply",
+                               "Total_Store_Apply","store_apply"],
+    }
+    _first = next(iter(pd.read_csv(
+        path, sep=_sep, encoding=_enc, skiprows=_hr, header=0,
+        chunksize=1000, dtype=str, low_memory=False, on_bad_lines="skip"
+    )))
+    _low = {str(c).strip().lower(): c for c in _first.columns}
+    _col_map: dict = {}
+    for _std, _cands in _WANT.items():
+        for _cand in _cands:
+            if _cand in _first.columns:
+                _col_map[_std] = _cand; break
+            if _cand.lower() in _low:
+                _col_map[_std] = _low[_cand.lower()]; break
+    _use = list(set(_col_map.values()))
+    _ren = {v: k for k, v in _col_map.items()}
+    _cat = [k for k in _col_map if k not in ("ForecastSales", "_hdet_tsa")]
+    _chunks = []
+    for _ck in pd.read_csv(
+        path, sep=_sep, encoding=_enc, skiprows=_hr, header=0,
+        chunksize=LARGE_FILE_CHUNK_SIZE, usecols=_use,
+        dtype=str, low_memory=False, on_bad_lines="skip"
+    ):
+        _ck = _ck.rename(columns=_ren)
+        for _col in _cat:
+            if _col in _ck.columns:
+                _ck[_col] = _ck[_col].fillna("").str.strip().astype("category")
+        if "ForecastSales" in _ck.columns:
+            _ck["ForecastSales"] = (pd.to_numeric(_ck["ForecastSales"], errors="coerce")
+                                    .fillna(0.0).astype("float32"))
+        if "_hdet_tsa" in _ck.columns:
+            _ck["_hdet_tsa"] = (pd.to_numeric(_ck["_hdet_tsa"], errors="coerce")
+                                .fillna(0).astype("int32"))
+        _chunks.append(_ck)
+    if not _chunks:
+        return pd.DataFrame(columns=list(_WANT.keys()))
+    _out = pd.concat(_chunks, ignore_index=True)
+    for _col in _out.select_dtypes("category").columns:
+        _out[_col] = _out[_col].cat.remove_unused_categories()
+    return _out
+
+
 inject_css()
 init_session_state()
 render_sidebar("rawfiles")
@@ -344,193 +408,152 @@ def _render_minor():
         st.write(f"fmt=`{_fmt_col}` | div=`{_div_col}` | dg=`{_dg_col}` "
                  f"| cl=`{_cl_col}` | disp=`{_disp_col}` | store=`{_store_col}`")
 
-    # ── HDET cascade scan ─────────────────────────────────────────────────────
-    # Scans HDET once per session and builds a bidirectional map:
-    #   cascade[dg]  → {div:[...], cls:[...], fmt:[...]}
-    #   cls_cascade[cls] → {dg:[...], div:[...], fmt:[...]}
-    # This powers cross-filtering even for columns not in _df.
-    _RF_HDET_KEY  = "rawfiles_hdet_cascade_v1"
+    # ── HDET mini-table (one scan; everything else is instant in-memory) ────────
     _RF_HDET_PATH = "rawfiles_hdet_path"
-    if _RF_HDET_KEY not in st.session_state:
+    if _RF_HDET_PATH not in st.session_state:
         _rf_hdet_path = None
         for _rfm in load_admin_manifest():
             _rfp = os.path.join(BASE_DIR, "uploads", _rfm["name"])
             if "hdet" in _rfm["name"].lower() and os.path.exists(_rfp) and is_large_file(_rfp):
                 _rf_hdet_path = _rfp
                 break
-        st.session_state[_RF_HDET_PATH] = _rf_hdet_path  # persist for totals lookup
-        if _rf_hdet_path:
-            with st.spinner("Scanning HDET cascade for filter options…"):
-                _scanned = scan_hdet_dg_cascade(_rf_hdet_path, {
-                    "dg":  ["DG", "DG_CODE", "dg_code", "Display Group", "Display_Group"],
-                    "div": ["Div Code&Desc", "Div Code & Desc", "DivCode&Desc"],
-                    "cls": ["ClusterName", "Cluster_Name", "Cluster Name"],
-                    "fmt": ["store_Format", "store_format", "StoreFormat", "Format"],
-                })
-            st.session_state[_RF_HDET_KEY] = _scanned
-        else:
-            st.session_state[_RF_HDET_KEY] = {
-                "dg_vals": [], "fmt_vals": [], "div_vals": [], "cls_vals": [],
-                "cascade": {}, "cls_cascade": {},
-            }
-    _rf_hdet      = st.session_state[_RF_HDET_KEY]
-    _hdet_path    = st.session_state.get(_RF_HDET_PATH)
-    _h_casc    = _rf_hdet.get("cascade",     {})
-    _h_cls_c   = _rf_hdet.get("cls_cascade", {})
+        st.session_state[_RF_HDET_PATH] = _rf_hdet_path
+    _hdet_path = st.session_state.get(_RF_HDET_PATH)
+    _mini = None
+    if _hdet_path:
+        _h_mtime = int(os.path.getmtime(_hdet_path))
+        _mini = _build_hdet_mini(_hdet_path, _h_mtime)
 
-    # ── Cross-filter helpers ──────────────────────────────────────────────────
-    _cur_fmt = st.session_state.get("minor_fmt", [])
-    _cur_div = st.session_state.get("minor_div", [])
-    _cur_dg  = st.session_state.get("minor_dg",  [])
-    _cur_cl  = st.session_state.get("minor_cl",  [])
+    # ── Migrate old multiselect lists → single value ──────────────────────────
+    for _ss in ("minor_fmt", "minor_div", "minor_dg", "minor_cl"):
+        _v = st.session_state.get(_ss)
+        if isinstance(_v, list):
+            st.session_state[_ss] = _v[0] if _v else None
 
-    def _xf(skip: str) -> pd.DataFrame:
-        """Filter _df by all dropdowns except `skip` (only cols present in _df)."""
-        _f = _df
-        if skip != "fmt" and _cur_fmt and _fmt_col:
-            _f = _f[_f[_fmt_col].astype(str).isin(_cur_fmt)]
-        if skip != "div" and _cur_div and _div_col:
-            _f = _f[_f[_div_col].astype(str).isin(_cur_div)]
-        if skip != "dg"  and _cur_dg  and _dg_col:
-            _f = _f[_f[_dg_col].astype(str).isin(_cur_dg)]
-        if skip != "cl"  and _cur_cl  and _cl_col:
-            _f = _f[_f[_cl_col].astype(str).isin(_cur_cl)]
-        return _f
+    _cur_fmt = st.session_state.get("minor_fmt")
+    _cur_div = st.session_state.get("minor_div")
+    _cur_dg  = st.session_state.get("minor_dg")
+    _cur_cl  = st.session_state.get("minor_cl")
 
-    def _uniq(df, col):
-        if not col: return []
-        return sorted(df[col].dropna().astype(str).replace("", pd.NA).dropna().unique())
+    def _cascade(skip: str) -> list:
+        """Valid options for `skip` given all other current single-select filters."""
+        if _mini is None:
+            return []
+        _f = _mini
+        if skip != "fmt" and _cur_fmt: _f = _f[_f["store_Format"] == _cur_fmt]
+        if skip != "div" and _cur_div: _f = _f[_f["Div Code&Desc"] == _cur_div]
+        if skip != "dg"  and _cur_dg:  _f = _f[_f["Display Group"] == _cur_dg]
+        if skip != "cl"  and _cur_cl:  _f = _f[_f["ClusterName"] == _cur_cl]
+        _col = {"fmt": "store_Format", "div": "Div Code&Desc",
+                "dg": "Display Group", "cl": "ClusterName"}[skip]
+        if _col not in _f.columns:
+            return []
+        return sorted(v for v in _f[_col].dropna().astype(str).unique()
+                      if v not in ("", "nan"))
 
-    def _hdet_opts(key: str) -> list:
-        """Compute valid options for `key` using HDET cascade given current selections.
+    _fmt_opts = _cascade("fmt")
+    _div_opts = _cascade("div")
+    _dg_opts  = _cascade("dg")
+    _cl_opts  = _cascade("cl")
 
-        key is one of "dg", "div", "cls", "fmt".
-        Builds the intersection of allowed values from each active selection.
-        """
-        _full = {
-            "dg":  _rf_hdet.get("dg_vals",  []),
-            "div": _rf_hdet.get("div_vals", []),
-            "cls": _rf_hdet.get("cls_vals", []),
-            "fmt": _rf_hdet.get("fmt_vals", []),
-        }
-        _sels = {"dg": _cur_dg, "div": _cur_div, "cls": _cur_cl, "fmt": _cur_fmt}
-        result = set(_full.get(key, []))
-
-        for src, vals in _sels.items():
-            if src == key or not vals:
-                continue
-            allowed: set = set()
-            for v in vals:
-                if src == "dg":
-                    allowed.update(_h_casc.get(v, {}).get(key, []))
-                elif src == "cls":
-                    allowed.update(_h_cls_c.get(v, {}).get(key, []))
-                elif src in ("div", "fmt"):
-                    # Reverse-lookup: walk cascade to find entries with this value
-                    for dg_v, rel in _h_casc.items():
-                        if v in rel.get(src, []):
-                            if key == "dg":
-                                allowed.add(dg_v)
-                            else:
-                                allowed.update(rel.get(key, []))
-                    if src == "div" and key == "cls":
-                        for cl_v, cd in _h_cls_c.items():
-                            if v in cd.get("div", []):
-                                allowed.add(cl_v)
-            if allowed:
-                result &= allowed
-
-        return sorted(result)
-
-    # ── Compute each dropdown's options ───────────────────────────────────────
-    # If the column is in _df: cross-filter via _xf() (fast, exact row match).
-    # If not in _df: cross-filter via HDET cascade (handles HDET-only columns).
-    _fmt_opts = _uniq(_xf("fmt"), _fmt_col) if _fmt_col else _hdet_opts("fmt")
-    _div_opts = _uniq(_xf("div"), _div_col) if _div_col else _hdet_opts("div")
-    _dg_opts  = _uniq(_xf("dg"),  _dg_col)  if _dg_col  else _hdet_opts("dg")
-    _cl_opts  = _uniq(_xf("cl"),  _cl_col)  if _cl_col  else _hdet_opts("cls")
-
-    # Drop stale selections no longer present in narrowed option lists
+    # Drop stale single-select values no longer in options
     for _ss, _opts in [("minor_fmt", _fmt_opts), ("minor_div", _div_opts),
-                        ("minor_dg",  _dg_opts),  ("minor_cl",  _cl_opts)]:
-        if _ss in st.session_state:
-            _valid = [v for v in st.session_state[_ss] if v in _opts]
-            if _valid != st.session_state[_ss]:
-                st.session_state[_ss] = _valid
+                       ("minor_dg",  _dg_opts),  ("minor_cl",  _cl_opts)]:
+        if st.session_state.get(_ss) not in (None, *_opts):
+            st.session_state[_ss] = None
 
-    # ── Filter bar (4 dropdowns) ──────────────────────────────────────────────
+    # ── Filter bar (4 single-select dropdowns) ────────────────────────────────
     _fc1, _fc2, _fc3, _fc4 = st.columns(4)
     with _fc1:
-        _fmt_sel = st.multiselect("store_Format", _fmt_opts, key="minor_fmt",
-                                  placeholder="All formats")
+        _fmt_sel = st.selectbox("STORE_FORMAT", [None] + _fmt_opts, key="minor_fmt",
+                                format_func=lambda x: "All formats" if x is None else x)
     with _fc2:
-        _div_sel = st.multiselect("Div Code&Desc", _div_opts, key="minor_div",
-                                  placeholder="All divisions")
+        _div_sel = st.selectbox("DIV CODE&DESC", [None] + _div_opts, key="minor_div",
+                                format_func=lambda x: "All divisions" if x is None else x)
     with _fc3:
-        _dg_sel = st.multiselect("DG", _dg_opts, key="minor_dg",
-                                 placeholder="All DGs")
+        _dg_sel = st.selectbox("DG", [None] + _dg_opts, key="minor_dg",
+                               format_func=lambda x: "All DGs" if x is None else x)
     with _fc4:
-        _cl_sel = st.multiselect("ClusterName", _cl_opts, key="minor_cl",
-                                 placeholder="All clusters")
+        _cl_sel = st.selectbox("CLUSTERNAME", [None] + _cl_opts, key="minor_cl",
+                               format_func=lambda x: "All clusters" if x is None else x)
 
-    # Apply all 4 filters → _fdf used by every panel below
+    # _fdf: filtered small DB (for any downstream use)
     _fdf = _df.copy()
-    if _fmt_sel and _fmt_col:  _fdf = _fdf[_fdf[_fmt_col].astype(str).isin(_fmt_sel)]
-    if _div_sel and _div_col:  _fdf = _fdf[_fdf[_div_col].astype(str).isin(_div_sel)]
-    if _dg_sel  and _dg_col:   _fdf = _fdf[_fdf[_dg_col].astype(str).isin(_dg_sel)]
-    if _cl_sel  and _cl_col:   _fdf = _fdf[_fdf[_cl_col].astype(str).isin(_cl_sel)]
+    if _fmt_sel and _fmt_col:  _fdf = _fdf[_fdf[_fmt_col].astype(str) == _fmt_sel]
+    if _div_sel and _div_col:  _fdf = _fdf[_fdf[_div_col].astype(str) == _div_sel]
+    if _dg_sel  and _dg_col:   _fdf = _fdf[_fdf[_dg_col].astype(str)  == _dg_sel]
+    if _cl_sel  and _cl_col:   _fdf = _fdf[_fdf[_cl_col].astype(str)  == _cl_sel]
 
-    # ── Cluster summary (computed before columns — feeds both pivot + left panel) ─
+    # ── Cluster summary from mini-table (instant pandas, no re-scan) ──────────
     _summary_df = None
-    if _hdet_path:
-        _sum_cache_key = (f"hdet_sum_v8|dg={_dg_sel}|cl={_cl_sel}"
-                          f"|div={_div_sel}|fmt={_fmt_sel}")
-        if _sum_cache_key not in st.session_state:
-            _sf_txt: dict = {}
-            if _dg_sel:
-                _sf_txt["dg"] = (["Display Group", "DG", "DG_CODE", "dg_code",
-                                   "Display_Group"], _dg_sel)
-            if _cl_sel:
-                _sf_txt["cls"] = (["ClusterName", "Cluster_Name",
-                                    "cluster_name", "Cluster Name"], _cl_sel)
-            if _div_sel:
-                _sf_txt["div"] = (["Div Code&Desc", "Div Code & Desc",
-                                    "DivCode&Desc"], _div_sel)
-            if _fmt_sel:
-                _sf_txt["fmt"] = (["store_Format", "store_format",
-                                    "StoreFormat", "Format"], _fmt_sel)
+    if _mini is not None:
+        # _null_s = {"", "0", "0.0"}
+        _null_s = {"", "nan", "None", "NaN", "none", "null"}
+        # Base filter: format + div + cluster (NO DG — keeps StoreCount stable)
+        _mf = _mini
+        if _fmt_sel: _mf = _mf[_mf["store_Format"] == _fmt_sel]
+        if _div_sel: _mf = _mf[_mf["Div Code&Desc"] == _div_sel]
+        if _cl_sel:  _mf = _mf[_mf["ClusterName"] == _cl_sel]
+        # TotalStoreApply: add DG filter (counts DG entries on planogram)
+        _mf_dg = _mf[_mf["Display Group"] == _dg_sel] if _dg_sel else _mf
 
-            with st.spinner("Loading cluster summary…"):
-                _pog_df = summarize_hdet_by_cluster(
-                    _hdet_path,
-                    col_candidates={
-                        "cls":   ["ClusterName", "Cluster_Name", "cluster_name",
-                                  "Cluster Name"],
-                        "store": ["PG_Store_Number","store_no","StoreNo","Store_No",
-                                  "store_number","Store_Number","StoreID","store_id"],
-                        "pog":   ["Name", "FP_Name", "FP Name", "FPName",
-                                  "pog_name", "POGName"],
-                        "id":    ["ID", "id", "Barcode", "barcode", "TPNA"],
-                        # Pre-computed store count — HDET col 33 or PBI field name
-                        "sc":    ["StoreCount", "Store Count", "store_count",
-                                  "Store_Count", "Total Store Apply",
-                                  "TotalStoreApply", "total_store_apply",
-                                  "Total_Store_Apply", "Num Stores", "NumStores",
-                                  "No of Stores", "NoOfStores"],
-                    },
-                    filter_cols=_sf_txt if _sf_txt else None,
-                )
-                _tot_mask = _pog_df["ClusterName"] == "Total"
-                _d = (_pog_df[~_tot_mask]
-                      .sort_values("StoreCount", ascending=False)
-                      .reset_index(drop=True))
-                st.session_state[_sum_cache_key] = pd.concat(
-                    [_d, _pog_df[_tot_mask]], ignore_index=True)
+        # StoreCount: prefer HDET's pre-computed Total Store Apply (col 33) per cluster
+        # which matches PBI's POG_store-derived count. Fall back to COUNT DISTINCT store.
+        if "_hdet_tsa" in _mf.columns and (_mf["_hdet_tsa"] > 0).any():
+            _sc = _mf.groupby("ClusterName")["_hdet_tsa"].max()
+        else:
+            _sc = (_mf[~_mf["PG_Store_Number"].isin(_null_s)]
+                   .groupby("ClusterName")["PG_Store_Number"].nunique()
+                   if "PG_Store_Number" in _mf.columns else pd.Series(dtype=int))
+        # Count of POGName = COUNT DISTINCT(Name) per cluster (matches PBI)
+        # PBI counts unique POG names, not unique (store, POG) pairs
+        _pc = (_mf[_mf["Name"] != ""]
+               .groupby("ClusterName")["Name"].nunique()
+               if "Name" in _mf.columns else pd.Series(dtype=int))
+        # ItemCount = distinct (DG, ID, ProductDescription) combos per cluster
+        #             = row count of the right-panel pivot (matches "X items" caption)
+        _ic_cols = [c for c in ["ClusterName","Display Group","ID","ProductDescription"]
+                    if c in _mf_dg.columns]
+        _ic = (_mf_dg[_ic_cols].drop_duplicates()
+               .groupby("ClusterName").size()
+               if len(_ic_cols) > 1 else pd.Series(dtype=int))
 
-        _summary_df = st.session_state[_sum_cache_key]
-        if "ItemCount" not in _summary_df.columns:
-            _summary_df = _summary_df.copy()
-            _summary_df["ItemCount"] = 0
+        # TotalStoreApply = distinct POGName (Name) per cluster
+        #                 = number of POG columns in right-panel pivot (matches "X POGs" caption)
+        _ta = (_mf_dg[_mf_dg["Name"] != ""]
+               .groupby("ClusterName")["Name"].nunique()
+               if "Name" in _mf_dg.columns else pd.Series(dtype=int))
+
+        _cls_list = sorted(set(_sc.index) | set(_pc.index) | set(_ta.index))
+        _summary_df = pd.DataFrame({
+            "ClusterName":      _cls_list,
+            "StoreCount":       [int(_sc.get(c, 0)) for c in _cls_list],
+            "Count of POGName": [int(_pc.get(c, 0)) for c in _cls_list],
+            "ItemCount":        [int(_ic.get(c, 0)) for c in _cls_list],
+            "TotalStoreApply":  [int(_ta.get(c, 0)) for c in _cls_list],
+        })
+        _summary_df = (_summary_df.sort_values("StoreCount", ascending=False)
+                       .reset_index(drop=True))
+        _ic_tot_cols = [c for c in ["Display Group","ID","ProductDescription"]
+                        if c in _mf_dg.columns]
+        _tot_row = pd.DataFrame([{
+            "ClusterName":      "Total",
+            # "StoreCount":       int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
+            #                         ["PG_Store_Number"].nunique())
+            #                     if "PG_Store_Number" in _mf.columns else 0,
+            "StoreCount":       int(_mf["_hdet_tsa"].max())
+                                if "_hdet_tsa" in _mf.columns and (_mf["_hdet_tsa"] > 0).any()
+                                else (int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
+                                          ["PG_Store_Number"].nunique())
+                                      if "PG_Store_Number" in _mf.columns else 0),
+            "Count of POGName": int(_mf[_mf["Name"] != ""]["Name"].nunique())
+                                if "Name" in _mf.columns else 0,
+            "ItemCount":        int(_mf_dg[_ic_tot_cols].drop_duplicates().shape[0])
+                                if _ic_tot_cols else 0,
+            "TotalStoreApply":  int(_mf_dg[_mf_dg["Name"] != ""]["Name"].nunique())
+                                if "Name" in _mf_dg.columns else 0,
+        }])
+        _summary_df = pd.concat([_summary_df, _tot_row], ignore_index=True)
 
     # ── Horizontal pivot: Total Store Apply + Total Item per cluster ───────────
     if _summary_df is not None and not _summary_df.empty:
@@ -538,11 +561,11 @@ def _render_minor():
         _data_p    = _summary_df[~_is_tot2]
         _tot_p     = _summary_df[_is_tot2]
         _cls_names = list(_data_p["ClusterName"])
-        _store_map = dict(zip(_data_p["ClusterName"], _data_p["StoreCount"].astype(int)))
+        _store_map = dict(zip(_data_p["ClusterName"], _data_p["TotalStoreApply"].astype(int)))
         _item_map  = dict(zip(_data_p["ClusterName"], _data_p["ItemCount"].astype(int)))
         if not _tot_p.empty:
             _cls_names.append("Total")
-            _store_map["Total"] = int(_tot_p.iloc[0]["StoreCount"])
+            _store_map["Total"] = int(_tot_p.iloc[0]["TotalStoreApply"])
             _item_map["Total"]  = int(_tot_p.iloc[0]["ItemCount"])
         _th = "".join(
             f"<th style='padding:3px 10px;white-space:nowrap;text-align:right;"
@@ -587,11 +610,12 @@ def _render_minor():
             _total_row = _summary_df[_is_total]
             _disp_cols3 = ["ClusterName","StoreCount","Count of POGName"]
             _disp_rows3 = _data_rows[[c for c in _disp_cols3 if c in _data_rows.columns]]
+            _tbl_h = max(60, min(len(_disp_rows3) * 35 + 38, 800))
             st.dataframe(
                 _disp_rows3,
                 hide_index=True,
                 use_container_width=True,
-                height=520,
+                height=_tbl_h,
                 column_config={
                     "ClusterName":      st.column_config.TextColumn(
                                             "ClusterName", width="medium"),
@@ -622,20 +646,24 @@ def _render_minor():
         st.markdown('<div class="pog-cluster-header">POG_Cluster</div>',
                     unsafe_allow_html=True)
 
-        if not _hdet_path:
+        if _mini is None:
             st.caption("HDET file not found — upload and pin the HDET file.")
         elif not _cl_sel:
             st.info("Select a **ClusterName** to display the POG_Cluster table.")
         else:
-            _h_mtime = int(os.path.getmtime(_hdet_path))
-            _raw_pvt = _scan_hdet_for_pivot(
-                _hdet_path,
-                cl_sel=tuple(sorted(_cl_sel)),
-                dg_sel=tuple(sorted(_dg_sel)),
-                div_sel=tuple(sorted(_div_sel)),
-                fmt_sel=tuple(sorted(_fmt_sel)),
-                mtime=_h_mtime,
-            )
+            # Build pivot from mini-table (instant — no additional HDET scan)
+            _f = _mini[_mini["ClusterName"] == _cl_sel].copy()
+            if _fmt_sel and "store_Format" in _f.columns:
+                _f = _f[_f["store_Format"] == _fmt_sel]
+            if _div_sel and "Div Code&Desc" in _f.columns:
+                _f = _f[_f["Div Code&Desc"] == _div_sel]
+            if _dg_sel and "Display Group" in _f.columns:
+                _f = _f[_f["Display Group"] == _dg_sel]
+            _ren = {"Display Group": "DG_CODE", "Name": "POGName", "ForecastSales": "Value"}
+            _raw_pvt = _f.rename(columns=_ren)
+            _pvt_cols = [c for c in ["DG_CODE","ID","ProductDescription","POGName","Value"]
+                         if c in _raw_pvt.columns]
+            _raw_pvt = _raw_pvt[_pvt_cols].copy()
             if _raw_pvt.empty or "POGName" not in _raw_pvt.columns:
                 st.caption("No data for current filters (or POGName column not found in HDET).")
             else:
@@ -690,8 +718,8 @@ def _render_minor():
                 _pgS = (f"position:sticky;top:33px;z-index:3;"
                         f"background:{_TC2};color:#fff;padding:3px 6px;"
                         f"border:1px solid #1a8a74;font-weight:600;text-align:center;"
-                        f"font-size:0.70rem;max-width:130px;overflow:hidden;"
-                        f"text-overflow:ellipsis;white-space:nowrap;")
+                        f"font-size:0.70rem;min-width:120px;white-space:normal;"
+                        f"word-break:break-word;")
                 # ── Build HTML ───────────────────────────────────────────────
                 _ht = [
                     "<div style='overflow-x:auto;overflow-y:auto;"
@@ -705,7 +733,7 @@ def _render_minor():
                 if _has_desc:
                     _ht.append(f"<th colspan='1' style='{_grS}'>POG CLUSTER</th>")
                 if _N:
-                    _cl_label = " / ".join(_cl_sel) if _cl_sel else "POG Cluster MOD fixture"
+                    _cl_label = str(_cl_sel) if _cl_sel else "POG Cluster MOD fixture"
                     _ht.append(f"<th colspan='{_N}' style='{_grS}'>{_cl_label}</th>")
                 _ht.append("</tr><tr>")
                 # Row 2: ProductDescription (sticky) + each POGName
@@ -716,7 +744,7 @@ def _render_minor():
                     _spc = str(_pc).replace("<","&lt;").replace(">","&gt;")
                     _ht.append(f"<th title='{_spc}' style='{_pgS}'>{_spc}</th>")
                 _ht.append("</tr></thead><tbody>")
-                # Data rows — DG_CODE shown only on first row of each DG group
+                # Data rows — DG_CODE repeated on every row so it stays visible while scrolling
                 _prev_dg4 = object()
                 for _ri, _row in _pvt.iterrows():
                     _rbg = "#0e1120" if _ri % 2 == 0 else "#141829"
@@ -724,18 +752,16 @@ def _render_minor():
                     if "DG_CODE" in _pvt.columns:
                         _dv4 = str(_row["DG_CODE"])
                         _bs = _stkB("DG_CODE", _rbg)
-                        if _dv4 != _prev_dg4:
-                            _ht.append(
-                                f"<td style='{_bs}color:#e0e4f7;font-weight:600;"
-                                f"vertical-align:top;'>{_dv4}</td>")
-                            _prev_dg4 = _dv4
-                        else:
-                            _ht.append(f"<td style='{_bs}'></td>")
+                        _is_first_dg = _dv4 != _prev_dg4
+                        _prev_dg4 = _dv4
+                        _dg_color = "color:#e0e4f7;font-weight:600;" if _is_first_dg else "color:#6b7194;"
+                        _ht.append(f"<td style='{_bs}{_dg_color}'>{_dv4}</td>")
                     if "ID" in _pvt.columns:
                         _id_b_style = _stkB("ID", _rbg)
+                        _id_val = str(_row['ID']).lstrip('0') or '0'
                         _ht.append(
                             f"<td style='{_id_b_style}color:#c8cde8;'>"
-                            f"{_row['ID']}</td>")
+                            f"{_id_val}</td>")
                     if _has_desc:
                         _dsc = str(_row["ProductDescription"]).replace("<","&lt;").replace(">","&gt;")
                         _desc_b_style = _stkB("ProductDescription", _rbg)
