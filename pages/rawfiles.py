@@ -395,7 +395,9 @@ def _render_minor():
     _dg_col    = _find_col(_df, "DG", "DG_CODE", "dg_code")
     _cl_col    = _find_col(_df, "ClusterName", "cluster_name", "Cluster_Name",
                            "Cluster (Planogram name)", "Cluster", "FP_Name", "pog_name")
-    _store_col = _find_col(_df, "store_no", "StoreNo", "store_id", "Store_No")
+    _store_col = _find_col(_df, "store_no", "StoreNo", "store_id", "Store_No",
+                           "PG_Store_Number", "pg_store_number",
+                           "store_number", "StoreNumber", "storenum", "Store Number")
     _pog_col   = _find_col(_df, "FP_Name", "pog_name", "PogName", "Cluster (Planogram name)")
     _id_col    = _find_col(_df, "ID", "id", "Barcode", "barcode", "TPNA")
     _desc_col  = _find_col(_df, "Item Name", "item_name", "ProductDescription", "Description")
@@ -497,19 +499,109 @@ def _render_minor():
         # TotalStoreApply: add DG filter (counts DG entries on planogram)
         _mf_dg = _mf[_mf["Display Group"] == _dg_sel] if _dg_sel else _mf
 
-        # StoreCount: prefer HDET's pre-computed Total Store Apply (col 33) per cluster
-        # which matches PBI's POG_store-derived count. Fall back to COUNT DISTINCT store.
-        if "_hdet_tsa" in _mf.columns and (_mf["_hdet_tsa"] > 0).any():
-            _sc = _mf.groupby("ClusterName")["_hdet_tsa"].max()
+        # StoreCount = DISTINCTCOUNT(POG_Store[store_no])
+        # PBI source: A5_2_POG_FP_HDET_LIVE_*.csv  →  store_no + Property_Store_Cluster + POGName
+        _null_sv      = {"", "nan", "NaN", "None", "none", "null", "NULL", "N/A", "n/a"}
+        _sc_store_col = None
+        _sc_cl_col    = None
+        _sc_src_df    = None
+        _sc_src_label = "none"
+        _sc_base      = pd.DataFrame()
+
+        # ── Direct scan: find a CSV with store_no + Property_Store_Cluster + POGName ──
+        # This is the exact signature of the A5 POG_Store CSV that PBI uses.
+        # We read only the 4 needed columns (usecols) so it's fast even for large CSVs.
+        _A5_S  = ["store_no", "StoreNo", "Store_No", "store_number", "StoreNumber"]
+        # POG_Cluster = "A"/"N_G_A"/... (the PBI cluster column); planogramname = PBI's POGName
+        _A5_C  = ["POG_Cluster", "pog_cluster", "Property_Store_Cluster", "property_store_cluster"]
+        _A5_P  = ["planogramname", "POGName", "pog_name", "POG_Name", "POG Name",
+                  "planogram_name", "Planogramname"]
+        _A5_F  = ["store_Format", "store_format", "StoreFormat", "store format"]
+
+        for _am in load_admin_manifest():
+            _ap = os.path.join(BASE_DIR, "uploads", _am["name"])
+            if not os.path.exists(_ap):
+                continue
+            if os.path.splitext(_am["name"])[-1].lower() not in (".csv", ".txt"):
+                continue
+            try:
+                _sep2, _enc2, _hdr2 = _detect_large_file_params(_ap)
+                _peek = pd.read_csv(_ap, sep=_sep2, encoding=_enc2,
+                                    skiprows=_hdr2, nrows=0, dtype=str, low_memory=False)
+                _lmap = {str(c).strip().lower(): str(c).strip() for c in _peek.columns}
+                def _rc(_cands, _m=_lmap):
+                    for _cc in _cands:
+                        if _cc.lower() in _m:
+                            return _m[_cc.lower()]
+                    return None
+                _a5_s = _rc(_A5_S)
+                _a5_c = _rc(_A5_C)
+                _a5_p = _rc(_A5_P)
+                if not (_a5_s and _a5_c and _a5_p):
+                    continue
+                _a5_f  = _rc(_A5_F)
+                _use   = list({_a5_s, _a5_c, _a5_p} | ({_a5_f} if _a5_f else set()))
+                _a5_df = pd.read_csv(_ap, sep=_sep2, encoding=_enc2, skiprows=_hdr2,
+                                     usecols=_use, dtype=str, low_memory=False,
+                                     on_bad_lines="skip")
+                _a5_df.columns = [str(c).strip() for c in _a5_df.columns]
+                _sc_store_col = _a5_s
+                _sc_cl_col    = _a5_c
+                _sc_src_df    = _a5_df
+                _sc_src_label = f"A5:{_am['name']} store={_a5_s}, cluster={_a5_c}"
+                break
+            except Exception:
+                pass
+
+        if _sc_store_col and _sc_cl_col:
+            _sc_base = _sc_src_df.copy()
+            _sc_fmt  = _find_col(_sc_src_df, "store_Format", "store_format",
+                                  "StoreFormat", "Format")
+            _sc_div  = _find_col(_sc_src_df, "Div Code&Desc", "Div Code & Desc",
+                                  "DivCode&Desc")
+            if _fmt_sel and _sc_fmt and _sc_fmt in _sc_base.columns:
+                _sc_base = _sc_base[_sc_base[_sc_fmt].astype(str) == _fmt_sel]
+            if _div_sel and _sc_div and _sc_div in _sc_base.columns:
+                _sc_base = _sc_base[_sc_base[_sc_div].astype(str) == _div_sel]
+            if _cl_sel and _sc_cl_col in _sc_base.columns:
+                _sc_base = _sc_base[_sc_base[_sc_cl_col].astype(str) == _cl_sel]
+            _sc_base = _sc_base.copy()
+            _sc_base[_sc_cl_col]    = _sc_base[_sc_cl_col].astype(str).str.strip()
+            _sc_base[_sc_store_col] = _sc_base[_sc_store_col].astype(str).str.strip()
+            _sc_base = _sc_base[
+                ~_sc_base[_sc_store_col].isin(_null_sv)
+                & ~_sc_base[_sc_store_col].isin({"nan"})
+                & (_sc_base[_sc_cl_col] != "")
+                & (_sc_base[_sc_cl_col] != "nan")
+            ]
+            _sc = _sc_base.groupby(_sc_cl_col)[_sc_store_col].nunique()
+            _sc.index.name = None
         else:
-            _sc = (_mf[~_mf["PG_Store_Number"].isin(_null_s)]
-                   .groupby("ClusterName")["PG_Store_Number"].nunique()
-                   if "PG_Store_Number" in _mf.columns else pd.Series(dtype=int))
-        # Count of POGName = COUNT DISTINCT(Name) per cluster (matches PBI)
-        # PBI counts unique POG names, not unique (store, POG) pairs
-        _pc = (_mf[_mf["Name"] != ""]
-               .groupby("ClusterName")["Name"].nunique()
-               if "Name" in _mf.columns else pd.Series(dtype=int))
+            # Fallback: COUNT DISTINCT PG_Store_Number from HDET mini-table
+            _sc_base      = pd.DataFrame()
+            _sc_src_label = "HDET fallback"
+            _sc           = (_mf[~_mf["PG_Store_Number"].isin(_null_s)]
+                             .groupby("ClusterName")["PG_Store_Number"].nunique()
+                             if "PG_Store_Number" in _mf.columns else pd.Series(dtype=int))
+        with st.expander("🔍 StoreCount source", expanded=False):
+            st.caption(f"Source: **{_sc_src_label}** | clusters: {len(_sc)}")
+
+        # Count of POGName from A5: COUNT(non-null POGName) per cluster — matches PBI exactly.
+        # PBI source: A5_2_POG_FP_HDET_LIVE_*.csv  →  POGName column
+        _pog_nm_col = (_find_col(_sc_src_df, "POGName", "pog_name", "POG_Name",
+                                 "Name", "FP_Name", "FP Name", "FPName")
+                       if _sc_src_df is not None else None)
+        if _pog_nm_col and not _sc_base.empty and _pog_nm_col in _sc_base.columns:
+            _pc = _sc_base.groupby(_sc_cl_col)[_pog_nm_col].count()
+            _pc.index.name = None
+            _pc_tot = int(_sc_base[_pog_nm_col].count())
+        else:
+            # Fallback: DISTINCTCOUNT(Name) from HDET mini-table
+            _pog_nm_col = None
+            _pc = (_mf[_mf["Name"] != ""]
+                   .groupby("ClusterName")["Name"].nunique()
+                   if "Name" in _mf.columns else pd.Series(dtype=int))
+            _pc_tot = int(_mf[_mf["Name"] != ""]["Name"].nunique()) if "Name" in _mf.columns else 0
         # ItemCount = distinct (DG, ID, ProductDescription) combos per cluster
         #             = row count of the right-panel pivot (matches "X items" caption)
         _ic_cols = [c for c in ["ClusterName","Display Group","ID","ProductDescription"]
@@ -541,13 +633,12 @@ def _render_minor():
             # "StoreCount":       int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
             #                         ["PG_Store_Number"].nunique())
             #                     if "PG_Store_Number" in _mf.columns else 0,
-            "StoreCount":       int(_mf["_hdet_tsa"].max())
-                                if "_hdet_tsa" in _mf.columns and (_mf["_hdet_tsa"] > 0).any()
-                                else (int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
-                                          ["PG_Store_Number"].nunique())
-                                      if "PG_Store_Number" in _mf.columns else 0),
-            "Count of POGName": int(_mf[_mf["Name"] != ""]["Name"].nunique())
-                                if "Name" in _mf.columns else 0,
+            "StoreCount":       (int(_sc_base[_sc_store_col].nunique())
+                                 if not _sc_base.empty and _sc_store_col
+                                 else (int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
+                                           ["PG_Store_Number"].nunique())
+                                       if "PG_Store_Number" in _mf.columns else 0)),
+            "Count of POGName": _pc_tot,
             "ItemCount":        int(_mf_dg[_ic_tot_cols].drop_duplicates().shape[0])
                                 if _ic_tot_cols else 0,
             "TotalStoreApply":  int(_mf_dg[_mf_dg["Name"] != ""]["Name"].nunique())
