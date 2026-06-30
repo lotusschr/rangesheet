@@ -1268,7 +1268,6 @@ def get_dg_options(path: str, _mtime: float = 0.0) -> tuple:
     return dg_col, sorted(seen_values)
 
 
-<<<<<<< HEAD
 def scan_hdet_dg_cascade(path: str, col_candidates: dict) -> dict:
     """Scan full HDET in chunks and build a cascade map keyed by DG value.
 
@@ -1406,6 +1405,17 @@ def summarize_hdet_by_cluster(
     store_col = _resolve(col_candidates.get("store", []))
     pog_col   = _resolve(col_candidates.get("pog",   []))
     id_col    = _resolve(col_candidates.get("id",    []))
+    sc_col    = _resolve(col_candidates.get("sc",    []))
+
+    # Positional fallback for sc_col: HDET col 33 (1-indexed) = col 31+2 = 2 after PG_Store_Number.
+    # Only use if name-based resolution failed and the position exists.
+    if not sc_col and store_col:
+        _all_cols = list(first.columns)
+        _si = _all_cols.index(store_col) if store_col in _all_cols else -1
+        if 0 <= _si + 2 < len(_all_cols):
+            _pc = _all_cols[_si + 2]
+            if _pc not in {cls_col, store_col, pog_col, id_col}:
+                sc_col = _pc
 
     if not cls_col:
         return pd.DataFrame({"ClusterName": [], "StoreCount": [],
@@ -1422,6 +1432,7 @@ def summarize_hdet_by_cluster(
                     | ({store_col} if store_col else set())
                     | ({pog_col}   if pog_col   else set())
                     | ({id_col}    if id_col    else set())
+                    | ({sc_col}    if sc_col    else set())
                     | set(actual_filters.keys()))
 
     agg: dict = {}
@@ -1447,7 +1458,8 @@ def summarize_hdet_by_cluster(
             if not cls_val:
                 continue
             if cls_val not in agg:
-                agg[cls_val] = {"store": set(), "pog": set(), "pog_pairs": set(), "id": set()}
+                agg[cls_val] = {"store": set(), "pog": set(), "pog_pairs": set(),
+                                "id": set(), "max_sc": 0}
             if store_col and store_col in grp.columns:
                 _sv = grp[store_col].fillna("").str.strip()
                 agg[cls_val]["store"].update(_sv.unique())
@@ -1458,6 +1470,11 @@ def summarize_hdet_by_cluster(
                     agg[cls_val]["pog_pairs"].update(zip(_sv, _pv))
             if id_col and id_col in grp.columns:
                 agg[cls_val]["id"].update(grp[id_col].dropna().str.strip().unique())
+            # Pre-computed store count (HDET col 33 "Total Store Apply" or "StoreCount")
+            if sc_col and sc_col in grp.columns:
+                _mx = pd.to_numeric(grp[sc_col], errors="coerce").max()
+                if not pd.isna(_mx) and _mx > 0:
+                    agg[cls_val]["max_sc"] = max(agg[cls_val]["max_sc"], int(_mx))
 
     if not agg:
         return pd.DataFrame({"ClusterName": [], "StoreCount": [],
@@ -1474,7 +1491,11 @@ def summarize_hdet_by_cluster(
     rows = [
         {
             "ClusterName":      cls_val,
-            "StoreCount":       len(v["store"] - _null),
+            # Prefer HDET's pre-computed store count (col 33 "Total Store Apply")
+            # which comes from POG_store table — includes stores without items.
+            # Fall back to COUNT DISTINCT(PG_Store_Number) from HDET rows only.
+            "StoreCount":       v["max_sc"] if v["max_sc"] > 0
+                                else len(v["store"] - _null),
             "Count of POGName": _pog_count(v),
             "ItemCount":        len(v["id"]     - _null),
         }
@@ -1690,106 +1711,6 @@ def scan_hdet_unique_vals(path: str, col_candidates: dict) -> dict:
                 seen[key].update(chunk[col].dropna().astype(str).str.strip().unique())
 
     return {key: sorted(v - {""}) for key, v in seen.items()}
-=======
-def get_dg_index(path: str) -> dict:
-    """
-    Return {dg_col, dg_name_col, codes, names, code_to_name} for a large file.
-    Uses Parquet mirror (via ensure_hdet_parquet) when available for a fast
-    column-only scan. Falls back to chunked CSV. Result JSON is saved to disk
-    and reused across app restarts — re-scans only when the source file changes.
-    """
-    import json as _json
-    _ensure_large_cache_dir()
-    file_tag  = os.path.splitext(os.path.basename(path))[0]
-    idx_file  = os.path.join(_LARGE_FILE_CACHE_DIR, f"{file_tag}__dg_index.json")
-    try:
-        file_mtime = os.path.getmtime(path)
-    except OSError:
-        return {}
-
-    # Return disk-cached index if mtime matches (survives restarts)
-    if os.path.exists(idx_file):
-        try:
-            with open(idx_file, "r", encoding="utf-8") as _f:
-                _cached = _json.load(_f)
-            if abs(_cached.get("mtime", 0) - file_mtime) < 1:
-                return _cached
-        except Exception:
-            pass
-
-    _cands_name_norm = {_re.sub(r"[^a-z0-9]", "", c.lower()) for c in DG_NAME_CANDIDATES}
-    dg_col       = None
-    dg_name_col  = None
-    code_set: set      = set()
-    code_to_name: dict = {}
-
-    # Fast path: read only needed columns from Parquet
-    pq_path = _hdet_parquet_path(path)
-    _used_parquet = False
-    if os.path.exists(pq_path) and os.path.getmtime(pq_path) >= file_mtime:
-        try:
-            import pyarrow.parquet as _pq
-            _schema = _pq.read_schema(pq_path)
-            _cols   = [f.name for f in _schema]
-            dg_col  = _find_dg_col(_cols)
-            if dg_col:
-                dg_name_col = next(
-                    (c for c in _cols if _re.sub(r"[^a-z0-9]", "", c.lower()) in _cands_name_norm), None
-                )
-                _read_cols = [dg_col] + ([dg_name_col] if dg_name_col else [])
-                _tbl = _pq.read_table(pq_path, columns=_read_cols)
-                _codes_arr = _tbl[dg_col].to_pylist()
-                code_set = {str(c).strip() for c in _codes_arr if c and str(c).strip() not in ("nan", "None", "")}
-                if dg_name_col:
-                    _names_arr = _tbl[dg_name_col].to_pylist()
-                    for c, n in zip(_codes_arr, _names_arr):
-                        cs, ns = str(c).strip(), str(n).strip()
-                        if cs and cs not in ("nan","None","") and ns not in ("nan","None",""):
-                            code_to_name.setdefault(cs, ns)
-                _used_parquet = True
-        except Exception:
-            pass
-
-    # Slow path: chunked CSV scan
-    if not _used_parquet:
-        sep, encoding, header_row = _detect_large_file_params(path)
-        for chunk in pd.read_csv(
-            path, sep=sep, encoding=encoding,
-            skiprows=header_row, header=0,
-            chunksize=LARGE_FILE_CHUNK_SIZE,
-            dtype=str, low_memory=False, on_bad_lines="skip",
-        ):
-            if dg_col is None:
-                dg_col = _find_dg_col(chunk.columns)
-                if dg_col is None:
-                    return {}
-                dg_name_col = next(
-                    (c for c in chunk.columns
-                     if _re.sub(r"[^a-z0-9]", "", c.lower()) in _cands_name_norm), None
-                )
-            codes = chunk[dg_col].astype(str).str.strip()
-            code_set.update(c for c in codes.unique() if c and c not in ("nan", "None"))
-            if dg_name_col:
-                names = chunk[dg_name_col].astype(str).str.strip()
-                for c, n in zip(codes, names):
-                    if c and c not in ("nan", "None") and n not in ("nan", "None", ""):
-                        code_to_name.setdefault(c, n)
-
-    result = {
-        "mtime":        file_mtime,
-        "dg_col":       dg_col,
-        "dg_name_col":  dg_name_col,
-        "codes":        sorted(code_set),
-        "names":        sorted(set(code_to_name.values())),
-        "code_to_name": code_to_name,
-    }
-    try:
-        with open(idx_file, "w", encoding="utf-8") as _f:
-            _json.dump(result, _f, ensure_ascii=False)
-    except Exception:
-        pass
-    return result
->>>>>>> 23daa6d634948c79f295ffa572955f0250fffda5
 
 
 def load_large_file_by_dg(path: str, dg_value: str, use_cache: bool = True) -> pd.DataFrame:

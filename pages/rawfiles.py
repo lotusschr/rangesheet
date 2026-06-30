@@ -511,6 +511,12 @@ def _render_minor():
                         "pog":   ["Name", "FP_Name", "FP Name", "FPName",
                                   "pog_name", "POGName"],
                         "id":    ["ID", "id", "Barcode", "barcode", "TPNA"],
+                        # Pre-computed store count — HDET col 33 or PBI field name
+                        "sc":    ["StoreCount", "Store Count", "store_count",
+                                  "Store_Count", "Total Store Apply",
+                                  "TotalStoreApply", "total_store_apply",
+                                  "Total_Store_Apply", "Num Stores", "NumStores",
+                                  "No of Stores", "NoOfStores"],
                     },
                     filter_cols=_sf_txt if _sf_txt else None,
                 )
@@ -654,7 +660,6 @@ def _render_minor():
                 if _row_labels:
                     _pvt = _pvt.sort_values(_row_labels[0]).reset_index(drop=True)
 
-<<<<<<< HEAD
                 _pog_cols = [c for c in _pvt.columns if c not in _row_labels]
                 _N        = len(_pog_cols)
                 _has_desc = "ProductDescription" in _pvt.columns
@@ -748,24 +753,6 @@ def _render_minor():
                 _ht.append("</tbody></table></div>")
                 st.markdown("".join(_ht), unsafe_allow_html=True)
                 st.caption(f"{len(_pvt):,} items · {_N} POGs")
-=======
-        # Empty POG-cluster columns — leave blank, to be filled from data later
-        if not _main_df.empty and _cl_col:
-            _clusters = sorted(_fdf[_cl_col].dropna().astype(str).unique())
-            if _clusters:
-                _main_df = pd.concat(
-                    [_main_df, pd.DataFrame(None, index=_main_df.index, columns=_clusters)],
-                    axis=1,
-                )
-
-        st.dataframe(
-            _dedup(_main_df),
-            use_container_width=True,
-            height=540,
-            hide_index=True,
-        )
-        st.caption(f"{len(_main_df):,} items")
->>>>>>> 23daa6d634948c79f295ffa572955f0250fffda5
 
 
 # ── Tab label list: [Minor] + one per uploaded file ───────────────────────────
