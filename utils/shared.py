@@ -2,6 +2,7 @@
 
 import streamlit as st
 import pandas as pd
+import re as _re
 import os
 import io
 import json
@@ -52,7 +53,7 @@ RS_COL_GROUPS = [
     {"group": "Range Info", "color": "#E8E3DC", "hdr_color": "#444444", "cols": [
         "AS IS planograms applied",
         "TO-BE planograms applied",
-        "AS-IS Stores Applied",
+        "AS-IS Stores applied",
         "TO-Be stores applied",
         "Avg Units 52wk/ Forecast new item sales",
         "Supplier Pack Size",
@@ -62,15 +63,14 @@ RS_COL_GROUPS = [
     {"group": "Star Line", "color": "#000000", "hdr_color": "#FFFFFF", "cols": [
         "Star Line",
     ]},
+    {"group": "Status", "color": "#B8D4E8", "hdr_color": "#1A4A6B", "cols": [
+        "Status", "Planogram Name",
+    ]},
     {"group": "Priority", "color": "#00CC44", "hdr_color": "#003300", "cols": [
         "Item Priority", "JDA vs Actual", "Actual-Actual",
     ]},
-    {"group": "Status", "color": "#F5F5F5", "hdr_color": "#555555", "cols": [
-        "Status", "Check Range To-be Waterfall",
-        "(name of the planogram+productname+store)",
-    ]},
     {"group": "Cluster Summary", "color": "#C9A0DC", "hdr_color": "#3D0070", "cols": [
-        "Cluster (Planogram name)", "To be stores applied count", "AS IS",
+        "To be stores applied count", "AS IS",
         "MODS", "Fixtures", "Range Class", "Total New SKUs", "Total Delete SKUs",
         "%Achieving CRD case (AS is)", "%Achieving LRD (AS is)",
     ]},
@@ -94,13 +94,13 @@ COLUMN_LABELS = {
     "tray total number":                         "Tray total number",
     "express picking type":                      "Express Picking Type",
     "hdet picking type":                         "HDET Picking Type",
-    "edlp price by format":                      "EDLP Price by Formate",
-    "item name":                                 "Item name",
-    "as is planograms applied":                  "As IS planograms applied",
-    "to-be planograms applied":                  "To-BE planograms applied",
-    "as-is stores applied":                      "AS-IS Store applied",
-    "to-be stores applied":                      "To-Be store applied",
-    "avg units 52wk/ forecast new item sales":   "Avg unit 52 wk/forecast new item sales",
+    "edlp price by format":                      "EDLP Price by Format",
+    "item name":                                 "Item Name",
+    "as is planograms applied":                  "AS IS planograms applied",
+    "to-be planograms applied":                  "TO-BE planograms applied",
+    "as-is stores applied":                      "AS-IS Stores applied",
+    "to-be stores applied":                      "TO-Be stores applied",
+    "avg units 52wk/ forecast new item sales":   "Avg Unit 52 wk/forecast new item sales",
     "supplier pack size":                        "Supplier pack size",
     "range tail yyyy":                           "Range Tail YYYY",
     "avg selling price by format":               "AVG selling Price by format",
@@ -110,17 +110,7 @@ COLUMN_LABELS = {
     "actual-actual":                             "Actual-Actual",
     "status":                                    "Status",
     "check range to-be waterfall":               "Check Range to be waterfall",
-    "(name of the planogram+productname+store)": "(name of the planogram+productname+store)",
-    "cluster (planogram name)":                  "Cluster (Planogram name)",
-    "to be stores applied count":                "To be stores applied count",
-    "as is":                                     "As IS",
-    "mods":                                      "MODS",
-    "fixtures":                                  "Fixtures",
-    "range class":                               "Range Class",
-    "total new skus":                            "Total New SKUS",
-    "total delete skus":                         "Total Delete SKUs",
-    "%achieving crd case (as is)":               "%Achieving CRD case (AS is)",
-    "%achieving lrd (as is)":                    "%Achieving LRD (AS is)",
+    "name":                                      "Planogram Name",
 }
 
 def normalize_col(col):
@@ -773,7 +763,7 @@ def _extract_rangesheet_meta(raw: bytes, encoding: str, header_row: int) -> dict
 COLUMN_MAPPING = {
     "dept":                                    "Department",
     "department":                              "Department",
-    "department code & desc":                  "Department",
+    "Department Code&Desc":                  "Department",
     "department code&desc":                    "Department",
     "dg code":                                 "Department",
     "dg_code":                                 "Department",
@@ -877,7 +867,38 @@ COLUMN_MAPPING = {
     "total delete skus":                       "Total Delete SKUs",
     "%achieving crd case (as is)":             "%Achieving CRD case (AS is)",
     "%achieving lrd (as is)":                  "%Achieving LRD (AS is)",
+# }
+
+# ── Column alias mapping ──────────────────────────────────────────────────────
+# COLUMN_MAPPING = {
+    # HDET → WebApp  (keys must be lowercase — apply_column_mapping does .lower() before lookup)
+    "department code&desc":          "Department",
+    "department code & desc":        "Department",
+    "section code&desc":             "Section",
+    "section code & desc":           "Section",
+    "subclass code & desc":          "Subclass",
+    "subclass code&desc":            "Subclass",
+    "upc":                           "Barcode",
+    "style number":                  "TPNA",
+    "casetotalnumber":               "No. of Unit in Case",
+    "innerqty":                      "No. of Unit in Inner",
+    "traytotalnumber":               "Tray total number",
+    "minipicktype":                  "Express Picking Type",
+    "hyper&superpickingtype":        "HDET Picking Type",
+    "edlp price":                    "EDLP Price by Format",
+    "productdescription":            "Item Name",
+    "th_tot_sales_volume_52_wk":     "Avg Units 52wk/ Forecast new item sales",
+    "forecastsales":                 "Avg Units 52wk/ Forecast new item sales",
+    "originalpacksize":              "Supplier Pack Size",
+    "starline":                      "Star Line",
+    "name":                          "Planogram Name",
 }
+
+def _norm_key(s: str) -> str:
+    return _re.sub(r'[^a-z0-9]', '', str(s).strip().lower())
+
+# สร้าง lookup แบบ normalized ไว้ล่วงหน้า
+_COLUMN_MAPPING_NORM = {_norm_key(k): v for k, v in COLUMN_MAPPING.items()}
 
 def apply_column_mapping(df: pd.DataFrame) -> pd.DataFrame:
     """Rename df columns using COLUMN_MAPPING. Skips rename if the target name
@@ -886,7 +907,7 @@ def apply_column_mapping(df: pd.DataFrame) -> pd.DataFrame:
     taken = set(df.columns)
     for col in df.columns:
         key = str(col).strip().lower()
-        target = COLUMN_MAPPING.get(key)
+        target = _COLUMN_MAPPING_NORM.get(_norm_key(col))
         if target and col != target and target not in taken:
             rename[col] = target
             taken.add(target)
@@ -1055,7 +1076,17 @@ LARGE_FILE_CHUNK_SIZE = 250_000
 # Candidate column names for the DG selector — checked in order, first
 # match found in the actual file wins. Extend this list if a new file
 # uses a different spelling.
-DG_COLUMN_CANDIDATES = ["DG_CODE", "DG_Code", "DG Code", "DG"]
+DG_COLUMN_CANDIDATES = [
+    "Display Group", "Display group", "display group",
+    "DG_CODE", "DG_Code", "DG Code", "DG",
+    "Department Code&Desc", "Department Code & Desc",
+]
+
+DG_NAME_CANDIDATES = [
+    "DG_NAME", "DG Name", "dg name", "DG_name",
+    "Department Name", "department name",
+    "Section", "section",
+]
 
 _LARGE_FILE_CACHE_DIR = os.path.join(BASE_DIR, "cache_large")
 
@@ -1065,6 +1096,62 @@ def _ensure_large_cache_dir():
         os.makedirs(_LARGE_FILE_CACHE_DIR, exist_ok=True)
     except Exception:
         pass
+
+
+def _hdet_parquet_path(csv_path: str) -> str:
+    file_tag = os.path.splitext(os.path.basename(csv_path))[0]
+    return os.path.join(_LARGE_FILE_CACHE_DIR, f"{file_tag}.parquet")
+
+
+def ensure_hdet_parquet(csv_path: str, status_cb=None) -> str | None:
+    """Convert a large CSV/TSV to Parquet once; return parquet path (or None on failure).
+    Skips conversion if an up-to-date parquet already exists.
+    status_cb(msg): optional callable for progress messages (e.g. st.status.write).
+    """
+    try:
+        import pyarrow as _pa
+        import pyarrow.parquet as _pq
+    except ImportError:
+        return None
+
+    _ensure_large_cache_dir()
+    pq_path   = _hdet_parquet_path(csv_path)
+    csv_mtime = os.path.getmtime(csv_path)
+
+    if os.path.exists(pq_path) and os.path.getmtime(pq_path) >= csv_mtime:
+        return pq_path  # already up-to-date
+
+    sep, encoding, header_row = _detect_large_file_params(csv_path)
+    tmp_path = pq_path + ".tmp"
+    writer   = None
+    try:
+        if status_cb:
+            status_cb("Converting HDET to Parquet format (one-time, saves to disk)…")
+        chunk_n = 0
+        for chunk in pd.read_csv(
+            csv_path, sep=sep, encoding=encoding,
+            skiprows=header_row, header=0,
+            chunksize=LARGE_FILE_CHUNK_SIZE,
+            dtype=str, low_memory=False, on_bad_lines="skip",
+        ):
+            table = _pa.Table.from_pandas(chunk.fillna(""), preserve_index=False)
+            if writer is None:
+                writer = _pq.ParquetWriter(tmp_path, table.schema, compression="snappy")
+            writer.write_table(table)
+            chunk_n += 1
+            if status_cb:
+                status_cb(f"  …processed {chunk_n * LARGE_FILE_CHUNK_SIZE:,} rows")
+        if writer:
+            writer.close()
+        os.replace(tmp_path, pq_path)
+        return pq_path
+    except Exception as _e:
+        if writer:
+            try: writer.close()
+            except Exception: pass
+        try: os.remove(tmp_path)
+        except Exception: pass
+        return None
 
 
 def is_large_file(path: str) -> bool:
@@ -1141,11 +1228,26 @@ def read_large_file_head(path: str, n_rows: int = 500) -> pd.DataFrame:
     return _clean_df(df)
 
 
-def get_dg_options(path: str) -> tuple:
+def _find_dg_col(columns) -> str | None:
+    """Return the DG column name from a list of columns, case-insensitive."""
+    _cands_norm = {_re.sub(r'[^a-z0-9]', '', c.strip().lower()) for c in DG_COLUMN_CANDIDATES}
+    for col in columns:
+        if _re.sub(r'[^a-z0-9]', '', col.strip().lower()) in _cands_norm:
+            return col
+    # Fallback: column whose stripped name is just "dg" or contains "display" + "group"
+    for col in columns:
+        n = _re.sub(r'[^a-z0-9]', '', col.strip().lower())
+        if n == "dg" or n == "dgcode" or "displaygroup" in n:
+            return col
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def get_dg_options(path: str, _mtime: float = 0.0) -> tuple:
     """
-    Scan a large file in chunks and return (dg_column_name, sorted unique values)
-    for populating the DG/DG_CODE dropdown on RangeSheet Review.
-    Does NOT load the full file into one DataFrame — chunked scan only.
+    Scan a large file in chunks and return (dg_column_name, sorted unique values).
+    Cached by file path + mtime — re-scans only when the file changes.
+    Pass _mtime=os.path.getmtime(path) to enable cache invalidation.
     """
     sep, encoding, header_row = _detect_large_file_params(path)
     dg_col = None
@@ -1158,17 +1260,15 @@ def get_dg_options(path: str) -> tuple:
         dtype=str, low_memory=False, on_bad_lines="skip",
     ):
         if dg_col is None:
-            for cand in DG_COLUMN_CANDIDATES:
-                if cand in chunk.columns:
-                    dg_col = cand
-                    break
+            dg_col = _find_dg_col(chunk.columns)
             if dg_col is None:
-                return None, []  # no DG-like column in this file
-        seen_values.update(chunk[dg_col].dropna().astype(str).unique())
+                return None, []
+        seen_values.update(chunk[dg_col].dropna().astype(str).str.strip().unique())
 
     return dg_col, sorted(seen_values)
 
 
+<<<<<<< HEAD
 def scan_hdet_dg_cascade(path: str, col_candidates: dict) -> dict:
     """Scan full HDET in chunks and build a cascade map keyed by DG value.
 
@@ -1590,56 +1690,171 @@ def scan_hdet_unique_vals(path: str, col_candidates: dict) -> dict:
                 seen[key].update(chunk[col].dropna().astype(str).str.strip().unique())
 
     return {key: sorted(v - {""}) for key, v in seen.items()}
+=======
+def get_dg_index(path: str) -> dict:
+    """
+    Return {dg_col, dg_name_col, codes, names, code_to_name} for a large file.
+    Uses Parquet mirror (via ensure_hdet_parquet) when available for a fast
+    column-only scan. Falls back to chunked CSV. Result JSON is saved to disk
+    and reused across app restarts — re-scans only when the source file changes.
+    """
+    import json as _json
+    _ensure_large_cache_dir()
+    file_tag  = os.path.splitext(os.path.basename(path))[0]
+    idx_file  = os.path.join(_LARGE_FILE_CACHE_DIR, f"{file_tag}__dg_index.json")
+    try:
+        file_mtime = os.path.getmtime(path)
+    except OSError:
+        return {}
+
+    # Return disk-cached index if mtime matches (survives restarts)
+    if os.path.exists(idx_file):
+        try:
+            with open(idx_file, "r", encoding="utf-8") as _f:
+                _cached = _json.load(_f)
+            if abs(_cached.get("mtime", 0) - file_mtime) < 1:
+                return _cached
+        except Exception:
+            pass
+
+    _cands_name_norm = {_re.sub(r"[^a-z0-9]", "", c.lower()) for c in DG_NAME_CANDIDATES}
+    dg_col       = None
+    dg_name_col  = None
+    code_set: set      = set()
+    code_to_name: dict = {}
+
+    # Fast path: read only needed columns from Parquet
+    pq_path = _hdet_parquet_path(path)
+    _used_parquet = False
+    if os.path.exists(pq_path) and os.path.getmtime(pq_path) >= file_mtime:
+        try:
+            import pyarrow.parquet as _pq
+            _schema = _pq.read_schema(pq_path)
+            _cols   = [f.name for f in _schema]
+            dg_col  = _find_dg_col(_cols)
+            if dg_col:
+                dg_name_col = next(
+                    (c for c in _cols if _re.sub(r"[^a-z0-9]", "", c.lower()) in _cands_name_norm), None
+                )
+                _read_cols = [dg_col] + ([dg_name_col] if dg_name_col else [])
+                _tbl = _pq.read_table(pq_path, columns=_read_cols)
+                _codes_arr = _tbl[dg_col].to_pylist()
+                code_set = {str(c).strip() for c in _codes_arr if c and str(c).strip() not in ("nan", "None", "")}
+                if dg_name_col:
+                    _names_arr = _tbl[dg_name_col].to_pylist()
+                    for c, n in zip(_codes_arr, _names_arr):
+                        cs, ns = str(c).strip(), str(n).strip()
+                        if cs and cs not in ("nan","None","") and ns not in ("nan","None",""):
+                            code_to_name.setdefault(cs, ns)
+                _used_parquet = True
+        except Exception:
+            pass
+
+    # Slow path: chunked CSV scan
+    if not _used_parquet:
+        sep, encoding, header_row = _detect_large_file_params(path)
+        for chunk in pd.read_csv(
+            path, sep=sep, encoding=encoding,
+            skiprows=header_row, header=0,
+            chunksize=LARGE_FILE_CHUNK_SIZE,
+            dtype=str, low_memory=False, on_bad_lines="skip",
+        ):
+            if dg_col is None:
+                dg_col = _find_dg_col(chunk.columns)
+                if dg_col is None:
+                    return {}
+                dg_name_col = next(
+                    (c for c in chunk.columns
+                     if _re.sub(r"[^a-z0-9]", "", c.lower()) in _cands_name_norm), None
+                )
+            codes = chunk[dg_col].astype(str).str.strip()
+            code_set.update(c for c in codes.unique() if c and c not in ("nan", "None"))
+            if dg_name_col:
+                names = chunk[dg_name_col].astype(str).str.strip()
+                for c, n in zip(codes, names):
+                    if c and c not in ("nan", "None") and n not in ("nan", "None", ""):
+                        code_to_name.setdefault(c, n)
+
+    result = {
+        "mtime":        file_mtime,
+        "dg_col":       dg_col,
+        "dg_name_col":  dg_name_col,
+        "codes":        sorted(code_set),
+        "names":        sorted(set(code_to_name.values())),
+        "code_to_name": code_to_name,
+    }
+    try:
+        with open(idx_file, "w", encoding="utf-8") as _f:
+            _json.dump(result, _f, ensure_ascii=False)
+    except Exception:
+        pass
+    return result
+>>>>>>> 23daa6d634948c79f295ffa572955f0250fffda5
 
 
 def load_large_file_by_dg(path: str, dg_value: str, use_cache: bool = True) -> pd.DataFrame:
     """
-    Filter a large file (e.g. HDET) down to rows matching a single
-    DG/DG_CODE value, reading in chunks so memory stays bounded regardless
-    of total file size. Result is cached as Parquet keyed by file + DG value,
-    so re-selecting the same DG is near-instant on subsequent loads.
+    Filter a large file down to rows matching a single DG value.
+    Fast path: filter from Parquet mirror using pyarrow (seconds).
+    Slow path: chunked CSV scan (fallback).
+    Per-DG result is also cached as Parquet for instant re-loads.
     """
     _ensure_large_cache_dir()
-    dg_value = str(dg_value)
-    file_tag = os.path.splitext(os.path.basename(path))[0]
-    cache_file = os.path.join(_LARGE_FILE_CACHE_DIR, f"{file_tag}__dg_{dg_value}.parquet")
+    dg_value       = str(dg_value).strip()
+    dg_value_upper = dg_value.upper()
+    file_tag       = os.path.splitext(os.path.basename(path))[0]
+    cache_file     = os.path.join(_LARGE_FILE_CACHE_DIR, f"{file_tag}__dg_{dg_value_upper}.parquet")
+    file_mtime     = os.path.getmtime(path)
 
-    file_mtime = os.path.getmtime(path)
-    if use_cache and os.path.exists(cache_file):
-        if os.path.getmtime(cache_file) >= file_mtime:
-            return pd.read_parquet(cache_file)
+    # Return per-DG cached parquet if still fresh
+    if use_cache and os.path.exists(cache_file) and os.path.getmtime(cache_file) >= file_mtime:
+        return _clean_df(pd.read_parquet(cache_file))
 
-    sep, encoding, header_row = _detect_large_file_params(path)
-    matched_chunks = []
-    dg_col = None
+    result = pd.DataFrame()
 
-    for chunk in pd.read_csv(
-        path, sep=sep, encoding=encoding,
-        skiprows=header_row, header=0,
-        chunksize=LARGE_FILE_CHUNK_SIZE,
-        dtype=str, low_memory=False, on_bad_lines="skip",
-    ):
-        if dg_col is None:
-            for cand in DG_COLUMN_CANDIDATES:
-                if cand in chunk.columns:
-                    dg_col = cand
-                    break
+    # Fast path: filter full Parquet with pyarrow (no full CSV re-read)
+    pq_path = _hdet_parquet_path(path)
+    if os.path.exists(pq_path) and os.path.getmtime(pq_path) >= file_mtime:
+        try:
+            import pyarrow.parquet as _pq
+            import pyarrow.compute as _pc
+            _schema  = _pq.read_schema(pq_path)
+            _cols    = [f.name for f in _schema]
+            dg_col   = _find_dg_col(_cols)
+            if dg_col:
+                _tbl   = _pq.read_table(pq_path)
+                _upper = _pc.utf8_upper(_pc.utf8_strip(_tbl[dg_col].cast("string")))
+                _mask  = _pc.equal(_upper, dg_value_upper)
+                result = _tbl.filter(_mask).to_pandas()
+        except Exception:
+            result = pd.DataFrame()
+
+    # Slow path: chunked CSV scan
+    if result.empty:
+        sep, encoding, header_row = _detect_large_file_params(path)
+        matched_chunks = []
+        dg_col = None
+        for chunk in pd.read_csv(
+            path, sep=sep, encoding=encoding,
+            skiprows=header_row, header=0,
+            chunksize=LARGE_FILE_CHUNK_SIZE,
+            dtype=str, low_memory=False, on_bad_lines="skip",
+        ):
             if dg_col is None:
-                return pd.DataFrame()
+                dg_col = _find_dg_col(chunk.columns)
+                if dg_col is None:
+                    return pd.DataFrame()
+            filtered = chunk[chunk[dg_col].astype(str).str.strip().str.upper() == dg_value_upper]
+            if not filtered.empty:
+                matched_chunks.append(filtered)
+        result = pd.concat(matched_chunks, ignore_index=True) if matched_chunks else pd.DataFrame()
 
-        filtered = chunk[chunk[dg_col].astype(str) == dg_value]
-        if not filtered.empty:
-            matched_chunks.append(filtered)
-
-    result = pd.concat(matched_chunks, ignore_index=True) if matched_chunks else pd.DataFrame()
     result = _clean_df(result)
-
     if use_cache and not result.empty:
         try:
             result.to_parquet(cache_file)
         except Exception:
             pass
-
     return result
 
 
@@ -1869,7 +2084,7 @@ def get_admin_file_entries() -> list:
 
         _mtime = os.path.getmtime(_path)
         hit    = cache.get(_name)
-        if hit and hit["mtime"] == _mtime:
+        if hit and hit["mtime"] == _mtime and "name" in hit["entry"]:
             entries.append(hit["entry"])
             continue
         try:
@@ -1948,11 +2163,6 @@ def get_shared_db():
         _s["df"] = None
         _s["files_info"] = []
         _s["manifest_sig"] = _sig
-
-    if (_s["df"] is not None and not _s["df"].empty
-            and len(_s["df"].columns) <= 2 and len(_s["df"]) > 10):
-        _s["df"] = None
-        _s["files_info"] = []
 
     if _s["df"] is None:
         _entries = get_admin_file_entries()

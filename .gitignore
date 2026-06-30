@@ -11,3 +11,5 @@ rangesheet_data/merged/
 *.csv
 /utils/__pycache__/*
 *.pyc
+/.idea
+/utils/__pycache__
