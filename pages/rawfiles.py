@@ -368,8 +368,11 @@ def _render_minor():
         # Empty POG-cluster columns — leave blank, to be filled from data later
         if not _main_df.empty and _cl_col:
             _clusters = sorted(_fdf[_cl_col].dropna().astype(str).unique())
-            for _c in _clusters:
-                _main_df[_c] = None
+            if _clusters:
+                _main_df = pd.concat(
+                    [_main_df, pd.DataFrame(None, index=_main_df.index, columns=_clusters)],
+                    axis=1,
+                )
 
         st.dataframe(
             _dedup(_main_df),
