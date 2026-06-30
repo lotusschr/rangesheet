@@ -1,4 +1,4 @@
-"""Rangesheet review page — sheet tabs, Range Architecture card, data table."""
+"""View Data page — sheet tabs, Range Architecture card, data table."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -9,17 +9,11 @@ import re as _re
 from datetime import datetime
 from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
-    RS_SHEETS, RS_COL_GROUPS, STATUS_COLORS, FILL_COLORS, COLUMN_LABELS, COLUMN_MAPPING,
+    RS_SHEETS, RS_COL_GROUPS, STATUS_COLORS, FILL_COLORS, COLUMN_LABELS,
     get_fill, df_to_xlsx_bytes, df_to_csv_bytes, add_audit,
     get_shared_db,
-<<<<<<< HEAD
     load_large_file_by_dg, read_large_file_head, load_admin_file_df,
     is_large_file, BASE_DIR, load_admin_manifest, scan_hdet_dg_cascade,
-=======
-    load_large_file_by_dg, get_dg_options, get_dg_index, ensure_hdet_parquet,
-    is_large_file, BASE_DIR, load_admin_manifest, read_large_file_head,
-    apply_column_mapping, DG_COLUMN_CANDIDATES,
->>>>>>> 23daa6d634948c79f295ffa572955f0250fffda5
 )
 
 inject_css()
@@ -40,11 +34,6 @@ if selected_files and _user_upload is not None and len(_user_upload) > 0:
 else:
     merged = _shared_df
 
-# Re-apply column mapping here so that files already in session state (uploaded
-# before the mapping was updated) are also correctly renamed without re-upload.
-if merged is not None and len(merged) > 0:
-    merged = apply_column_mapping(merged)
-
 # Treat both None AND empty DataFrame as "no data"
 _no_data = merged is None or (hasattr(merged, "__len__") and len(merged) == 0)
 
@@ -57,6 +46,17 @@ if _no_data:
     <div style="font-size:13px;color:#999;">Go to My Files and upload a file first.</div>
 </div>
 """, unsafe_allow_html=True)
+
+    # Show zeroed metrics so the page feels stable (no disappearing UI)
+    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Total SKUs",  "0")
+    m2.metric("MAINTAIN",    "0")
+    m3.metric("SSPOG",       "0")
+    m4.metric("Non-SSPOG",   "0")
+    m5.metric("Null Values", "0")
+
+    render_page_nav("viewdata")   # ← nav still renders
     st.stop()
 
 # Deduplicate column names in the merged df so Arrow / Streamlit never crashes.
@@ -90,14 +90,6 @@ def _cast_text_cols(df: pd.DataFrame, text_cols: list) -> pd.DataFrame:
             df[c] = df[c].where(df[c].isna(), df[c].astype(str))
     return df
 
-# Columns that should default to 0 (not blank) when not present in the source file.
-_ZERO_DEFAULT_COLS = {
-    _nca("AS IS planograms applied"),
-    _nca("TO-BE planograms applied"),
-    _nca("AS-IS Stores Applied"),
-    _nca("TO-Be stores applied"),
-}
-
 def _fill_from_db(col_list: list, source_df) -> pd.DataFrame:
     """Build a DataFrame matching col_list by scanning source_df for same-named columns."""
     if source_df is None or len(source_df) == 0:
@@ -109,9 +101,7 @@ def _fill_from_db(col_list: list, source_df) -> pd.DataFrame:
         return pd.DataFrame(columns=col_list)
     n = len(source_df)
     result = {col: (source_df[col_map[col]].reset_index(drop=True)
-                    if col_map[col]
-                    else pd.Series([0] * n) if _nca(col) in _ZERO_DEFAULT_COLS
-                    else pd.Series([None] * n))
+                    if col_map[col] else pd.Series([None] * n))
               for col in col_list}
     df = pd.DataFrame(result)
     # Drop rows where every matched column is null
@@ -343,25 +333,15 @@ if _live_type == "Refresh":
     render_page_nav("viewdata")
     st.stop()
 
-def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_options=None):
-    """Full All Data + New Canvas tab pair, keyed with prefix p.
-    dg_col_hint    : raw DG column name — shown as first column in Table view.
-    large_file_path: when set, DG code search loads the full slice from this file.
-    dg_options     : list of known DG codes — renders a searchable combobox instead of text input."""
+def _render_sheet_content(df_src, p):
+    """Full All Data + New Canvas tab pair, keyed with prefix p."""
     _src_cols = list(df_src.columns)
     _meta = st.session_state.rangesheet_meta
 
-    # Build column lookups from df_src directly — not from the module-level
-    # merged/all_cols — so this works correctly when df_src is HDET or any
-    # other file with different column names than merged.
-    _s_dcm  = {_nc(c): c for c in _src_cols}
-    _s_dcm2 = {_nca(c): c for c in _src_cols}
-    def _src_fc(key):
-        return _s_dcm.get(_nc(key)) or _s_dcm2.get(_nca(key))
-
+    # column-group helpers scoped to df_src (columns are same as merged)
     _sag = []
     for _grp in RS_COL_GROUPS:
-        _gm = [_src_fc(k) for k in _grp["cols"] if _src_fc(k) is not None]
+        _gm = [_fc(k) for k in _grp["cols"] if _fc(k) is not None]
         if _gm:
             _sag.append({**_grp, "matched": _gm})
     _sag_flat = [c for g in _sag for c in g["matched"]]
@@ -376,7 +356,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
     with _tab_all:
         _dg_code_col = (
             next((c for c in _src_cols if _nc(c) in ("dg code", "dg_code", "dg")), None)
-            or next((c for c in _src_cols if _nca(c) in [_nca(x) for x in DG_COLUMN_CANDIDATES]), None)
             or next((c for c in _src_cols if "dg" in _nc(c) and "code" in _nc(c)), None)
             or next((c for c in _src_cols if "department" in _nc(c)), None)
         )
@@ -396,18 +375,9 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         letter-spacing:.08em;margin-bottom:10px;">Display Group</div></div>""",
                 unsafe_allow_html=True)
             with st.container():
-                _ALL_OPT = "— All (preview 500 rows) —"
-                if dg_options:
-                    _dg_combo_opts = [_ALL_OPT] + list(dg_options)
-                    _dg_combo_val  = st.selectbox(
-                        "Search DG Code", _dg_combo_opts,
-                        key=f"{p}_dg_code", label_visibility="visible",
-                    )
-                    _sel_dg_code = "" if _dg_combo_val == _ALL_OPT else _dg_combo_val
-                else:
-                    _sel_dg_code = st.text_input(
-                        "Search DG Code", placeholder="Type DG code to filter…",
-                        key=f"{p}_dg_code", label_visibility="visible")
+                _sel_dg_code = st.text_input(
+                    "Search DG Code", placeholder="Type DG code to filter…",
+                    key=f"{p}_dg_code", label_visibility="visible")
                 if _dg_code_col and _dg_name_col and _sel_dg_code:
                     _ns = df_src[df_src[_dg_code_col].astype(str).str.contains(_sel_dg_code, case=False, na=False)]
                     _dg_name_opts = ["ALL"] + sorted(_ns[_dg_name_col].dropna().astype(str).str.strip().unique().tolist())
@@ -625,48 +595,23 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             return  # exit only this function, not the whole page
 
         # Filter + search
-        _pog_c  = next((c for c in _src_cols if "pog" in c.lower() and "cluster" in c.lower()), None)
-
-        if _sel_dg_code and large_file_path:
-            # Search full HDET file — the 500-row preview may not contain this DG
-            _q   = _sel_dg_code.strip()
-            _sig = f"{large_file_path}|{_q.upper()}"
-            _sk  = f"{p}_dg_search_sig"
-            _dk  = f"{p}_dg_search_df"
-            if st.session_state.get(_sk) != _sig:
-                with st.spinner(f"Searching entire HDET for DG '{_q}'…"):
-                    _result = load_large_file_by_dg(large_file_path, _q)
-                st.session_state[_sk] = _sig
-                st.session_state[_dk] = _result
-            df_view = st.session_state[_dk].copy()
-            st.caption(f"🔍 Found **{len(df_view):,} rows** matching DG = '{_q}' (full file search)")
-        else:
-            df_view = df_src.copy()
-            if _sel_dg_code:
-                _q = _sel_dg_code.strip()
-                if _dg_code_col and _dg_code_col in df_view.columns:
-                    df_view = df_view[
-                        df_view[_dg_code_col].astype(str).str.strip()
-                        .str.contains(_q, case=False, na=False)
-                    ]
-                else:
-                    df_view = df_view[df_view.apply(
-                        lambda r: r.astype(str).str.contains(_q, case=False, na=False).any(), axis=1)]
-
+        df_view = df_src.copy()
+        _pog_c = next((c for c in _src_cols if "pog" in c.lower() and "cluster" in c.lower()), None)
+        if _sel_dg_code and _dg_code_col and _dg_code_col in df_view.columns:
+            df_view = df_view[df_view[_dg_code_col].astype(str).str.contains(_sel_dg_code, case=False, na=False)]
         if _sel_dg_name != "ALL" and _dg_name_col and _dg_name_col in df_view.columns:
             df_view = df_view[df_view[_dg_name_col].astype(str).str.strip() == _sel_dg_name]
         if _search_q:
-            df_view = df_view[df_view.apply(
-                lambda r: r.astype(str).str.contains(_search_q, case=False, na=False).any(), axis=1)]
+            df_view = df_view[df_view.apply(lambda r: r.astype(str).str.contains(_search_q, case=False, na=False).any(), axis=1)]
         df_view = df_view.reset_index(drop=True)
 
-        # _m_maintain = int((df_view[_stc].astype(str).str.strip()=="MAINTAIN").sum()) if _stc else 0
-        # _m_sspog    = int(df_view[_pog_c].astype(str).str.contains("SSPOG",na=False).sum() - df_view[_pog_c].astype(str).str.contains("Non-SSPOG",na=False).sum()) if _pog_c else 0
-        # _m_nonsspog = int(df_view[_pog_c].astype(str).str.contains("Non-SSPOG",na=False).sum()) if _pog_c else 0
-        # _m_null     = int(df_view[disp_cols].isnull().sum().sum())
-        # m1,m2,m3,m4,m5 = st.columns(5)
-        # m1.metric("Total SKUs",f"{len(df_view):,}"); m2.metric("MAINTAIN",f"{_m_maintain:,}")
-        # m3.metric("SSPOG",f"{_m_sspog:,}"); m4.metric("Non-SSPOG",f"{_m_nonsspog:,}"); m5.metric("Null Values",f"{_m_null:,}")
+        _m_maintain = int((df_view[_stc].astype(str).str.strip()=="MAINTAIN").sum()) if _stc else 0
+        _m_sspog    = int(df_view[_pog_c].astype(str).str.contains("SSPOG",na=False).sum() - df_view[_pog_c].astype(str).str.contains("Non-SSPOG",na=False).sum()) if _pog_c else 0
+        _m_nonsspog = int(df_view[_pog_c].astype(str).str.contains("Non-SSPOG",na=False).sum()) if _pog_c else 0
+        _m_null     = int(df_view[disp_cols].isnull().sum().sum())
+        m1,m2,m3,m4,m5 = st.columns(5)
+        m1.metric("Total SKUs",f"{len(df_view):,}"); m2.metric("MAINTAIN",f"{_m_maintain:,}")
+        m3.metric("SSPOG",f"{_m_sspog:,}"); m4.metric("Non-SSPOG",f"{_m_nonsspog:,}"); m5.metric("Null Values",f"{_m_null:,}")
 
         # ── Cluster summary demo (always visible, left panel) ─────────────────
         _demo_rows_cl = [
@@ -717,8 +662,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             # Fixed predefined column structure — headers never change.
             # Data is pulled from df_view by _nca() name matching; empty where no match.
             _std_all = [c for grp in RS_COL_GROUPS for c in grp["cols"]]
-
-            df_view = df_view.rename(columns=lambda c: COLUMN_MAPPING.get(_nca(c), c))
             _t_col_map = {
                 sc: next((c for c in df_view.columns if _nca(c) == _nca(sc)), None)
                 for sc in _std_all
@@ -734,16 +677,11 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 if isinstance(s, pd.DataFrame):   # duplicate col names → take first
                     s = s.iloc[:, 0]
                 return s.iloc[:n].reset_index(drop=True)
-            _STATUS_COL_NCA = _nca("Status")
             _tdf = pd.DataFrame({
                 sc: (_safe_col(df_view, _t_col_map[sc], _n)
-                     if _t_col_map.get(sc)
-                     else pd.Series([0] * _n) if _nca(sc) in _ZERO_DEFAULT_COLS
-                     else pd.Series(["MAINTAIN"] * _n) if _nca(sc) == _STATUS_COL_NCA
-                     else pd.Series([""] * _n))
+                     if _t_col_map.get(sc) else pd.Series([""] * _n))
                 for sc in _std_all
             })
-<<<<<<< HEAD
             # ── Append POG columns from A5 to the same table ─────────────────
             _twf_a5 = st.session_state.get(f"_wf_ext_a5_{p}")
             _twf_pog_col = None
@@ -851,98 +789,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 st.caption(f"Showing {_MAX:,} of {len(df_view):,} rows — increase Rows to see more")
             else:
                 st.caption(f"{len(df_view):,} rows · {len(_tdf_clean.columns) + 2 + len(_twf_pog_names)} columns")
-=======
-            # Prepend DG Code as first column if available
-            _dg_raw_col = next(
-                (c for c in df_view.columns if dg_col_hint and _nca(c) == _nca(dg_col_hint)), None
-            ) if dg_col_hint else None
-            if _dg_raw_col and "DG Code" not in _tdf.columns:
-                _tdf.insert(0, "DG Code", _safe_col(df_view, _dg_raw_col, _n))
-
-            # Dynamic planogram columns: one column per unique NAME — no count limit
-            _pog_src_col = _t_col_map.get("Planogram Name") or next(
-                (c for c in df_view.columns if _nca(c) in ("name","planogramname","pogname","planogram")), None
-            )
-            _dyn_pog_cols = []
-            if _pog_src_col:
-                _pog_vals = df_view.iloc[:_n][_pog_src_col].astype(str).str.strip().reset_index(drop=True)
-                _dyn_pog_cols = sorted(v for v in _pog_vals.unique() if v and v not in ("nan","None",""))
-                if "Planogram Name" in _tdf.columns:
-                    _tdf = _tdf.drop(columns=["Planogram Name"])
-                for _pog in _dyn_pog_cols:
-                    _tdf[_pog] = (_pog_vals == _pog).map({True: "✓", False: ""})
-
-            # Column ordering: sticky left | data cols | Status | planogram cols rightmost
-            _STICKY      = [c for c in ["DG Code", "ID", "Item Name"] if c in _tdf.columns]
-            _dyn_pog_set = set(_dyn_pog_cols)
-            _LAST        = [c for c in ["Status", "Planogram Name"] if c in _tdf.columns] + _dyn_pog_cols
-            _REST        = [c for c in _tdf.columns if c not in _STICKY and c not in set(_LAST)]
-            _tdf         = _tdf[_STICKY + _REST + _LAST]
-
-            # Column pixel widths for sticky left-offset calculation
-            _COL_W  = {"DG Code": 130, "ID": 90, "Item Name": 210}
-            _s_left, _s_lefts = 0, {}
-            for _sc in _STICKY:
-                _s_lefts[_sc] = _s_left
-                _s_left += _COL_W.get(_sc, 130)
-
-            # Render HTML table — use numpy array for fast cell access
-            _HDR_BG  = "#D9D9D9"
-            _STK_BG  = "#F7F5F2"
-            _CELL_H  = "padding:5px 10px;border:1px solid #E0D9D2;font-size:11px;white-space:nowrap;"
-            _col_list = list(_tdf.columns)
-            _arr      = _tdf.fillna("").astype(str).values
-            _th_list, _rows = [], []
-            for _ci, _col in enumerate(_col_list):
-                if _col in _STICKY:
-                    _lx = _s_lefts[_col]
-                    _w  = _COL_W.get(_col, 130)
-                    _th_list.append(
-                        f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
-                        f'{_CELL_H}font-weight:700;min-width:{_w}px;">{_col}</th>')
-                elif _col in _dyn_pog_set:
-                    _th_list.append(
-                        f'<th style="background:{_HDR_BG};border:1px solid #E0D9D2;'
-                        f'width:36px;min-width:36px;max-width:36px;height:130px;'
-                        f'padding:0;text-align:center;vertical-align:middle;overflow:visible;">'
-                        f'<span style="display:inline-block;transform:rotate(-90deg);'
-                        f'white-space:nowrap;font-size:11px;font-weight:700;">{_col}</span></th>')
-                else:
-                    _th_list.append(
-                        f'<th style="background:{_HDR_BG};{_CELL_H}font-weight:700;min-width:80px;">{_col}</th>')
-            for _ri in range(len(_tdf)):
-                _row_h = []
-                _rb = "#FFFFFF" if _ri % 2 == 0 else "#FAFAF8"
-                for _ci, _col in enumerate(_col_list):
-                    _vs = _arr[_ri, _ci]
-                    if _vs in ("nan", "None"):
-                        _vs = ""
-                    if _col in _STICKY:
-                        _lx = _s_lefts[_col]
-                        _row_h.append(
-                            f'<td style="position:sticky;left:{_lx}px;z-index:2;background:{_STK_BG};'
-                            f'{_CELL_H}">{_vs}</td>')
-                    elif _col in _dyn_pog_set:
-                        _row_h.append(
-                            f'<td style="background:{_rb};border:1px solid #E0D9D2;'
-                            f'width:36px;text-align:center;font-size:13px;padding:4px 0;">{_vs}</td>')
-                    else:
-                        _row_h.append(f'<td style="background:{_rb};{_CELL_H}">{_vs}</td>')
-                _rows.append(f'<tr>{"".join(_row_h)}</tr>')
-            _html_tbl = (
-                '<div style="overflow-x:auto;border-radius:10px;border:1px solid #E0D9D2;'
-                'max-height:560px;overflow-y:auto;">'
-                '<table style="border-collapse:collapse;font-size:11px;min-width:100%;">'
-                f'<thead style="position:sticky;top:0;z-index:4;"><tr>{"".join(_th_list)}</tr></thead>'
-                f'<tbody>{"".join(_rows)}</tbody>'
-                '</table></div>'
-            )
-            st.markdown(_html_tbl, unsafe_allow_html=True)
-            if len(df_view) > _MAX:
-                st.caption(f"Showing {_MAX:,} of {len(df_view):,} rows — increase Rows to see more")
-            else:
-                st.caption(f"{len(df_view):,} rows · {len(_tdf.columns)} columns")
->>>>>>> 23daa6d634948c79f295ffa572955f0250fffda5
 
         # ── Cluster ───────────────────────────────────────────────────────────
         elif _subview == "🏪 Cluster":
@@ -957,30 +803,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                  ("%Achieving LRD SALES (As Is)","#FFFFFF","#000000")]
             _DRC={r:(bg,tc) for r,bg,tc in _DM}
             _kc=f"{p}_ct_cls"; _kd=f"{p}_ct_dat"; _kr=f"{p}_ct_clr"
-            # Pull unique POG Cluster Mod Fixture values from data to use as cluster columns
-            _pog_name_col = next(
-                (c for c in df_view.columns if _nca(c) == _nca("POG Cluster Mod Fixture")),
-                None
-            ) or next(
-                (c for c in df_view.columns if "pogcluster" in _nca(c) or ("cluster" in _nca(c) and "mod" in _nca(c))),
-                None
-            )
-            _auto_clusters = (
-                sorted(df_view[_pog_name_col].dropna().astype(str).str.strip()
-                       .replace("", pd.NA).dropna().unique().tolist())
-                if _pog_name_col else []
-            )
-            # Reset cluster columns/data when DG filter changes
-            _dg_filter_sig = f"{_sel_dg_code}|{_sel_dg_name}"
-            _dg_sig_key = f"{p}_ct_dg_sig"
-            _filter_changed = st.session_state.get(_dg_sig_key) != _dg_filter_sig
-            if _filter_changed:
-                st.session_state[_dg_sig_key] = _dg_filter_sig
-                st.session_state[_kc] = _auto_clusters[:]
-                st.session_state[_kd] = {r: {} for r, _, _ in _DM}
-                st.session_state[_kr] = dict(_DRC)
-            elif _kc not in st.session_state:
-                st.session_state[_kc] = _auto_clusters[:]
+            if _kc not in st.session_state: st.session_state[_kc]=[]
             if _kd not in st.session_state: st.session_state[_kd]={r:{} for r,_,_ in _DM}
             if _kr not in st.session_state: st.session_state[_kr]=dict(_DRC)
             _tb1,_tb2,_tb3,_tb4,_tb5=st.columns([3.2,1.1,1.0,0.9,0.8])
@@ -1001,23 +824,38 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     st.session_state[f"{p}_ct_inp"]=""; st.rerun()
             with _tb4:
                 if st.button("↺ Reset",key=f"{p}_ct_reset",use_container_width=True):
-                    st.session_state[_kc]=_auto_clusters[:]
-                    st.session_state[_kd]={r:{} for r,_,_ in _DM}
+                    st.session_state[_kc]=[]; st.session_state[_kd]={r:{} for r,_,_ in _DM}
                     st.session_state[_kr]=dict(_DRC); st.rerun()
             with _tb5: _em=st.toggle("✏️ Edit",key=f"{p}_ct_edit")
             _clsx=st.session_state[_kc]; _rowsx=list(st.session_state[_kd].keys())
             if not _em:
+                _ph=['<div style="overflow-x:auto;border-radius:10px;border:1px solid #CCC;margin-top:12px;">',
+                     '<table style="border-collapse:collapse;font-size:12px;min-width:100%;"><thead><tr>',
+                     '<th style="background:#FFD700;color:#000;font-weight:800;padding:14px 18px;'
+                     'border:1px solid #BBB;text-align:left;min-width:230px;font-size:13px;">POG Cluster</th>']
                 if _clsx:
-                    _vdf = pd.DataFrame(
-                        [{"POG Cluster": _rn,
-                          **{_c: (lambda v: None if v is None or str(v) in ("nan","None","") else v)(
-                              st.session_state[_kd].get(_rn, {}).get(_c, ""))
-                             for _c in _clsx}}
-                         for _rn in _rowsx]
-                    )
-                    st.dataframe(_vdf, use_container_width=True, hide_index=True, height=420)
+                    for _c in _clsx:
+                        _ph.append(f'<th style="background:#FFD700;color:#000;font-weight:700;padding:10px 14px;'
+                                   f'border:1px solid #BBB;text-align:center;min-width:100px;white-space:nowrap;">{_c}</th>')
                 else:
-                    st.info("No cluster columns found in data. Add columns using the input above ↑")
+                    _ph.append('<th style="background:#FFD700;color:#888;padding:10px 14px;border:1px solid #BBB;'
+                               'font-size:11px;font-style:italic;min-width:260px;">Add cluster columns using the input above ↑</th>')
+                _ph.append('</tr></thead><tbody>')
+                for _rn in _rowsx:
+                    _rbg,_rtc=st.session_state[_kr].get(_rn,("#FFFFFF","#000000"))
+                    _ph.append(f'<tr><td style="background:{_rbg};color:{_rtc};font-weight:600;'
+                               f'padding:8px 18px;border:1px solid #CCC;white-space:nowrap;">{_rn}</td>')
+                    if _clsx:
+                        for _c in _clsx:
+                            _v=st.session_state[_kd].get(_rn,{}).get(_c,"")
+                            _v="" if _v is None or str(_v) in ("nan","None") else str(_v)
+                            _ph.append(f'<td style="background:{_rbg};color:{_rtc};padding:8px 12px;'
+                                       f'border:1px solid #CCC;text-align:center;">{_v}</td>')
+                    else:
+                        _ph.append(f'<td style="background:{_rbg};padding:8px 12px;border:1px solid #CCC;"></td>')
+                    _ph.append('</tr>')
+                _ph.append('</tbody></table></div>')
+                st.markdown(''.join(_ph),unsafe_allow_html=True)
             else:
                 _er=[{"POG Cluster":r,**{c:st.session_state[_kd].get(r,{}).get(c,"") for c in _clsx}} for r in _rowsx]
                 _edf=pd.DataFrame(_er) if _er else pd.DataFrame(columns=["POG Cluster"]+_clsx)
@@ -1114,10 +952,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _df_sig = (tuple(_fdf.columns.tolist()), len(_fdf), tuple(_pog_cols))
                 _prev_sig = st.session_state.get(f"{p}_wf_sig")
 
-<<<<<<< HEAD
-=======
-                # Re-build whenever data or filter changes
->>>>>>> 23daa6d634948c79f295ffa572955f0250fffda5
                 if _wf_key not in st.session_state or _prev_sig != _df_sig:
                     _cr_vals = _fdf[_cr_col].tolist() if _cr_col else [None] * len(_fdf)
                     _wf_init = {
@@ -1137,8 +971,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     st.session_state[_wf_key] = _new_wf
                     st.session_state[f"{p}_wf_sig"] = _df_sig
 
+                # ── Excel-like HTML display ───────────────────────────────────
                 _wf_df = st.session_state[_wf_key]
-<<<<<<< HEAD
                 _EXCEL_COLORS = {
                     "MAINTAIN":        {"bg": "#D9D9D9", "c": "#000000"},
                     "NEW SOME":        {"bg": "#00B050", "c": "#FFFFFF"},
@@ -1192,23 +1026,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _sh.append('</tr>')
                 _sh.append('</tbody></table></div>')
                 st.markdown(''.join(_sh), unsafe_allow_html=True)
-=======
-                if _cr_col:
-                    st.caption(f"Auto-filled from column: **{_cr_col}** · {len(_wf_df):,} rows")
-
-                # ── Interactive table (sortable + filterable) ─────────────────
-                st.dataframe(
-                    _wf_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=460,
-                    column_config={
-                        "Status": st.column_config.TextColumn("Status", width="medium"),
-                        "Check Range To-be Waterfall": st.column_config.NumberColumn(
-                            "Check Range To-be Waterfall", width="large"),
-                    },
-                )
->>>>>>> 23daa6d634948c79f295ffa572955f0250fffda5
 
                 # ── Edit / refresh toolbar ────────────────────────────────────
                 st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
@@ -1426,113 +1243,6 @@ st.session_state["vw_hdet_sel_div"] = _sel_hf_div
 
 # ── Sheet tabs (scrollable via st.tabs) ───────────────────────────────────────
 _sheet_tabs = st.tabs(RS_SHEETS)
-
-
-with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
-    # ── Step 1: Find pinned HDET (large) and A5 files ────────────────────────
-    _ns_hdet_path = None
-    _ns_a5_name   = None
-    for _nsmeta in load_admin_manifest():
-        _nsp = os.path.join(BASE_DIR, "uploads", _nsmeta["name"])
-        if not os.path.exists(_nsp):
-            continue
-        if "hdet" in _nsmeta["name"].lower() and is_large_file(_nsp):
-            _ns_hdet_path = _nsp
-        elif "a5" in _nsmeta["name"].lower() and not is_large_file(_nsp):
-            _ns_a5_name = _nsmeta["name"]
-
-    # ── Step 2: Auto-load HDET preview (500 rows) once per session ───────────
-    if _ns_hdet_path and "ns_hdet_df" not in st.session_state:
-        with st.spinner("Loading HDET preview (500 rows)…"):
-            st.session_state.ns_hdet_df = read_large_file_head(_ns_hdet_path, n_rows=500)
-        st.session_state["_ns_hdet_src"] = "HDET preview (500 rows)"
-
-
-
-    # ── HDET controls: DG dropdown + Load button ──────────────────────────────
-    if _ns_hdet_path:
-        _ns_hfname  = os.path.basename(_ns_hdet_path)
-        _ns_src_lbl = st.session_state.get("_ns_hdet_src", "")
-
-        # Status bar
-        _info_parts = [f"HDET: <strong>{_ns_hfname}</strong>"]
-        if _ns_src_lbl:
-            _info_parts.append(_ns_src_lbl)
-        if _ns_a5_name:
-            _info_parts.append(f"A5: <strong>{_ns_a5_name}</strong>")
-        st.markdown(
-            "<div style='font-size:11px;color:#2BBFA4;margin-bottom:6px;'>"
-            + " · ".join(_info_parts) + "</div>",
-            unsafe_allow_html=True,
-        )
-
-        # Step 1: Convert HDET CSV → Parquet once (makes all future ops much faster)
-        if "ns_pq_ready" not in st.session_state:
-            with st.status("Preparing HDET for fast access…", expanded=True) as _st:
-                _pq = ensure_hdet_parquet(_ns_hdet_path, status_cb=_st.write)
-                if _pq:
-                    _st.write("✅ Parquet ready — future loads will be instant.")
-                else:
-                    _st.write("⚠️ Parquet conversion unavailable (pyarrow not installed); using CSV.")
-            st.session_state["ns_pq_ready"] = True
-
-        # Step 2: Build DG index — reads from Parquet (fast) or CSV; result saved to disk JSON
-        if "ns_dg_index" not in st.session_state:
-            with st.spinner("Building DG dropdown index (one-time, saved to disk)…"):
-                _ns_idx = get_dg_index(_ns_hdet_path)
-            st.session_state["ns_dg_index"] = _ns_idx
-        _ns_idx = st.session_state["ns_dg_index"]
-
-        _ns_codes        = _ns_idx.get("codes", [])
-        _ns_names        = _ns_idx.get("names", [])
-        _ns_code_to_name = _ns_idx.get("code_to_name", {})
-        _ns_name_to_code = {v: k for k, v in _ns_code_to_name.items()}
-
-        # DG Code + DG Name dropdowns
-        _dg_c1, _dg_c2, _dg_c3 = st.columns([2, 2, 1])
-        _ALL = "— All (preview) —"
-        with _dg_c1:
-            _ns_sel_code = st.selectbox(
-                "DG Code", [_ALL] + _ns_codes,
-                key="ns_sel_dg_code", label_visibility="visible")
-        with _dg_c2:
-            _ns_sel_name = st.selectbox(
-                "DG Name", [_ALL] + _ns_names,
-                key="ns_sel_dg_name", label_visibility="visible")
-        with _dg_c3:
-            st.write("")
-            _ns_load_btn = st.button("Load", key="ns_load_dg2",
-                                     use_container_width=True, type="primary")
-            if st.button("↺ Reset", key="ns_reset_dg2", use_container_width=True):
-                for _k in ["ns_hdet_df", "_ns_hdet_src", "ns_lf_dg_sig"]:
-                    st.session_state.pop(_k, None)
-                st.rerun()
-
-        # Resolve: if DG Name picked, map to code
-        _ns_dg_query = None
-        if _ns_sel_code != _ALL:
-            _ns_dg_query = _ns_sel_code
-        elif _ns_sel_name != _ALL:
-            _ns_dg_query = _ns_name_to_code.get(_ns_sel_name, _ns_sel_name)
-
-        if _ns_load_btn and _ns_dg_query:
-            _sig = f"{_ns_hdet_path}|{_ns_dg_query}"
-            if st.session_state.get("ns_lf_dg_sig") != _sig:
-                with st.spinner(f"Loading DG '{_ns_dg_query}' from HDET…"):
-                    _loaded = load_large_file_by_dg(_ns_hdet_path, _ns_dg_query)
-                st.session_state["ns_hdet_df"]   = _loaded
-                st.session_state["_ns_hdet_src"] = f"DG = {_ns_dg_query} ({len(_loaded):,} rows)"
-                st.session_state["ns_lf_dg_sig"] = _sig
-                st.rerun()
-
-    # Use HDET data only — fall back to merged if HDET not loaded yet
-    _ns_hdet_df = st.session_state.get("ns_hdet_df")
-    _ns_combined = _dedup(_ns_hdet_df.copy()) if _ns_hdet_df is not None else merged
-    _ns_idx = st.session_state.get("ns_dg_index", {})
-    _render_sheet_content(_ns_combined, "ns",
-                          dg_col_hint=_ns_idx.get("dg_col"),
-                          large_file_path=_ns_hdet_path,
-                          dg_options=_ns_idx.get("codes", []))
 
 with _sheet_tabs[1]:   # Range Sheet_SSPOG
     _render_sheet_content(_sspog_df, "ss")
@@ -2033,7 +1743,6 @@ with _sheet_tabs[6]:   # 5.4 Upload to Citrix
     if st.session_state.get("vw_submit_54") is not None:
         st.caption(f"✅ {len(st.session_state['vw_submit_54']):,} rows submitted to Report")
 
-<<<<<<< HEAD
 with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
     # HDET column remapping is handled by COLUMN_MAPPING in shared.py.
     # Version suffix forces reload when mappings change.
@@ -2144,8 +1853,6 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
     _render_sheet_content(_ns_combined, "ns")
 
 
-=======
->>>>>>> 23daa6d634948c79f295ffa572955f0250fffda5
 if False:
     _meta = st.session_state.rangesheet_meta
 
@@ -2529,44 +2236,38 @@ if False:
 
         # ── Hardcoded 24-column spec: (display label, [candidate data-col names])
         _VIEW_SPECS = [
-            ("Department",                             ["Department", "Dept", "Department Code&Desc", "Department Code & Desc", "department_code_desc"]),
-            ("Section",                                ["Section", "section", "Section Code&Desc", "Section Code & Desc"]),
-            ("Subclass",                               ["Subclass", "SubClass", "Sub Class", "subclass", "Subclass Code & Desc", "Subclass Code&Desc"]),
+            ("Department",                             ["Department", "Dept", "Department Code&Desc", "department_code_desc"]),
+            ("Section",                                ["Section", "section"]),
+            ("Subclass",                               ["Subclass", "SubClass", "Sub Class", "subclass"]),
             ("Barcode",                                ["Barcode", "barcode", "UPC", "EAN", "ean"]),
-            ("TPNA",                                   ["TPNA", "tpna", "Style Number"]),
+            ("TPNA",                                   ["TPNA", "tpna"]),
             ("ID",                                     ["ID", "id", "Item ID", "ItemID"]),
-            ("No. of Unit in Case",                    ["No. of Unit in Case", "No_of_Unit_in_Case", "Units Per Case", "Case Units", "no of unit in case", "CaseTotalNumber"]),
-            ("No. of Unit in Inner",                   ["No. of Unit in Inner", "No_of_Unit_in_Inner", "no of unit in inner", "InnerQty"]),
-            ("Tray total number",                      ["Tray total number", "Tray_total_number", "Tray Total Number", "tray total", "TrayTotalNumber"]),
-            ("Express Picking Type",                   ["Express Picking Type", "Express_Picking_Type", "express picking type", "MiniPickType"]),
-            ("HDET Picking Type",                      ["HDET Picking Type", "HDET_Picking_Type", "hdet picking type", "Hyper&SuperPickingType"]),
-            ("EDLP Price by Format",                   ["EDLP Price by Format", "EDLP_Price_by_Format", "edlp price by format", "EDLP Price"]),
-            ("Item Name",                              ["Item Name", "Item name", "item name", "ProductDescription"]),
+            ("No. of Unit in Case",                    ["No. of Unit in Case", "No_of_Unit_in_Case", "Units Per Case", "Case Units", "no of unit in case"]),
+            ("No. of Unit in Inner",                   ["No. of Unit in Inner", "No_of_Unit_in_Inner", "no of unit in inner"]),
+            ("Tray total number",                      ["Tray total number", "Tray_total_number", "Tray Total Number", "tray total"]),
+            ("Express Picking Type",                   ["Express Picking Type", "Express_Picking_Type", "express picking type"]),
+            ("HDET Picking Type",                      ["HDET Picking Type", "HDET_Picking_Type", "hdet picking type"]),
+            ("EDLP Price by Format Item name",         ["EDLP Price by Format", "EDLP_Price_by_Format", "Item Name", "Item name", "edlp price by format"]),
             ("As IS planograms applied",               ["AS IS planograms applied", "As IS planograms applied", "AS-IS planograms applied", "ASIS planograms applied", "as is planograms applied"]),
             ("To-BE planograms applied",               ["TO-BE planograms applied", "To-BE planograms applied", "TOBE planograms applied", "to be planograms applied"]),
             ("AS-IS Store applied",                    ["AS-IS Stores Applied", "AS IS Stores Applied", "ASIS Stores Applied", "AS-IS Store applied", "as-is stores applied"]),
             ("To-Be store applied",                    ["TO-Be stores applied", "To-Be stores applied", "TOBE stores applied", "to-be stores applied", "to be stores applied"]),
-            ("Avg unit 52 wk/forecast new item sales", ["Avg Units 52wk/ Forecast new item sales", "Avg Units 52wk/Forecast new item sales", "avg units 52wk/ forecast new item sales", "Avg unit 52wk", "TH_Tot_Sales_Volume_52_WK", "ForecastSales"]),
-            ("Supplier pack size",                     ["Supplier Pack Size", "Supplier pack size", "Supplier_Pack_Size", "supplier pack size", "OriginalPackSize"]),
+            ("Avg unit 52 wk/forecast new item sales", ["Avg Units 52wk/ Forecast new item sales", "Avg Units 52wk/Forecast new item sales", "avg units 52wk/ forecast new item sales", "Avg unit 52wk"]),
+            ("Supplier pack size",                     ["Supplier Pack Size", "Supplier pack size", "Supplier_Pack_Size", "supplier pack size"]),
             ("Range Tail YYYY",                        ["Range Tail YYYY", "Range_Tail_YYYY", "range tail yyyy"]),
             ("AVG selling Price by format",            ["AVG Selling Price by Format", "Avg Selling Price by Format", "avg selling price by format", "AVG_Selling_Price_by_Format"]),
-            ("Star Line",                              ["Star Line", "Star_Line", "starline", "star line", "StarLine"]),
+            ("Star Line",                              ["Star Line", "Star_Line", "starline", "star line"]),
             ("Item priority",                          ["Item Priority", "Item priority", "Item_Priority", "item priority"]),
             ("JDA vs Actual",                          ["JDA vs Actual", "JDA_vs_Actual", "jda vs actual"]),
             ("Actual-Actual",                          ["Actual-Actual", "Actual_Actual", "actual-actual", "actual actual"]),
         ]
         # Group definitions: (label, bg-color, text-color, column-count)
         _VIEW_GROUPS = [
-            ("Item Info",  "#D9D9D9", "#333333", 13),
+            ("Item Info",  "#D9D9D9", "#333333", 12),
             ("Range Info", "#E8E3DC", "#444444",  8),
             ("Star Line",  "#000000", "#FFFFFF",   1),
             ("Priority",   "#00CC44", "#003300",   3),
         ]
-
-        _ZERO_SPEC_COLS = {
-            "As IS planograms applied", "To-BE planograms applied",
-            "AS-IS Store applied", "To-Be store applied",
-        }
 
         def _sel_view(src_df, specs):
             def _vnorm(s): return _re.sub(r'[^a-z0-9]', '', str(s).lower())
@@ -2578,12 +2279,10 @@ if False:
                         (c for c in src_df.columns if _vnorm(c) == _vnorm(cand)), None)
                     if src_col:
                         break
-                if src_col:
-                    result[out_name] = src_df[src_col].reset_index(drop=True)
-                elif out_name in _ZERO_SPEC_COLS:
-                    result[out_name] = pd.Series([0] * len(src_df), name=out_name)
-                else:
-                    result[out_name] = pd.Series([None] * len(src_df), name=out_name)
+                result[out_name] = (
+                    src_df[src_col].reset_index(drop=True) if src_col
+                    else pd.Series([None] * len(src_df), name=out_name)
+                )
             return pd.DataFrame(result)
 
         _tdf      = _sel_view(df_view, _VIEW_SPECS).head(_MAX)

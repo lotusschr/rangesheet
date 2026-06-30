@@ -13,3 +13,4 @@ rangesheet_data/merged/
 *.pyc
 /.idea
 /utils/__pycache__
+/utils
