@@ -377,6 +377,16 @@ def _render_data(entry: dict, tab_key: str):
         st.caption(f"{_rows:,} rows · {_cols} columns")
 
 
+@st.dialog("POG Cluster Table", width="large")
+def _pog_fullscreen_dialog():
+    _html = st.session_state.get("_pog_fs_html", "")
+    _lbl  = st.session_state.get("_pog_fs_label", "")
+    if _lbl:
+        st.caption(_lbl)
+    if _html:
+        st.markdown(_html, unsafe_allow_html=True)
+
+
 # ── Minor dashboard ───────────────────────────────────────────────────────────
 def _render_minor():
     _db_df, _ = get_shared_db()
@@ -409,6 +419,12 @@ def _render_minor():
         st.write("**All columns in _df:**", list(_df.columns))
         st.write(f"fmt=`{_fmt_col}` | div=`{_div_col}` | dg=`{_dg_col}` "
                  f"| cl=`{_cl_col}` | disp=`{_disp_col}` | store=`{_store_col}`")
+        st.write("**store cols in _df:**",
+                 [c for c in _df.columns if "store" in str(c).lower()])
+        _pog_cl_check = _find_col(_df, "POG_Cluster", "pog_cluster")
+        _pog_nm_check = _find_col(_df, "planogramname", "POGName", "pog_name")
+        st.write(f"POG_Cluster col in _df: `{_pog_cl_check}` | "
+                 f"planogramname col in _df: `{_pog_nm_check}`")
 
     # ── HDET mini-table (one scan; everything else is instant in-memory) ────────
     _RF_HDET_PATH = "rawfiles_hdet_path"
@@ -553,55 +569,74 @@ def _render_minor():
             except Exception:
                 pass
 
-        if _sc_store_col and _sc_cl_col:
-            _sc_base = _sc_src_df.copy()
-            _sc_fmt  = _find_col(_sc_src_df, "store_Format", "store_format",
-                                  "StoreFormat", "Format")
-            _sc_div  = _find_col(_sc_src_df, "Div Code&Desc", "Div Code & Desc",
-                                  "DivCode&Desc")
-            if _fmt_sel and _sc_fmt and _sc_fmt in _sc_base.columns:
-                _sc_base = _sc_base[_sc_base[_sc_fmt].astype(str) == _fmt_sel]
-            if _div_sel and _sc_div and _sc_div in _sc_base.columns:
-                _sc_base = _sc_base[_sc_base[_sc_div].astype(str) == _div_sel]
-            if _cl_sel and _sc_cl_col in _sc_base.columns:
-                _sc_base = _sc_base[_sc_base[_sc_cl_col].astype(str) == _cl_sel]
-            _sc_base = _sc_base.copy()
-            _sc_base[_sc_cl_col]    = _sc_base[_sc_cl_col].astype(str).str.strip()
-            _sc_base[_sc_store_col] = _sc_base[_sc_store_col].astype(str).str.strip()
-            _sc_base = _sc_base[
-                ~_sc_base[_sc_store_col].isin(_null_sv)
-                & ~_sc_base[_sc_store_col].isin({"nan"})
-                & (_sc_base[_sc_cl_col] != "")
-                & (_sc_base[_sc_cl_col] != "nan")
-            ]
-            _sc = _sc_base.groupby(_sc_cl_col)[_sc_store_col].nunique()
-            _sc.index.name = None
-        else:
-            # Fallback: COUNT DISTINCT PG_Store_Number from HDET mini-table
-            _sc_base      = pd.DataFrame()
-            _sc_src_label = "HDET fallback"
-            _sc           = (_mf[~_mf["PG_Store_Number"].isin(_null_s)]
-                             .groupby("ClusterName")["PG_Store_Number"].nunique()
-                             if "PG_Store_Number" in _mf.columns else pd.Series(dtype=int))
-        with st.expander("🔍 StoreCount source", expanded=False):
-            st.caption(f"Source: **{_sc_src_label}** | clusters: {len(_sc)}")
-
-        # Count of POGName from A5: COUNT(non-null POGName) per cluster — matches PBI exactly.
-        # PBI source: A5_2_POG_FP_HDET_LIVE_*.csv  →  POGName column
-        _pog_nm_col = (_find_col(_sc_src_df, "POGName", "pog_name", "POG_Name",
-                                 "Name", "FP_Name", "FP Name", "FPName")
+        # ── JOIN: HDET[Name] = A5[planogramname] → DISTINCTCOUNT(store_no) per ClusterName ──
+        # This matches PBI's model exactly:
+        #   StoreCount      = DISTINCTCOUNT(POG_Store[store_no])  per Item_POG[ClusterName]
+        #   Count of POGName = COUNT(POG_Store[planogramname])     per Item_POG[ClusterName]
+        _pog_nm_col = (_find_col(_sc_src_df, "planogramname", "POGName", "pog_name",
+                                 "POG_Name", "planogram_name", "Planogramname")
                        if _sc_src_df is not None else None)
-        if _pog_nm_col and not _sc_base.empty and _pog_nm_col in _sc_base.columns:
-            _pc = _sc_base.groupby(_sc_cl_col)[_pog_nm_col].count()
+        _sc_base    = pd.DataFrame()
+        _pc         = pd.Series(dtype=int)
+        _pc_tot     = 0
+
+        if (_sc_store_col and _pog_nm_col
+                and "Name" in _mf_dg.columns and "ClusterName" in _mf_dg.columns):
+            # Step 1: unique (ClusterName, POG_Name) from HDET — filtered by DG so the
+            # cluster table shows only clusters that belong to the selected DG
+            _hdet_pogs = _mf_dg[["ClusterName", "Name"]].copy()
+            _hdet_pogs["ClusterName"] = _hdet_pogs["ClusterName"].astype(str).str.strip()
+            _hdet_pogs["Name"]        = _hdet_pogs["Name"].astype(str).str.strip()
+            _hdet_pogs = _hdet_pogs[
+                (_hdet_pogs["ClusterName"] != "") & (_hdet_pogs["ClusterName"] != "nan")
+                & (_hdet_pogs["Name"] != "")      & (_hdet_pogs["Name"] != "nan")
+            ].drop_duplicates()
+
+            # Step 2: A5 (store_no, planogramname) — one row per store × POG assignment
+            _a5_sub = _sc_src_df[[_pog_nm_col, _sc_store_col]].copy()
+            _a5_sub[_pog_nm_col]   = _a5_sub[_pog_nm_col].astype(str).str.strip()
+            _a5_sub[_sc_store_col] = _a5_sub[_sc_store_col].astype(str).str.strip()
+            _a5_sub = _a5_sub[
+                ~_a5_sub[_pog_nm_col].isin(_null_sv)
+                & ~_a5_sub[_sc_store_col].isin(_null_sv)
+            ]
+
+            # Step 3: JOIN → each row = (ClusterName, Name, planogramname, store_no)
+            _joined = _hdet_pogs.merge(
+                _a5_sub,
+                left_on="Name",
+                right_on=_pog_nm_col,
+                how="left"
+            )
+
+            _sc     = _joined.groupby("ClusterName")[_sc_store_col].nunique()
+            _sc.index.name = None
+            _pc     = (_joined[_joined[_pog_nm_col].notna()]
+                       .groupby("ClusterName")[_pog_nm_col].nunique())
             _pc.index.name = None
-            _pc_tot = int(_sc_base[_pog_nm_col].count())
+            # Total = DISTINCTCOUNT(planogramname) where Name exists in both HDET(DG-filtered) and A5
+            _null_low    = {v.lower() for v in _null_sv}
+            _hdet_nm_all = _mf_dg["Name"].astype(str).str.strip()
+            _hdet_nm_set = set(_hdet_nm_all[~_hdet_nm_all.str.lower().isin(_null_low)].unique())
+            _a5_nm       = _sc_src_df[_pog_nm_col].astype(str).str.strip()
+            _a5_nm_set   = set(_a5_nm[~_a5_nm.str.lower().isin(_null_low)].unique())
+            _pc_tot      = len(_hdet_nm_set & _a5_nm_set)
+            _sc_base = _joined
+            _sc_src_label += f" | JOIN on planogramname → {len(_sc)} clusters"
         else:
-            # Fallback: DISTINCTCOUNT(Name) from HDET mini-table
-            _pog_nm_col = None
+            # Fallback: HDET-only (no A5 found or missing planogramname col)
+            _sc_src_label = "HDET fallback"
+            _sc = (_mf[~_mf["PG_Store_Number"].isin(_null_s)]
+                   .groupby("ClusterName")["PG_Store_Number"].nunique()
+                   if "PG_Store_Number" in _mf.columns else pd.Series(dtype=int))
             _pc = (_mf[_mf["Name"] != ""]
                    .groupby("ClusterName")["Name"].nunique()
                    if "Name" in _mf.columns else pd.Series(dtype=int))
-            _pc_tot = int(_mf[_mf["Name"] != ""]["Name"].nunique()) if "Name" in _mf.columns else 0
+            _pc_tot = (int(_mf[_mf["Name"] != ""]["Name"].nunique())
+                       if "Name" in _mf.columns else 0)
+
+        with st.expander("🔍 StoreCount source", expanded=False):
+            st.caption(f"Source: **{_sc_src_label}** | clusters: {len(_sc)}")
         # ItemCount = distinct (DG, ID, ProductDescription) combos per cluster
         #             = row count of the right-panel pivot (matches "X items" caption)
         _ic_cols = [c for c in ["ClusterName","Display Group","ID","ProductDescription"]
@@ -633,8 +668,10 @@ def _render_minor():
             # "StoreCount":       int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
             #                         ["PG_Store_Number"].nunique())
             #                     if "PG_Store_Number" in _mf.columns else 0,
-            "StoreCount":       (int(_sc_base[_sc_store_col].nunique())
-                                 if not _sc_base.empty and _sc_store_col
+            # Total StoreCount = DISTINCTCOUNT(A5[store_no]) globally — matches PBI's
+            # grand total which is computed from A5 directly, not through the HDET join
+            "StoreCount":       (int(_sc_src_df[_sc_store_col].nunique())
+                                 if _sc_src_df is not None and _sc_store_col
                                  else (int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
                                            ["PG_Store_Number"].nunique())
                                        if "PG_Store_Number" in _mf.columns else 0)),
@@ -868,8 +905,17 @@ def _render_minor():
                             f"{'%.2f' % _v if pd.notna(_v) and _v != 0 else ''}</td>")
                     _ht.append("</tr>")
                 _ht.append("</tbody></table></div>")
-                st.markdown("".join(_ht), unsafe_allow_html=True)
-                st.caption(f"{len(_pvt):,} items · {_N} POGs")
+                _right_html  = "".join(_ht)
+                _right_label = f"{len(_pvt):,} items · {_N} POGs"
+                _btn_c, _exp_c = st.columns([1, 8])
+                with _btn_c:
+                    if st.button("⛶", key="minor_fs_btn", help="Full screen"):
+                        st.session_state["_pog_fs_html"]  = _right_html
+                        st.session_state["_pog_fs_label"] = _right_label
+                        _pog_fullscreen_dialog()
+                with _exp_c:
+                    with st.expander(_right_label, expanded=True):
+                        st.markdown(_right_html, unsafe_allow_html=True)
 
 
 # ── Tab label list: [Minor] + one per uploaded file ───────────────────────────
