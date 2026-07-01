@@ -1073,6 +1073,8 @@ DG_COLUMN_CANDIDATES = [
 
 DG_NAME_CANDIDATES = [
     "DG_NAME", "DG Name", "dg name", "DG_name",
+    "Display group desc", "Display Group Desc", "display group desc",
+    "displaygroupdesc",
     "Department Name", "department name",
     "Section", "section",
 ]
@@ -1371,9 +1373,14 @@ def load_large_file_by_dg(path: str, dg_value: str, use_cache: bool = True) -> p
     cache_file     = os.path.join(_LARGE_FILE_CACHE_DIR, f"{file_tag}__dg_{dg_value_upper}.parquet")
     file_mtime     = os.path.getmtime(path)
 
-    # Return per-DG cached parquet if still fresh
+    # Return per-DG cached parquet if still fresh.
+    # NOTE: this file was already run through _clean_df() before being cached
+    # below — do not clean it again here. apply_column_mapping() isn't
+    # idempotent (e.g. a second pass renames the already-correct
+    # "Planogram Name" column to "Cluster (Planogram name)"), so re-cleaning
+    # on every cache hit silently corrupted that column after the first load.
     if use_cache and os.path.exists(cache_file) and os.path.getmtime(cache_file) >= file_mtime:
-        return _clean_df(pd.read_parquet(cache_file))
+        return pd.read_parquet(cache_file)
 
     result = pd.DataFrame()
 

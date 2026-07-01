@@ -338,11 +338,15 @@ if _live_type == "Refresh":
     render_page_nav("viewdata")
     st.stop()
 
-def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_options=None):
+def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_options=None,
+                           fixed_dg_code=None, fixed_dg_name=None):
     """Full All Data + New Canvas tab pair, keyed with prefix p.
     dg_col_hint    : raw DG column name — shown as first column in Table view.
     large_file_path: when set, DG code search loads the full slice from this file.
-    dg_options     : list of known DG codes — renders a searchable combobox instead of text input."""
+    dg_options     : list of known DG codes — renders a searchable combobox instead of text input.
+    fixed_dg_code/fixed_dg_name: when set, df_src is already filtered to this DG by the caller
+    (e.g. a picker rendered above the tab) — skip the redundant Search DG Code/DG Name widgets
+    here and just display the already-chosen DG."""
     _src_cols = list(df_src.columns)
     _meta = st.session_state.rangesheet_meta
 
@@ -378,6 +382,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
         _dg_name_col = (
             next((c for c in _src_cols if _nc(c) in ("dg name", "dg_name")), None)
             or next((c for c in _src_cols if "dg" in _nc(c) and "name" in _nc(c)), None)
+            or next((c for c in _src_cols if "display" in _nc(c) and ("group desc" in _nc(c) or "desc" in _nc(c))), None)
+            or next((c for c in _src_cols if _nc(c) == "section"), None)
             or next((c for c in _src_cols if "section" in _nc(c)), None)
         )
         _dg_c, _arch_c, _leg_c = st.columns([1.05, 2.9, 0.75])
@@ -391,33 +397,48 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         letter-spacing:.08em;margin-bottom:10px;">Display Group</div></div>""",
                 unsafe_allow_html=True)
             with st.container():
-                _ALL_OPT = "— All (preview 500 rows) —"
-                if dg_options:
-                    _dg_combo_opts = [_ALL_OPT] + list(dg_options)
-                    _dg_combo_val  = st.selectbox(
-                        "Search DG Code", _dg_combo_opts,
-                        key=f"{p}_dg_code", label_visibility="visible",
+                if fixed_dg_code is not None or fixed_dg_name is not None:
+                    # Already filtered to one DG by the picker above this tab —
+                    # don't render another search box, just show the choice.
+                    # _sel_dg_name stays "ALL" so the name-filter below is a no-op:
+                    # df_src was loaded by DG Code already, and the name column this
+                    # function detects locally may not be the same one the picker
+                    # above used to resolve fixed_dg_name.
+                    _sel_dg_code = fixed_dg_code or ""
+                    st.markdown(
+                        f'<div style="font-size:12px;color:#555;margin-bottom:8px;">'
+                        f'DG Code: <strong>{_sel_dg_code or "—"}</strong><br>'
+                        f'DG Name: <strong>{fixed_dg_name or "—"}</strong></div>',
+                        unsafe_allow_html=True,
                     )
-                    _sel_dg_code = "" if _dg_combo_val == _ALL_OPT else _dg_combo_val
                 else:
-                    _sel_dg_code = st.text_input(
-                        "Search DG Code", placeholder="Type DG code to filter…",
-                        key=f"{p}_dg_code", label_visibility="visible")
-                if _dg_code_col and _dg_name_col and _sel_dg_code:
-                    _ns = df_src[df_src[_dg_code_col].astype(str).str.contains(_sel_dg_code, case=False, na=False)]
-                    _dg_name_opts = ["ALL"] + sorted(_ns[_dg_name_col].dropna().astype(str).str.strip().unique().tolist())
-                elif _dg_name_col:
-                    _dg_name_opts = ["ALL"] + sorted(df_src[_dg_name_col].dropna().astype(str).str.strip().unique().tolist())
-                else:
-                    _dg_name_opts = ["ALL"]
-                _prev_name = st.session_state.get(f"_{p}_dg_name_prev", "ALL")
-                if _prev_name not in _dg_name_opts:
-                    _prev_name = "ALL"
-                _sel_dg_name = st.selectbox(
-                    "DG NAME", _dg_name_opts,
-                    index=(_dg_name_opts.index(_prev_name) if _prev_name in _dg_name_opts else 0),
-                    key=f"{p}_dg_name", label_visibility="visible")
-                st.session_state[f"_{p}_dg_name_prev"] = _sel_dg_name
+                    _ALL_OPT = "— All (preview 500 rows) —"
+                    if dg_options:
+                        _dg_combo_opts = [_ALL_OPT] + list(dg_options)
+                        _dg_combo_val  = st.selectbox(
+                            "Search DG Code", _dg_combo_opts,
+                            key=f"{p}_dg_code", label_visibility="visible",
+                        )
+                        _sel_dg_code = "" if _dg_combo_val == _ALL_OPT else _dg_combo_val
+                    else:
+                        _sel_dg_code = st.text_input(
+                            "Search DG Code", placeholder="Type DG code to filter…",
+                            key=f"{p}_dg_code", label_visibility="visible")
+                    if _dg_code_col and _dg_name_col and _sel_dg_code:
+                        _ns = df_src[df_src[_dg_code_col].astype(str).str.contains(_sel_dg_code, case=False, na=False)]
+                        _dg_name_opts = ["ALL"] + sorted(_ns[_dg_name_col].dropna().astype(str).str.strip().unique().tolist())
+                    elif _dg_name_col:
+                        _dg_name_opts = ["ALL"] + sorted(df_src[_dg_name_col].dropna().astype(str).str.strip().unique().tolist())
+                    else:
+                        _dg_name_opts = ["ALL"]
+                    _prev_name = st.session_state.get(f"_{p}_dg_name_prev", "ALL")
+                    if _prev_name not in _dg_name_opts:
+                        _prev_name = "ALL"
+                    _sel_dg_name = st.selectbox(
+                        "DG NAME", _dg_name_opts,
+                        index=(_dg_name_opts.index(_prev_name) if _prev_name in _dg_name_opts else 0),
+                        key=f"{p}_dg_name", label_visibility="visible")
+                    st.session_state[f"_{p}_dg_name_prev"] = _sel_dg_name
                 _static_rows = ""
                 for _sk, _sv2 in [
                     ("MINOR LIVE WEEK", _meta.get("minor_live_week", "—")),
@@ -744,12 +765,17 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
                         f'{_CELL_H}font-weight:700;min-width:{_w}px;">{_col}</th>')
                 elif _col in _dyn_pog_set:
+                    # writing-mode (not transform:rotate) so the header text's layout
+                    # box is the actual narrow column width — transform only rotates
+                    # paint, not layout, so with overflow:visible it used to bleed
+                    # sideways into neighboring cells and look like blank space.
                     _th_list.append(
                         f'<th style="background:{_HDR_BG};border:1px solid #E0D9D2;'
-                        f'width:36px;min-width:36px;max-width:36px;height:130px;'
-                        f'padding:0;text-align:center;vertical-align:middle;overflow:visible;">'
-                        f'<span style="display:inline-block;transform:rotate(-90deg);'
-                        f'white-space:nowrap;font-size:11px;font-weight:700;">{_col}</span></th>')
+                        f'width:44px;min-width:44px;max-width:44px;height:260px;'
+                        f'padding:6px 3px;text-align:center;vertical-align:bottom;'
+                        f'writing-mode:vertical-rl;text-orientation:mixed;'
+                        f'font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;">'
+                        f'{_col}</th>')
                 else:
                     _th_list.append(
                         f'<th style="background:{_HDR_BG};{_CELL_H}font-weight:700;min-width:80px;">{_col}</th>')
@@ -768,7 +794,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     elif _col in _dyn_pog_set:
                         _row_h.append(
                             f'<td style="background:{_rb};border:1px solid #E0D9D2;'
-                            f'width:36px;text-align:center;font-size:13px;padding:4px 0;">{_vs}</td>')
+                            f'width:44px;text-align:center;font-size:13px;padding:4px 0;">{_vs}</td>')
                     else:
                         _row_h.append(f'<td style="background:{_rb};{_CELL_H}">{_vs}</td>')
                 _rows.append(f'<tr>{"".join(_row_h)}</tr>')
@@ -1029,14 +1055,6 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
         elif "a5" in _nsmeta["name"].lower() and not is_large_file(_nsp):
             _ns_a5_name = _nsmeta["name"]
 
-    # ── Step 2: Auto-load HDET preview (500 rows) once per session ───────────
-    if _ns_hdet_path and "ns_hdet_df" not in st.session_state:
-        with st.spinner("Loading HDET preview (500 rows)…"):
-            st.session_state.ns_hdet_df = read_large_file_head(_ns_hdet_path, n_rows=500)
-        st.session_state["_ns_hdet_src"] = "HDET preview (500 rows)"
-
-
-
     # ── HDET controls: DG dropdown + Load button ──────────────────────────────
     if _ns_hdet_path:
         _ns_hfname  = os.path.basename(_ns_hdet_path)
@@ -1092,7 +1110,8 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
             _ns_load_btn = st.button("Load", key="ns_load_dg2",
                                      use_container_width=True, type="primary")
             if st.button("↺ Reset", key="ns_reset_dg2", use_container_width=True):
-                for _k in ["ns_hdet_df", "_ns_hdet_src", "ns_lf_dg_sig"]:
+                for _k in ["ns_hdet_df", "_ns_hdet_src", "ns_lf_dg_sig",
+                           "_ns_loaded_dg_code", "_ns_loaded_dg_name"]:
                     st.session_state.pop(_k, None)
                 st.rerun()
 
@@ -1111,16 +1130,23 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
                 st.session_state["ns_hdet_df"]   = _loaded
                 st.session_state["_ns_hdet_src"] = f"DG = {_ns_dg_query} ({len(_loaded):,} rows)"
                 st.session_state["ns_lf_dg_sig"] = _sig
+                st.session_state["_ns_loaded_dg_code"] = _ns_dg_query
+                st.session_state["_ns_loaded_dg_name"] = _ns_code_to_name.get(_ns_dg_query, "")
                 st.rerun()
 
-    # Use HDET data only — fall back to merged if HDET not loaded yet
+    # Require a DG to be picked and loaded before showing any data
     _ns_hdet_df = st.session_state.get("ns_hdet_df")
-    _ns_combined = _dedup(_ns_hdet_df.copy()) if _ns_hdet_df is not None else merged
-    _ns_idx = st.session_state.get("ns_dg_index", {})
-    _render_sheet_content(_ns_combined, "ns",
-                          dg_col_hint=_ns_idx.get("dg_col"),
-                          large_file_path=_ns_hdet_path,
-                          dg_options=_ns_idx.get("codes", []))
+    if _ns_hdet_path and _ns_hdet_df is None:
+        st.info("👆 Select a DG Code or DG Name above, then click **Load** to view planogram data.")
+    else:
+        _ns_combined = _dedup(_ns_hdet_df.copy()) if _ns_hdet_df is not None else merged
+        _ns_idx = st.session_state.get("ns_dg_index", {})
+        _render_sheet_content(_ns_combined, "ns",
+                              dg_col_hint=_ns_idx.get("dg_col"),
+                              large_file_path=_ns_hdet_path,
+                              dg_options=_ns_idx.get("codes", []),
+                              fixed_dg_code=st.session_state.get("_ns_loaded_dg_code"),
+                              fixed_dg_name=st.session_state.get("_ns_loaded_dg_name"))
 
 with _sheet_tabs[1]:   # Range Sheet_SSPOG
     _render_sheet_content(_sspog_df, "ss")
