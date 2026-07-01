@@ -379,6 +379,19 @@ def _render_data(entry: dict, tab_key: str):
 
 @st.dialog("POG Cluster Table", width="large")
 def _pog_fullscreen_dialog():
+    st.markdown("""
+    <style>
+    div[data-testid="stDialog"] > div > div[role="dialog"] {
+        width:  100vw !important; max-width:  100vw !important;
+        height: 100vh !important; max-height: 100vh !important;
+        margin: 0 !important; border-radius: 0 !important;
+        top: 0 !important; left: 0 !important; transform: none !important;
+    }
+    div[data-testid="stDialog"] > div {
+        width: 100vw !important; height: 100vh !important;
+        align-items: flex-start !important;
+    }
+    </style>""", unsafe_allow_html=True)
     _html = st.session_state.get("_pog_fs_html", "")
     _lbl  = st.session_state.get("_pog_fs_label", "")
     if _lbl:
@@ -514,6 +527,12 @@ def _render_minor():
         if _cl_sel:  _mf = _mf[_mf["ClusterName"] == _cl_sel]
         # TotalStoreApply: add DG filter (counts DG entries on planogram)
         _mf_dg = _mf[_mf["Display Group"] == _dg_sel] if _dg_sel else _mf
+        # Left cluster table: Format + Div + DG only — NO ClusterName filter so all
+        # clusters connected to the selected DG are shown (mirrors PBI behaviour)
+        _mf_for_clusters = _mini
+        if _fmt_sel: _mf_for_clusters = _mf_for_clusters[_mf_for_clusters["store_Format"] == _fmt_sel]
+        if _div_sel: _mf_for_clusters = _mf_for_clusters[_mf_for_clusters["Div Code&Desc"] == _div_sel]
+        if _dg_sel:  _mf_for_clusters = _mf_for_clusters[_mf_for_clusters["Display Group"] == _dg_sel]
 
         # StoreCount = DISTINCTCOUNT(POG_Store[store_no])
         # PBI source: A5_2_POG_FP_HDET_LIVE_*.csv  →  store_no + Property_Store_Cluster + POGName
@@ -581,10 +600,10 @@ def _render_minor():
         _pc_tot     = 0
 
         if (_sc_store_col and _pog_nm_col
-                and "Name" in _mf_dg.columns and "ClusterName" in _mf_dg.columns):
-            # Step 1: unique (ClusterName, POG_Name) from HDET — filtered by DG so the
-            # cluster table shows only clusters that belong to the selected DG
-            _hdet_pogs = _mf_dg[["ClusterName", "Name"]].copy()
+                and "Name" in _mf_for_clusters.columns and "ClusterName" in _mf_for_clusters.columns):
+            # Step 1: unique (ClusterName, POG_Name) — Format/Div/DG filtered but NO ClusterName
+            # filter so left table shows ALL clusters connected to the selected DG
+            _hdet_pogs = _mf_for_clusters[["ClusterName", "Name"]].copy()
             _hdet_pogs["ClusterName"] = _hdet_pogs["ClusterName"].astype(str).str.strip()
             _hdet_pogs["Name"]        = _hdet_pogs["Name"].astype(str).str.strip()
             _hdet_pogs = _hdet_pogs[
@@ -614,9 +633,9 @@ def _render_minor():
             _pc     = (_joined[_joined[_pog_nm_col].notna()]
                        .groupby("ClusterName")[_pog_nm_col].nunique())
             _pc.index.name = None
-            # Total = DISTINCTCOUNT(planogramname) where Name exists in both HDET(DG-filtered) and A5
+            # Total = DISTINCTCOUNT(planogramname) where Name exists in both HDET and A5
             _null_low    = {v.lower() for v in _null_sv}
-            _hdet_nm_all = _mf_dg["Name"].astype(str).str.strip()
+            _hdet_nm_all = _mf_for_clusters["Name"].astype(str).str.strip()
             _hdet_nm_set = set(_hdet_nm_all[~_hdet_nm_all.str.lower().isin(_null_low)].unique())
             _a5_nm       = _sc_src_df[_pog_nm_col].astype(str).str.strip()
             _a5_nm_set   = set(_a5_nm[~_a5_nm.str.lower().isin(_null_low)].unique())
@@ -637,19 +656,29 @@ def _render_minor():
 
         with st.expander("🔍 StoreCount source", expanded=False):
             st.caption(f"Source: **{_sc_src_label}** | clusters: {len(_sc)}")
-        # ItemCount = distinct (DG, ID, ProductDescription) combos per cluster
-        #             = row count of the right-panel pivot (matches "X items" caption)
-        _ic_cols = [c for c in ["ClusterName","Display Group","ID","ProductDescription"]
-                    if c in _mf_dg.columns]
-        _ic = (_mf_dg[_ic_cols].drop_duplicates()
-               .groupby("ClusterName").size()
-               if len(_ic_cols) > 1 else pd.Series(dtype=int))
-
-        # TotalStoreApply = distinct POGName (Name) per cluster
-        #                 = number of POG columns in right-panel pivot (matches "X POGs" caption)
-        _ta = (_mf_dg[_mf_dg["Name"] != ""]
-               .groupby("ClusterName")["Name"].nunique()
-               if "Name" in _mf_dg.columns else pd.Series(dtype=int))
+        if _cl_sel:
+            # ClusterName selected: use _mf_dg (has ClusterName filter) so horizontal
+            # pivot stays focused on the selected cluster — original behaviour
+            _ic_cols = [c for c in ["ClusterName","Display Group","ID","ProductDescription"]
+                        if c in _mf_dg.columns]
+            _ic = (_mf_dg[_ic_cols].drop_duplicates()
+                   .groupby("ClusterName").size()
+                   if len(_ic_cols) > 1 else pd.Series(dtype=int))
+            _ta = (_mf_dg[_mf_dg["Name"] != ""]
+                   .groupby("ClusterName")["Name"].nunique()
+                   if "Name" in _mf_dg.columns else pd.Series(dtype=int))
+        else:
+            # No ClusterName filter: align with left table values so horizontal pivot
+            # matches PBI before filter is applied
+            # TotalStoreApply = Count of POGName (same as _pc, already confirmed correct)
+            _ta = _pc.copy() if not _pc.empty else pd.Series(dtype=int)
+            # TotalItem = DISTINCTCOUNT(ID) per cluster, null IDs excluded — matches PBI
+            if "ID" in _mf_for_clusters.columns:
+                _ic_src = _mf_for_clusters[~_mf_for_clusters["ID"].isin(_null_sv)]
+                _ic = _ic_src.groupby("ClusterName")["ID"].nunique()
+                _ic.index.name = None
+            else:
+                _ic = pd.Series(dtype=int)
 
         _cls_list = sorted(set(_sc.index) | set(_pc.index) | set(_ta.index))
         _summary_df = pd.DataFrame({
@@ -668,13 +697,15 @@ def _render_minor():
             # "StoreCount":       int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
             #                         ["PG_Store_Number"].nunique())
             #                     if "PG_Store_Number" in _mf.columns else 0,
-            # Total StoreCount = DISTINCTCOUNT(A5[store_no]) globally — matches PBI's
-            # grand total which is computed from A5 directly, not through the HDET join
-            "StoreCount":       (int(_sc_src_df[_sc_store_col].nunique())
-                                 if _sc_src_df is not None and _sc_store_col
-                                 else (int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
-                                           ["PG_Store_Number"].nunique())
-                                       if "PG_Store_Number" in _mf.columns else 0)),
+            # Total StoreCount: when DG filter active use joined result (filter-aware),
+            # otherwise use full A5 distinct count (matches PBI unfiltered grand total = 491)
+            "StoreCount":       (int(_joined[_sc_store_col].nunique())
+                                 if _dg_sel and not _sc_base.empty and _sc_store_col
+                                 else (int(_sc_src_df[_sc_store_col].nunique())
+                                       if _sc_src_df is not None and _sc_store_col
+                                       else (int(_mf[~_mf["PG_Store_Number"].isin(_null_s)]
+                                                 ["PG_Store_Number"].nunique())
+                                             if "PG_Store_Number" in _mf.columns else 0))),
             "Count of POGName": _pc_tot,
             "ItemCount":        int(_mf_dg[_ic_tot_cols].drop_duplicates().shape[0])
                                 if _ic_tot_cols else 0,
@@ -687,6 +718,8 @@ def _render_minor():
     if _summary_df is not None and not _summary_df.empty:
         _is_tot2   = _summary_df["ClusterName"] == "Total"
         _data_p    = _summary_df[~_is_tot2]
+        # Only show clusters that have actual TotalStoreApply or ItemCount data
+        _data_p    = _data_p[(_data_p["TotalStoreApply"] > 0) | (_data_p["ItemCount"] > 0)]
         _tot_p     = _summary_df[_is_tot2]
         _cls_names = list(_data_p["ClusterName"])
         _store_map = dict(zip(_data_p["ClusterName"], _data_p["TotalStoreApply"].astype(int)))
