@@ -761,70 +761,155 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             _REST        = [c for c in _tdf.columns if c not in _STICKY and c not in set(_LAST)]
             _tdf         = _tdf[_STICKY + _REST + _LAST]
 
-            # Column pixel widths for sticky left-offset calculation
-            _COL_W  = {"DG Code": 130, "ID": 90, "Item Name": 210}
-            _s_left, _s_lefts = 0, {}
-            for _sc in _STICKY:
-                _s_lefts[_sc] = _s_left
-                _s_left += _COL_W.get(_sc, 130)
+            # ── Edit-mode toggle (top-right of table) ────────────────────────────
+            # _em_state  = our controlled bool (safe to write from Save/Cancel)
+            # _em_widget = separate key owned by Streamlit (never written by us)
+            _em_state  = f"{p}_tbl_edit_mode"
+            _em_widget = f"{p}_tbl_edit_mode_w"
+            _em_c1, _em_c2 = st.columns([9, 1])
+            with _em_c2:
+                _edit_mode = st.toggle("✏️ Edit", key=_em_widget,
+                                       value=st.session_state.get(_em_state, False),
+                                       help="Turn on to edit planogram assignments")
+            st.session_state[_em_state] = _edit_mode
 
-            # Render HTML table — use numpy array for fast cell access
-            _HDR_BG  = "#D9D9D9"
-            _STK_BG  = "#F7F5F2"
-            _CELL_H  = "padding:5px 10px;border:1px solid #E0D9D2;font-size:11px;white-space:nowrap;"
-            _col_list = list(_tdf.columns)
-            _arr      = _tdf.fillna("").astype(str).values
-            _th_list, _rows = [], []
-            for _ci, _col in enumerate(_col_list):
-                if _col in _STICKY:
-                    _lx = _s_lefts[_col]
-                    _w  = _COL_W.get(_col, 130)
-                    _th_list.append(
-                        f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
-                        f'{_CELL_H}font-weight:700;min-width:{_w}px;">{_col}</th>')
-                elif _col in _dyn_pog_set:
-                    # writing-mode (not transform:rotate) so the header text's layout
-                    # box is the actual narrow column width — transform only rotates
-                    # paint, not layout, so with overflow:visible it used to bleed
-                    # sideways into neighboring cells and look like blank space.
-                    _th_list.append(
-                        f'<th style="background:{_HDR_BG};border:1px solid #E0D9D2;'
-                        f'width:44px;min-width:44px;max-width:44px;height:260px;'
-                        f'padding:6px 3px;text-align:center;vertical-align:bottom;'
-                        f'writing-mode:vertical-rl;text-orientation:mixed;'
-                        f'font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;">'
-                        f'{_col}</th>')
-                else:
-                    _th_list.append(
-                        f'<th style="background:{_HDR_BG};{_CELL_H}font-weight:700;min-width:80px;">{_col}</th>')
-            for _ri in range(len(_tdf)):
-                _row_h = []
-                _rb = "#FFFFFF" if _ri % 2 == 0 else "#FAFAF8"
+            _COL_W  = {"DG Code": 130, "ID": 90, "Item Name": 210}
+
+            if not _edit_mode:
+                # ── VIEW MODE: original HTML table, unchanged ─────────────────────
+                _s_left, _s_lefts = 0, {}
+                for _sc in _STICKY:
+                    _s_lefts[_sc] = _s_left
+                    _s_left += _COL_W.get(_sc, 130)
+                _HDR_BG  = "#D9D9D9"
+                _STK_BG  = "#F7F5F2"
+                _CELL_H  = "padding:5px 10px;border:1px solid #E0D9D2;font-size:11px;white-space:nowrap;"
+                _col_list = list(_tdf.columns)
+                _arr      = _tdf.fillna("").astype(str).values
+                _th_list, _rows = [], []
                 for _ci, _col in enumerate(_col_list):
-                    _vs = _arr[_ri, _ci]
-                    if _vs in ("nan", "None"):
-                        _vs = ""
                     if _col in _STICKY:
                         _lx = _s_lefts[_col]
-                        _row_h.append(
-                            f'<td style="position:sticky;left:{_lx}px;z-index:2;background:{_STK_BG};'
-                            f'{_CELL_H}">{_vs}</td>')
+                        _w  = _COL_W.get(_col, 130)
+                        _th_list.append(
+                            f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
+                            f'{_CELL_H}font-weight:700;min-width:{_w}px;">{_col}</th>')
                     elif _col in _dyn_pog_set:
-                        _row_h.append(
-                            f'<td style="background:{_rb};border:1px solid #E0D9D2;'
-                            f'width:44px;text-align:center;font-size:13px;padding:4px 0;">{_vs}</td>')
+                        _th_list.append(
+                            f'<th style="background:{_HDR_BG};border:1px solid #E0D9D2;'
+                            f'width:44px;min-width:44px;max-width:44px;height:260px;'
+                            f'padding:6px 3px;text-align:center;vertical-align:bottom;'
+                            f'writing-mode:vertical-rl;text-orientation:mixed;'
+                            f'font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;">'
+                            f'{_col}</th>')
                     else:
-                        _row_h.append(f'<td style="background:{_rb};{_CELL_H}">{_vs}</td>')
-                _rows.append(f'<tr>{"".join(_row_h)}</tr>')
-            _html_tbl = (
-                '<div style="overflow-x:auto;border-radius:10px;border:1px solid #E0D9D2;'
-                'max-height:560px;overflow-y:auto;">'
-                '<table style="border-collapse:collapse;font-size:11px;min-width:100%;">'
-                f'<thead style="position:sticky;top:0;z-index:4;"><tr>{"".join(_th_list)}</tr></thead>'
-                f'<tbody>{"".join(_rows)}</tbody>'
-                '</table></div>'
-            )
-            st.markdown(_html_tbl, unsafe_allow_html=True)
+                        _th_list.append(
+                            f'<th style="background:{_HDR_BG};{_CELL_H}font-weight:700;min-width:80px;">{_col}</th>')
+                for _ri in range(len(_tdf)):
+                    _row_h = []
+                    _rb = "#FFFFFF" if _ri % 2 == 0 else "#FAFAF8"
+                    for _ci, _col in enumerate(_col_list):
+                        _vs = _arr[_ri, _ci]
+                        if _vs in ("nan", "None"):
+                            _vs = ""
+                        if _col in _STICKY:
+                            _lx = _s_lefts[_col]
+                            _row_h.append(
+                                f'<td style="position:sticky;left:{_lx}px;z-index:2;background:{_STK_BG};'
+                                f'{_CELL_H}">{_vs}</td>')
+                        elif _col in _dyn_pog_set:
+                            _row_h.append(
+                                f'<td style="background:{_rb};border:1px solid #E0D9D2;'
+                                f'width:44px;text-align:center;font-size:13px;padding:4px 0;">{_vs}</td>')
+                        else:
+                            _row_h.append(f'<td style="background:{_rb};{_CELL_H}">{_vs}</td>')
+                    _rows.append(f'<tr>{"".join(_row_h)}</tr>')
+                st.markdown(
+                    '<div style="overflow-x:auto;border-radius:10px;border:1px solid #E0D9D2;'
+                    'max-height:560px;overflow-y:auto;">'
+                    '<table style="border-collapse:collapse;font-size:11px;min-width:100%;">'
+                    f'<thead style="position:sticky;top:0;z-index:4;"><tr>{"".join(_th_list)}</tr></thead>'
+                    f'<tbody>{"".join(_rows)}</tbody>'
+                    '</table></div>',
+                    unsafe_allow_html=True,
+                )
+
+            else:
+                # ── EDIT MODE: AG Grid — pinned left cols + editable planogram checkboxes
+                from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
+
+                # Working-data key: AG Grid feeds its own output back as input each rerun,
+                # so edits accumulate instead of being reset to _tdf_ag on every rerun.
+                _ag_work_key = f"{p}_ag_work_{_sel_dg_code}"
+                _tdf_ag = _tdf.copy()
+                for _pc in _dyn_pog_cols:
+                    _tdf_ag[_pc] = _tdf_ag[_pc] == "✓"
+                if _ag_work_key not in st.session_state:
+                    st.session_state[_ag_work_key] = _tdf_ag.copy()
+
+                _gb = GridOptionsBuilder.from_dataframe(st.session_state[_ag_work_key])
+                _gb.configure_default_column(
+                    editable=False, sortable=False, filter=False,
+                    suppressMenu=True, suppressMovable=True, resizable=False, minWidth=80,
+                )
+                for _sc in _STICKY:
+                    _gb.configure_column(_sc, pinned="left", lockPinned=True,
+                                         width=_COL_W.get(_sc, 130), editable=False)
+                for _pc in _dyn_pog_cols:
+                    _gb.configure_column(
+                        _pc, editable=True, type=["booleanColumn"],
+                        cellRenderer="agCheckboxCellRenderer",
+                        cellEditor="agCheckboxCellEditor",
+                        width=44, minWidth=44, maxWidth=44,
+                        suppressMovable=True,
+                        headerClass="pog-rotate-header",
+                    )
+                _go = _gb.build()
+                _go["headerHeight"] = 260 if _dyn_pog_cols else 40
+                _go["rowHeight"]    = 28
+                _ag_resp = AgGrid(
+                    st.session_state[_ag_work_key],
+                    gridOptions=_go,
+                    update_mode=GridUpdateMode.VALUE_CHANGED,
+                    data_return_mode=DataReturnMode.AS_INPUT,
+                    height=560,
+                    custom_css={
+                        ".ag-root-wrapper": {"border": "1px solid #E0D9D2 !important", "border-radius": "10px !important"},
+                        ".ag-header,.ag-pinned-left-header,.ag-header-viewport": {"background-color": "#D9D9D9 !important"},
+                        ".ag-header-cell": {"background-color": "#D9D9D9 !important", "border-right": "1px solid #E0D9D2 !important", "font-weight": "700 !important", "font-size": "11px !important", "padding": "5px 10px !important"},
+                        ".ag-header-icon,.ag-sort-indicator-container,.ag-header-cell-resize": {"display": "none !important"},
+                        ".ag-row-even": {"background-color": "#FFFFFF !important"},
+                        ".ag-row-odd":  {"background-color": "#FAFAF8 !important"},
+                        ".ag-cell": {"border-right": "1px solid #E0D9D2 !important", "border-bottom": "1px solid #E0D9D2 !important", "font-size": "11px !important", "padding": "5px 10px !important", "white-space": "nowrap !important"},
+                        ".ag-pinned-left-cols-container .ag-cell": {"background-color": "#F7F5F2 !important", "font-weight": "600 !important"},
+                        ".ag-pinned-left-header .ag-header-cell": {"background-color": "#D9D9D9 !important"},
+                        ".ag-cell-focus": {"border": "1px solid #2BBFA4 !important", "outline": "none !important"},
+                        ".ag-row-hover": {"background-color": "#F0F9F7 !important"},
+                        ".pog-rotate-header": {"padding": "0 !important", "justify-content": "center !important"},
+                        ".pog-rotate-header .ag-header-cell-label": {"writing-mode": "vertical-rl !important", "text-orientation": "mixed !important", "transform": "rotate(180deg) !important", "white-space": "nowrap !important", "overflow": "visible !important", "font-size": "12px !important", "font-weight": "700 !important", "align-items": "center !important", "justify-content": "flex-start !important", "padding": "4px 0 !important"},
+                        ".pog-rotate-header .ag-header-cell-text": {"overflow": "visible !important", "white-space": "nowrap !important"},
+                    },
+                    allow_unsafe_jscode=True, theme="balham",
+                    use_container_width=True,
+                    key=f"{p}_aggrid_{_sel_dg_code}",
+                )
+
+                # Always persist latest grid state so next rerun starts from it
+                st.session_state[_ag_work_key] = _ag_resp["data"]
+
+                # Save / Cancel buttons
+                _sv_c1, _sv_c2, _sv_c3 = st.columns([6, 1, 1])
+                with _sv_c2:
+                    if st.button("💾 Save", key=f"{p}_tbl_save", use_container_width=True, type="primary"):
+                        st.session_state[f"{p}_tbl_edits"] = st.session_state[_ag_work_key]
+                        st.session_state[_em_state] = False
+                        st.rerun()
+                with _sv_c3:
+                    if st.button("✕ Cancel", key=f"{p}_tbl_cancel", use_container_width=True):
+                        st.session_state.pop(_ag_work_key, None)  # discard unsaved edits
+                        st.session_state[_em_state] = False
+                        st.rerun()
+
             if len(df_view) > _MAX:
                 st.caption(f"Showing {_MAX:,} of {len(df_view):,} rows — increase Rows to see more")
             else:
