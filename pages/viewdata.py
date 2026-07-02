@@ -736,10 +736,24 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 for _pog in _dyn_pog_cols:
                     _tdf[_pog] = (_pog_vals == _pog).map({True: "✓", False: ""})
 
+                # "Check Range To-be Waterfall" = count of unique planograms per product
+                _id_raw = (_t_col_map.get("ID") or _t_col_map.get("Barcode")
+                           or _t_col_map.get("Item Name"))
+                if _id_raw and _id_raw in df_view.columns:
+                    _id_vals = df_view.iloc[:_n][_id_raw].astype(str).str.strip().reset_index(drop=True)
+                    _pog_count = (
+                        pd.DataFrame({"_id": _id_vals, "_pog": _pog_vals})
+                        .groupby("_id")["_pog"]
+                        .transform("nunique")
+                    )
+                    _tdf["Check Range To-be Waterfall"] = _pog_count.values
+                else:
+                    _tdf["Check Range To-be Waterfall"] = ""
+
             # Column ordering: sticky left | data cols | Status | planogram cols rightmost
             _STICKY      = [c for c in ["DG Code", "ID", "Item Name"] if c in _tdf.columns]
             _dyn_pog_set = set(_dyn_pog_cols)
-            _LAST        = [c for c in ["Status", "Planogram Name"] if c in _tdf.columns] + _dyn_pog_cols
+            _LAST        = [c for c in ["Status", "Check Range To-be Waterfall", "Planogram Name"] if c in _tdf.columns] + _dyn_pog_cols
             _REST        = [c for c in _tdf.columns if c not in _STICKY and c not in set(_LAST)]
             _tdf         = _tdf[_STICKY + _REST + _LAST]
 

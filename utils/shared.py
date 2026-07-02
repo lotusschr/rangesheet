@@ -64,7 +64,7 @@ RS_COL_GROUPS = [
         "Star Line",
     ]},
     {"group": "Status", "color": "#B8D4E8", "hdr_color": "#1A4A6B", "cols": [
-        "Status", "Planogram Name",
+        "Status", "Check Range To-be Waterfall", "Planogram Name",
     ]},
     {"group": "Priority", "color": "#00CC44", "hdr_color": "#003300", "cols": [
         "Item Priority", "JDA vs Actual", "Actual-Actual",
