@@ -761,16 +761,47 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             _REST        = [c for c in _tdf.columns if c not in _STICKY and c not in set(_LAST)]
             _tdf         = _tdf[_STICKY + _REST + _LAST]
 
-            # ── Edit-mode toggle (top-right of table) ────────────────────────────
-            # _em_state  = our controlled bool (safe to write from Save/Cancel)
-            # _em_widget = separate key owned by Streamlit (never written by us)
+            # ── Persistent planogram-edit overlay ────────────────────────────────
+            # Key = (DG Code, ID, Item Name, original_planogram_name).
+            # Adding the source planogram makes the key unique per row — without it,
+            # a product in N planograms produces N identical keys, and one edit
+            # would paint all N rows.
+            _pog_edits_key = f"{p}_pog_edits"
+
+            def _make_rk(ri: int) -> tuple:
+                base = tuple(str(_tdf.at[ri, c]) for c in _STICKY)
+                pog_val = (
+                    str(df_view.iloc[ri][_pog_src_col]).strip()
+                    if _pog_src_col and _pog_src_col in df_view.columns and ri < len(df_view)
+                    else ""
+                )
+                return base + (pog_val,)
+
+            _pog_edits = st.session_state.get(_pog_edits_key, {})
+            if _pog_edits and _dyn_pog_cols and _STICKY:
+                # Debug: count how many _tdf rows each key matches
+                _rk_counts: dict = {}
+                for _ri in range(len(_tdf)):
+                    _rk_counts[_make_rk(_ri)] = _rk_counts.get(_make_rk(_ri), 0) + 1
+                _multi = {str(k): v for k, v in _rk_counts.items() if v > 1}
+                if _multi:
+                    st.write("⚠️ debug — row_key matches >1 row (key not unique):", _multi)
+
+                for _ri in range(len(_tdf)):
+                    _rk = _make_rk(_ri)
+                    if _rk in _pog_edits:
+                        for _pc, _pv in _pog_edits[_rk].items():
+                            if _pc in _tdf.columns:
+                                _tdf.at[_ri, _pc] = _pv
+
+            # ── Edit-mode toggle ──────────────────────────────────────────────────
             _em_state  = f"{p}_tbl_edit_mode"
             _em_widget = f"{p}_tbl_edit_mode_w"
             _em_c1, _em_c2 = st.columns([9, 1])
             with _em_c2:
                 _edit_mode = st.toggle("✏️ Edit", key=_em_widget,
                                        value=st.session_state.get(_em_state, False),
-                                       help="Turn on to edit planogram assignments")
+                                       help="Toggle on to edit planogram assignments. Click Done to commit.")
             st.session_state[_em_state] = _edit_mode
 
             _COL_W  = {"DG Code": 130, "ID": 90, "Item Name": 210}
@@ -835,78 +866,75 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 )
 
             else:
-                # ── EDIT MODE: AG Grid — pinned left cols + editable planogram checkboxes
-                from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
+                # ── EDIT MODE: st.data_editor ─────────────────────────────────────
+                # _tdf already has committed edits from _pog_edits_key applied above,
+                # so it is the correct baseline for the editor.
+                _de_key = f"{p}_de_{_sel_dg_code}"
 
-                # Working-data key: AG Grid feeds its own output back as input each rerun,
-                # so edits accumulate instead of being reset to _tdf_ag on every rerun.
-                _ag_work_key = f"{p}_ag_work_{_sel_dg_code}"
-                _tdf_ag = _tdf.copy()
+                _tdf_bool = _tdf.copy()
                 for _pc in _dyn_pog_cols:
-                    _tdf_ag[_pc] = _tdf_ag[_pc] == "✓"
-                if _ag_work_key not in st.session_state:
-                    st.session_state[_ag_work_key] = _tdf_ag.copy()
+                    _tdf_bool[_pc] = _tdf_bool[_pc] == "✓"
 
-                _gb = GridOptionsBuilder.from_dataframe(st.session_state[_ag_work_key])
-                _gb.configure_default_column(
-                    editable=False, sortable=False, filter=False,
-                    suppressMenu=True, suppressMovable=True, resizable=False, minWidth=80,
-                )
-                for _sc in _STICKY:
-                    _gb.configure_column(_sc, pinned="left", lockPinned=True,
-                                         width=_COL_W.get(_sc, 130), editable=False)
-                for _pc in _dyn_pog_cols:
-                    _gb.configure_column(
-                        _pc, editable=True, type=["booleanColumn"],
-                        cellRenderer="agCheckboxCellRenderer",
-                        cellEditor="agCheckboxCellEditor",
-                        width=44, minWidth=44, maxWidth=44,
-                        suppressMovable=True,
-                        headerClass="pog-rotate-header",
-                    )
-                _go = _gb.build()
-                _go["headerHeight"] = 260 if _dyn_pog_cols else 40
-                _go["rowHeight"]    = 28
-                _ag_resp = AgGrid(
-                    st.session_state[_ag_work_key],
-                    gridOptions=_go,
-                    update_mode=GridUpdateMode.VALUE_CHANGED,
-                    data_return_mode=DataReturnMode.AS_INPUT,
+                _de_col_cfg = {}
+                for _c in _tdf_bool.columns:
+                    if _c in _dyn_pog_cols:
+                        _de_col_cfg[_c] = st.column_config.CheckboxColumn(_c, width="small")
+                    else:
+                        _de_col_cfg[_c] = st.column_config.Column(_c, disabled=True)
+
+                _edited = st.data_editor(
+                    _tdf_bool,
+                    key=_de_key,
+                    column_config=_de_col_cfg,
+                    hide_index=True,
                     height=560,
-                    custom_css={
-                        ".ag-root-wrapper": {"border": "1px solid #E0D9D2 !important", "border-radius": "10px !important"},
-                        ".ag-header,.ag-pinned-left-header,.ag-header-viewport": {"background-color": "#D9D9D9 !important"},
-                        ".ag-header-cell": {"background-color": "#D9D9D9 !important", "border-right": "1px solid #E0D9D2 !important", "font-weight": "700 !important", "font-size": "11px !important", "padding": "5px 10px !important"},
-                        ".ag-header-icon,.ag-sort-indicator-container,.ag-header-cell-resize": {"display": "none !important"},
-                        ".ag-row-even": {"background-color": "#FFFFFF !important"},
-                        ".ag-row-odd":  {"background-color": "#FAFAF8 !important"},
-                        ".ag-cell": {"border-right": "1px solid #E0D9D2 !important", "border-bottom": "1px solid #E0D9D2 !important", "font-size": "11px !important", "padding": "5px 10px !important", "white-space": "nowrap !important"},
-                        ".ag-pinned-left-cols-container .ag-cell": {"background-color": "#F7F5F2 !important", "font-weight": "600 !important"},
-                        ".ag-pinned-left-header .ag-header-cell": {"background-color": "#D9D9D9 !important"},
-                        ".ag-cell-focus": {"border": "1px solid #2BBFA4 !important", "outline": "none !important"},
-                        ".ag-row-hover": {"background-color": "#F0F9F7 !important"},
-                        ".pog-rotate-header": {"padding": "0 !important", "justify-content": "center !important"},
-                        ".pog-rotate-header .ag-header-cell-label": {"writing-mode": "vertical-rl !important", "text-orientation": "mixed !important", "transform": "rotate(180deg) !important", "white-space": "nowrap !important", "overflow": "visible !important", "font-size": "12px !important", "font-weight": "700 !important", "align-items": "center !important", "justify-content": "flex-start !important", "padding": "4px 0 !important"},
-                        ".pog-rotate-header .ag-header-cell-text": {"overflow": "visible !important", "white-space": "nowrap !important"},
-                    },
-                    allow_unsafe_jscode=True, theme="balham",
                     use_container_width=True,
-                    key=f"{p}_aggrid_{_sel_dg_code}",
+                    num_rows="fixed",
                 )
 
-                # Always persist latest grid state so next rerun starts from it
-                st.session_state[_ag_work_key] = _ag_resp["data"]
+                # ── Debug: show exactly what the editor recorded as changed ──────
+                st.write("editor delta:", st.session_state.get(_de_key, {}))
 
-                # Save / Cancel buttons
+                st.caption("Check boxes to edit planogram assignments. Click **Done** to save, or **Discard** to cancel.")
                 _sv_c1, _sv_c2, _sv_c3 = st.columns([6, 1, 1])
                 with _sv_c2:
-                    if st.button("💾 Save", key=f"{p}_tbl_save", use_container_width=True, type="primary"):
-                        st.session_state[f"{p}_tbl_edits"] = st.session_state[_ag_work_key]
+                    if st.button("✓ Done", key=f"{p}_tbl_save", use_container_width=True, type="primary"):
+                        # ── Commit only the cells the user actually changed ────────
+                        # st.data_editor stores exactly what changed at
+                        # st.session_state[_de_key]["edited_rows"]:
+                        #   {row_position: {col_name: new_value}}
+                        # We iterate only those entries — never touch other pog cols.
+                        _delta = (st.session_state.get(_de_key) or {}).get("edited_rows", {})
+                        _pog_edits_commit = st.session_state.setdefault(_pog_edits_key, {})
+                        _audit_lines = []
+                        if _STICKY and _delta:
+                            for _ri_str, _cell_changes in _delta.items():
+                                _ri = int(_ri_str)
+                                if _ri >= len(_tdf):
+                                    continue
+                                _rk = _make_rk(_ri)   # includes original pog name → unique per row
+                                for _pc, _new_val in _cell_changes.items():
+                                    if _pc not in _dyn_pog_cols:
+                                        continue
+                                    _old_str = str(_tdf.at[_ri, _pc])
+                                    _new_str = "✓" if _new_val else ""
+                                    if _old_str != _new_str:
+                                        _pog_edits_commit.setdefault(_rk, {})[_pc] = _new_str
+                                        _audit_lines.append(
+                                            f"{_rk}|{_pc}: {_old_str!r}→{_new_str!r}")
+                        if _audit_lines:
+                            add_audit(
+                                "Edit Planogram Assignments",
+                                f"tab={p}; {len(_audit_lines)} change(s): "
+                                + "; ".join(_audit_lines[:10])
+                                + ("…" if len(_audit_lines) > 10 else ""),
+                            )
+                        st.session_state.pop(_de_key, None)
                         st.session_state[_em_state] = False
                         st.rerun()
                 with _sv_c3:
-                    if st.button("✕ Cancel", key=f"{p}_tbl_cancel", use_container_width=True):
-                        st.session_state.pop(_ag_work_key, None)  # discard unsaved edits
+                    if st.button("✕ Discard", key=f"{p}_tbl_cancel", use_container_width=True):
+                        st.session_state.pop(_de_key, None)
                         st.session_state[_em_state] = False
                         st.rerun()
 
