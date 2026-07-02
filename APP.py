@@ -13,9 +13,9 @@ st.set_page_config(
 pg = st.navigation(
     [
         st.Page("pages/landpage.py",  title="My Files",          icon="🗂️", url_path="landpage",  default=True),
-        st.Page("pages/rawfiles.py",  title="View Data",         icon="📁", url_path="rawfiles"),
-        st.Page("pages/viewdata.py",  title="Rangesheet Review", icon="🔍", url_path="viewdata"),
-        st.Page("pages/dashboard.py", title="Dashboard",         icon="📊", url_path="dashboard"),
+        st.Page("pages/viewdata.py",  title="View Data",         icon="📁", url_path="viewdata"),
+        st.Page("pages/rangesheetreview.py",  title="Rangesheet Review", icon="🔍", url_path="rangesheetreview"),
+        # st.Page("pages/dashboard.py", title="Dashboard",         icon="📊", url_path="dashboard"),
         st.Page("pages/report.py",    title="Report",            icon="📋", url_path="report"),
         st.Page("pages/audit.py",     title="Audit Log",         icon="🛡️", url_path="audit"),
     ],

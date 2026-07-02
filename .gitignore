@@ -14,3 +14,4 @@ rangesheet_data/merged/
 /.idea
 /utils/__pycache__
 *.parquet
+*.pyc
