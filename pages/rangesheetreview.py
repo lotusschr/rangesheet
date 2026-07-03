@@ -1154,7 +1154,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                                        help="Toggle on to edit planogram assignments. Click Done to commit.")
             st.session_state[_em_state] = _edit_mode
 
-            _COL_W  = {"DG Code": 80, "ID": 90, "Item Name": 210}
+            _COL_W  = {"DG Code": 56, "ID": 90, "Item Name": 210}
 
             if not _edit_mode:
                 # ── VIEW MODE: original HTML table, unchanged ─────────────────────
@@ -1166,15 +1166,39 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _STK_BG  = "#F7F5F2"
                 _CELL_H  = "padding:5px 10px;border:1px solid #E0D9D2;font-size:11px;white-space:nowrap;"
                 _col_list = list(_tdf.columns)
+                # Pre-format Avg Units column before bulk .astype(str) stringifies raw floats.
+                # Must happen here — .astype(str) on line below would turn 1.23456789 → "1.23456789"
+                # before any per-column formatting could run.
+                _avg_u_std = "Avg Units 52wk/ Forecast new item sales"
+                if _avg_u_std in _tdf.columns:
+                    def _fmt_avg_u(v):
+                        if pd.isna(v) or str(v).strip() in ("", "nan", "None"):
+                            return ""
+                        try:
+                            return ("%.5f" % round(float(v), 5)).rstrip("0").rstrip(".")
+                        except (ValueError, TypeError):
+                            return "" if str(v).strip() in ("nan", "None") else str(v)
+                    _tdf = _tdf.copy()
+                    _tdf[_avg_u_std] = _tdf[_avg_u_std].apply(_fmt_avg_u)
                 _arr      = _tdf.fillna("").astype(str).values
                 _th_list, _rows = [], []
                 for _ci, _col in enumerate(_col_list):
                     if _col in _STICKY:
                         _lx = _s_lefts[_col]
                         _w  = _COL_W.get(_col, 130)
-                        _th_list.append(
-                            f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
-                            f'{_CELL_H}font-weight:700;min-width:{_w}px;">{_col}</th>')
+                        if _col == "DG Code":
+                            # DG Code is narrow (80px) — let header wrap so the column stays compact
+                            _th_list.append(
+                                f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
+                                f'border:1px solid #E0D9D2;font-size:10px;font-weight:700;'
+                                f'width:{_w}px;min-width:{_w}px;max-width:{_w}px;'
+                                f'padding:4px 4px;vertical-align:bottom;'
+                                f'white-space:normal;word-break:break-word;overflow-wrap:break-word;">'
+                                f'{_col}</th>')
+                        else:
+                            _th_list.append(
+                                f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
+                                f'{_CELL_H}font-weight:700;min-width:{_w}px;">{_col}</th>')
                     elif _col in _dyn_pog_set:
                         _th_list.append(
                             f'<th style="background:{_HDR_BG};border:1px solid #E0D9D2;'
@@ -1247,6 +1271,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     if _c in _dyn_pog_cols:
                         _de_col_cfg[_c] = st.column_config.NumberColumn(
                             _c, format="%.2f", step=0.01)
+                    elif _c == "DG Code":
+                        _de_col_cfg[_c] = st.column_config.Column(_c, disabled=True, width="small")
                     elif _c in _STICKY:
                         _de_col_cfg[_c] = st.column_config.Column(_c, disabled=True)
                     else:
@@ -2488,9 +2514,12 @@ if False:
                               f'font-weight:600;">{_sv}</span>')
                 elif _lbl == "Avg unit 52 wk/forecast new item sales" and _sv:
                     try:
-                        _sv = f"{float(_sv):.5f}"
+                        # Round to 5dp then strip trailing zeros (and bare ".").
+                        # Avoids %.5f padding (1.5 → "1.50000") and %g scientific
+                        # notation on large values (e.g. 123456.0 → "1.23456e+05").
+                        _sv = ("%.5f" % round(float(_sv), 5)).rstrip("0").rstrip(".")
                     except (ValueError, TypeError):
-                        pass
+                        _sv = ""
                     _inner = f'<span>{_sv}</span>'
                 else:
                     _inner = f'<span>{_sv}</span>'
