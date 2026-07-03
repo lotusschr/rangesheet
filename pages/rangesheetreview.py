@@ -690,6 +690,50 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
 
         # ── Table ─────────────────────────────────────────────────────────────
         if _subview == "📋 Table":
+            # ── Cluster summary table (auto-derived from data + metric values from session state) ─
+            _kd_key = f"{p}_ct_dat"; _kr_key = f"{p}_ct_clr"
+            _kd_t   = st.session_state.get(_kd_key, {})
+            _kr_t   = st.session_state.get(_kr_key, {})
+
+            # Default metric row definitions (matches Cluster tab)
+            _DM_T = [
+                ("TO-BE Stores applied count", "#F4A460", "#000000"),
+                ("AS-IS Stores applied count", "#F4A460", "#000000"),
+                ("MODs",                       "#DCDCDC", "#000000"),
+                ("FIXTURE",                    "#DCDCDC", "#000000"),
+                ("RANGE CLASS",                "#DCDCDC", "#000000"),
+                ("Total NEW SKUs",             "#808080", "#FFFFFF"),
+                ("Total DELETE SKUs",          "#808080", "#FFFFFF"),
+                ("TO-BE SKUs count",           "#808080", "#FFFFFF"),
+                ("AS-IS SKUs count",           "#F0F0F0", "#1565C0"),
+                ("%Achieving LRD CASE (As Is)","#FFFFFF", "#000000"),
+                ("%Achieving LRD SALES (As Is)","#FFFFFF","#000000"),
+            ]
+            if not _kd_t:
+                _kd_t = {r: {} for r, _, _ in _DM_T}
+            _def_row_clr = {r: (bg, tc) for r, bg, tc in _DM_T}
+
+            # Derive planogram → cluster from df_view directly (no session state needed)
+            _cl_col_t = next(
+                (c for c in df_view.columns
+                 if _nca(c) == _nca("POG Cluster Mod Fixture")
+                 or "pogcluster" in _nca(c)
+                 or ("cluster" in _nca(c) and "mod" in _nca(c))),
+                None
+            )
+            _pn_col_t = next(
+                (c for c in df_view.columns
+                 if _nca(c) in ("name", "planogramname", "pogname", "planogram")),
+                None
+            )
+            _pog_to_cluster: dict = {}
+            if _cl_col_t and _pn_col_t:
+                for _, _mr in df_view[[_pn_col_t, _cl_col_t]].drop_duplicates().iterrows():
+                    _pn_v = str(_mr[_pn_col_t]).strip()
+                    _cl_v = str(_mr[_cl_col_t]).strip()
+                    if _pn_v not in ("", "nan", "None") and _cl_v not in ("", "nan", "None"):
+                        _pog_to_cluster[_pn_v] = _cl_v
+
             _MAX = int(_n_rows)
             # Fixed predefined column structure — headers never change.
             # Data is pulled from df_view by _nca() name matching; empty where no match.
@@ -792,11 +836,12 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         _lx = _s_lefts[_col]
                         _w  = _COL_W.get(_col, 130)
                         _th_list.append(
-                            f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
+                            f'<th style="position:sticky;top:0px;left:{_lx}px;z-index:5;background:{_HDR_BG};'
                             f'{_CELL_H}font-weight:700;min-width:{_w}px;">{_col}</th>')
                     elif _col in _dyn_pog_set:
                         _th_list.append(
-                            f'<th style="background:{_HDR_BG};border:1px solid #E0D9D2;'
+                            f'<th style="position:sticky;top:0px;z-index:4;background:{_HDR_BG};'
+                            f'border:1px solid #E0D9D2;'
                             f'width:44px;min-width:44px;max-width:44px;height:260px;'
                             f'padding:6px 3px;text-align:center;vertical-align:bottom;'
                             f'writing-mode:vertical-rl;text-orientation:mixed;'
@@ -804,7 +849,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             f'{_col}</th>')
                     else:
                         _th_list.append(
-                            f'<th style="background:{_HDR_BG};{_CELL_H}font-weight:700;min-width:80px;">{_col}</th>')
+                            f'<th style="position:sticky;top:0px;z-index:4;background:{_HDR_BG};'
+                            f'{_CELL_H}font-weight:700;min-width:80px;">{_col}</th>')
                 for _ri in range(len(_tdf)):
                     _row_h = []
                     _rb = "#FFFFFF" if _ri % 2 == 0 else "#FAFAF8"
@@ -824,11 +870,98 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         else:
                             _row_h.append(f'<td style="background:{_rb};{_CELL_H}">{_vs}</td>')
                     _rows.append(f'<tr>{"".join(_row_h)}</tr>')
+
+                # ── Cluster summary rows — separate table above main table ───────────
+                _clr_thead = []
+                if _pog_to_cluster and _dyn_pog_cols:
+                    _rowsx_t = list(_kd_t.keys())
+                    _CB  = "border:1px solid #E0D9D2;"
+                    _CBG = "#D9D9D9"
+                    _CFH = "font-size:11px;font-weight:700;"
+                    _CFD = "font-size:11px;"
+                    _WBG = "#FFFFFF"
+                    # Ghost: same padding+border+font as main header TH, text invisible
+                    # This forces the same rendered width as the corresponding main table column
+                    _GHOST = (f'padding:5px 10px;border:1px solid transparent;'
+                              f'font-size:11px;font-weight:700;white-space:nowrap;color:transparent;')
+
+                    def _ghost_cell(bg, col_name, lx=None, w=None):
+                        if lx is not None:  # sticky-left ghost
+                            return (f'<th style="position:sticky;left:{lx}px;z-index:3;'
+                                    f'background:{bg};{_GHOST}min-width:{w}px;">{col_name}</th>')
+                        return f'<th style="background:{bg};{_GHOST}">{col_name}</th>'
+
+                    _has_chk = "Check Range To-be Waterfall" in _col_list
+                    _stat_cs  = 2 if _has_chk else 1  # colspan for Status cell
+
+                    # Row 1: cluster name row
+                    _cr_cells = []; _skip_cr = False
+                    for _col in _col_list:
+                        if _skip_cr:
+                            _skip_cr = False; continue
+                        if _col in _STICKY:
+                            _lx = _s_lefts[_col]; _w = _COL_W.get(_col, 130)
+                            _cr_cells.append(_ghost_cell(_WBG, _col, _lx, _w))
+                        elif _col == "Status":
+                            _cr_cells.append(
+                                f'<th colspan="{_stat_cs}" style="background:{_CBG};{_CB}{_CFH}'
+                                f'padding:5px 10px;text-align:left;white-space:nowrap;'
+                                f'vertical-align:middle;">Cluster</th>')
+                            _skip_cr = _has_chk
+                        elif _col in _dyn_pog_set:
+                            _cl = _pog_to_cluster.get(_col, "")
+                            _cr_cells.append(
+                                f'<th style="background:{_CBG};color:#333;{_CFH}'
+                                f'width:44px;min-width:44px;max-width:44px;height:80px;'
+                                f'{_CB}text-align:center;padding:4px 2px;'
+                                f'writing-mode:vertical-rl;text-orientation:mixed;'
+                                f'transform:rotate(180deg);white-space:nowrap;overflow:hidden;">'
+                                f'{_cl}</th>')
+                        else:
+                            _cr_cells.append(_ghost_cell(_WBG, _col))
+                    _clr_thead.append(f'<tr>{"".join(_cr_cells)}</tr>')
+                    # Metric rows
+                    _clr_bg = ["#FFFFFF", "#F5F5F5"]
+                    for _ri2, _rname in enumerate(_rowsx_t):
+                        _rb2 = _clr_bg[_ri2 % 2]
+                        _mr_cells = []; _skip_mr = False
+                        for _col in _col_list:
+                            if _skip_mr:
+                                _skip_mr = False; continue
+                            if _col in _STICKY:
+                                _lx = _s_lefts[_col]; _w = _COL_W.get(_col, 130)
+                                _mr_cells.append(_ghost_cell(_WBG, _col, _lx, _w))
+                            elif _col == "Status":
+                                _mr_cells.append(
+                                    f'<th colspan="{_stat_cs}" style="background:{_rb2};color:#333;{_CFD}'
+                                    f'padding:5px 10px;{_CB}text-align:left;white-space:nowrap;'
+                                    f'font-weight:600;">{_rname}</th>')
+                                _skip_mr = _has_chk
+                            elif _col in _dyn_pog_set:
+                                _cl = _pog_to_cluster.get(_col, "")
+                                if _rname in ("TO-BE Stores applied count",
+                                              "AS-IS Stores applied count"):
+                                    _v = "1"
+                                else:
+                                    _v = _kd_t.get(_rname, {}).get(_cl, "")
+                                    _v = "" if _v is None or str(_v) in ("nan","None") else str(_v)
+                                _mr_cells.append(
+                                    f'<th style="background:{_rb2};color:#333;{_CFD}'
+                                    f'width:44px;min-width:44px;max-width:44px;'
+                                    f'{_CB}text-align:center;padding:5px 2px;">{_v}</th>')
+                            else:
+                                _mr_cells.append(_ghost_cell(_WBG, _col))
+                        _clr_thead.append(f'<tr>{"".join(_mr_cells)}</tr>')
+
+                # Single table: cluster rows + main header in one <thead> (no sticky on element),
+                # each main header <th> has position:sticky;top:0px individually.
+                # Cluster rows are NOT sticky → they scroll away. Main header sticks at top.
+                _clr_head_html = "".join(_clr_thead) if _clr_thead else ""
                 st.markdown(
                     '<div style="overflow-x:auto;border-radius:10px;border:1px solid #E0D9D2;'
                     'max-height:560px;overflow-y:auto;">'
                     '<table style="border-collapse:collapse;font-size:11px;min-width:100%;">'
-                    f'<thead style="position:sticky;top:0;z-index:4;"><tr>{"".join(_th_list)}</tr></thead>'
+                    f'<thead>{_clr_head_html}<tr>{"".join(_th_list)}</tr></thead>'
                     f'<tbody>{"".join(_rows)}</tbody>'
                     '</table></div>',
                     unsafe_allow_html=True,
