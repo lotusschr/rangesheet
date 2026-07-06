@@ -117,6 +117,8 @@ def _build_hdet_mini(path: str, _mtime: int = 0) -> pd.DataFrame:
         "store_Format":       ["store_Format","Store_Format","StoreFormat","Format"],
         "Div Code&Desc":      ["Div Code&Desc","Div Code & Desc","DivCode&Desc"],
         "Display Group":      ["Display Group","DG","DG_CODE","Display_Group"],
+        "DG_Desc":            ["Display group desc","Display Group Desc","DisplayGroupDesc",
+                               "DG_Desc","DGDesc","dg_desc","Display_Group_Desc"],
         "PG_Store_Number":    ["PG_Store_Number","store_no","StoreNo","Store_No",
                                "store_number","Store_Number"],
         "Name":               ["Name","FP_Name","FP Name","FPName","pog_name","POGName"],
@@ -378,7 +380,7 @@ def _render_data(entry: dict, tab_key: str):
 
 
 def _build_pog_cluster_html(pvt, cl_sel, max_height="520px"):
-    _TH = "#1e2130"; _TC = "#2BBFA4"; _TC2 = "#1a9e8b"; _B = "#2d3350"
+    _TH = "#f0f2f6"; _TC = "#2BBFA4"; _TC2 = "#1a9e8b"; _B = "#dee2e6"
     _COL_W = {"DG_CODE": 74, "ID": 108, "ProductDescription": 230}
     _row_labels = [c for c in ["DG_CODE", "ID", "ProductDescription"] if c in pvt.columns]
     _pog_cols   = [c for c in pvt.columns if c not in set(_row_labels)]
@@ -392,7 +394,7 @@ def _build_pog_cluster_html(pvt, cl_sel, max_height="520px"):
     def _stkH(col, top="0px"):
         _w = _COL_W.get(col, 100); _l = _left_px.get(col, 0)
         return (f"position:sticky;left:{_l}px;top:{top};z-index:5;"
-                f"background:{_TH};color:#9ba3c2;padding:4px 8px;"
+                f"background:{_TH};color:#374151;padding:4px 8px;"
                 f"border:1px solid {_B};font-weight:700;"
                 f"text-align:left;white-space:nowrap;min-width:{_w}px;")
 
@@ -439,26 +441,26 @@ def _build_pog_cluster_html(pvt, cl_sel, max_height="520px"):
 
     _prev_dg4 = object()
     for _ri, _row in pvt.iterrows():
-        _rbg = "#0e1120" if _ri % 2 == 0 else "#141829"
+        _rbg = "#ffffff" if _ri % 2 == 0 else "#f7f8fb"
         _ht.append(f"<tr style='background:{_rbg};'>")
         if "DG_CODE" in pvt.columns:
             _dv4 = str(_row["DG_CODE"]); _bs = _stkB("DG_CODE", _rbg)
             _is_first = _dv4 != _prev_dg4; _prev_dg4 = _dv4
-            _dc = "color:#e0e4f7;font-weight:600;" if _is_first else "color:#6b7194;"
+            _dc = "color:#111827;font-weight:600;" if _is_first else "color:#9ca3af;"
             _ht.append(f"<td style='{_bs}{_dc}'>{_dv4}</td>")
         if "ID" in pvt.columns:
             _id_v = str(_row["ID"]).strip()
             _id_val = _id_v.zfill(9) if _id_v not in ("", "nan", "None") else ""
             _ib = _stkB("ID", _rbg)
-            _ht.append(f"<td style='{_ib}color:#c8cde8;'>{_id_val}</td>")
+            _ht.append(f"<td style='{_ib}color:#374151;'>{_id_val}</td>")
         if _has_desc:
             _dsc = str(_row["ProductDescription"]).replace("<", "&lt;").replace(">", "&gt;")
             _db = _stkB("ProductDescription", _rbg)
-            _ht.append(f"<td style='{_db}color:#c8cde8;"
+            _ht.append(f"<td style='{_db}color:#374151;"
                        f"max-width:230px;overflow:hidden;text-overflow:ellipsis;'>{_dsc}</td>")
         for _pc in _pog_cols:
             _v = _row.get(_pc, float("nan"))
-            _ht.append(f"<td style='color:#e0e4f7;padding:3px 8px;"
+            _ht.append(f"<td style='color:#111827;padding:3px 8px;"
                        f"border:1px solid {_B};text-align:right;'>"
                        f"{'%.2f' % _v if pd.notna(_v) and _v != 0 else ''}</td>")
         _ht.append("</tr>")
@@ -556,9 +558,19 @@ def _render_minor():
         st.session_state[_RF_HDET_PATH] = _rf_hdet_path
     _hdet_path = st.session_state.get(_RF_HDET_PATH)
     _mini = None
+    _dg_desc_map: dict = {}
     if _hdet_path:
         _h_mtime = int(os.path.getmtime(_hdet_path))
         _mini = _build_hdet_mini(_hdet_path, _h_mtime)
+        if _mini is not None and "DG_Desc" in _mini.columns and "Display Group" in _mini.columns:
+            _dg_desc_map = (
+                _mini[["Display Group", "DG_Desc"]]
+                .drop_duplicates()
+                .dropna(subset=["Display Group"])
+                .set_index("Display Group")["DG_Desc"]
+                .astype(str)
+                .to_dict()
+            )
 
     # ── Migrate old multiselect lists → single value ──────────────────────────
     for _ss in ("minor_fmt", "minor_div", "minor_dg", "minor_cl"):
@@ -576,10 +588,10 @@ def _render_minor():
         if _mini is None:
             return []
         _f = _mini
-        if skip != "fmt" and _cur_fmt: _f = _f[_f["store_Format"] == _cur_fmt]
-        if skip != "div" and _cur_div: _f = _f[_f["Div Code&Desc"] == _cur_div]
-        if skip != "dg"  and _cur_dg:  _f = _f[_f["Display Group"] == _cur_dg]
-        if skip != "cl"  and _cur_cl:  _f = _f[_f["ClusterName"] == _cur_cl]
+        if skip != "fmt" and _cur_fmt and "store_Format" in _f.columns: _f = _f[_f["store_Format"] == _cur_fmt]
+        if skip != "div" and _cur_div and "Div Code&Desc" in _f.columns: _f = _f[_f["Div Code&Desc"] == _cur_div]
+        if skip != "dg"  and _cur_dg  and "Display Group" in _f.columns: _f = _f[_f["Display Group"] == _cur_dg]
+        if skip != "cl"  and _cur_cl  and "ClusterName"   in _f.columns: _f = _f[_f["ClusterName"] == _cur_cl]
         _col = {"fmt": "store_Format", "div": "Div Code&Desc",
                 "dg": "Display Group", "cl": "ClusterName"}[skip]
         if _col not in _f.columns:
@@ -587,7 +599,9 @@ def _render_minor():
         return sorted(v for v in _f[_col].dropna().astype(str).unique()
                       if v not in ("", "nan"))
 
-    _fmt_opts = _cascade("fmt")
+    _a5_sfmt = st.session_state.get("_a5_sfmt_opts", [])
+    _fmt_opts = sorted(set(_cascade("fmt")) | set(_a5_sfmt),
+                       key=lambda x: (x not in _a5_sfmt, x))
     _div_opts = _cascade("div")
     _dg_opts  = _cascade("dg")
     _cl_opts  = _cascade("cl")
@@ -608,7 +622,8 @@ def _render_minor():
                                 format_func=lambda x: "All divisions" if x is None else x)
     with _fc3:
         _dg_sel = st.selectbox("DG", [None] + _dg_opts, key="minor_dg",
-                               format_func=lambda x: "All DGs" if x is None else x)
+                               format_func=lambda x: "All DGs" if x is None else
+                               (f"{x}  {_dg_desc_map[x]}" if x in _dg_desc_map and _dg_desc_map[x] not in ("", "nan", "None") else x))
     with _fc4:
         _cl_sel = st.selectbox("CLUSTERNAME", [None] + _cl_opts, key="minor_cl",
                                format_func=lambda x: "All clusters" if x is None else x)
@@ -645,6 +660,7 @@ def _render_minor():
         _sc_store_col = None
         _sc_cl_col    = None
         _sc_src_df    = None
+        _sc_fmt_col   = None
         _sc_src_label = "none"
         _sc_base      = pd.DataFrame()
 
@@ -688,10 +704,25 @@ def _render_minor():
                 _sc_store_col = _a5_s
                 _sc_cl_col    = _a5_c
                 _sc_src_df    = _a5_df
+                _sc_fmt_col   = _a5_f
                 _sc_src_label = f"A5:{_am['name']} store={_a5_s}, cluster={_a5_c}"
                 break
             except Exception:
                 pass
+
+        # ── A5 store_Format: cache options & apply format filter ─────────────────
+        if _sc_fmt_col and _sc_src_df is not None and _sc_fmt_col in _sc_src_df.columns:
+            _a5_sfmt_all = sorted(
+                v for v in _sc_src_df[_sc_fmt_col].dropna().astype(str).str.strip().unique()
+                if v.lower() not in {"", "nan", "none", "null"}
+            )
+            if _a5_sfmt_all != st.session_state.get("_a5_sfmt_opts", []):
+                st.session_state["_a5_sfmt_opts"] = _a5_sfmt_all
+                st.rerun()
+            if _fmt_sel:
+                _sc_src_df = _sc_src_df[
+                    _sc_src_df[_sc_fmt_col].astype(str).str.strip() == _fmt_sel
+                ]
 
         # ── JOIN: HDET[Name] = A5[planogramname] → DISTINCTCOUNT(store_no) per ClusterName ──
         # This matches PBI's model exactly:
