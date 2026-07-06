@@ -658,6 +658,10 @@ def _render_sheet_content(df_src, p):
 
         # ── Table ─────────────────────────────────────────────────────────────
         if _subview == "📋 Table":
+            _id_search_q = st.text_input(
+                "Item no.", placeholder="🔎  Search by Item no. (ID)...",
+                label_visibility="collapsed", key=f"{p}_id_search"
+            )
             _MAX = int(_n_rows)
             # Fixed predefined column structure — headers never change.
             # Data is pulled from df_view by _nca() name matching; empty where no match.
@@ -666,6 +670,14 @@ def _render_sheet_content(df_src, p):
                 sc: next((c for c in df_view.columns if _nca(c) == _nca(sc)), None)
                 for sc in _std_all
             }
+            _id_col = _t_col_map.get("ID")
+            if _id_search_q and _id_col and _id_col in df_view.columns:
+                _id_vals = df_view[_id_col].astype(str).str.strip().str.zfill(9)
+                _srch_id = (str(_id_search_q).strip().zfill(9)
+                            if str(_id_search_q).strip().isdigit()
+                            else str(_id_search_q).strip())
+                _id_mask = _id_vals.str.contains(_srch_id, case=False, na=False)
+                df_view = pd.concat([df_view[_id_mask], df_view[~_id_mask]]).reset_index(drop=True)
             # Visibility filter: if user applied one, keep only cols whose matched
             # actual name (or standard name itself) is in the visible set.
             if _vis_set:
@@ -682,6 +694,11 @@ def _render_sheet_content(df_src, p):
                      if _t_col_map.get(sc) else pd.Series([""] * _n))
                 for sc in _std_all
             })
+            if "ID" in _tdf.columns:
+                def _pad_id(v):
+                    s = str(v).strip()
+                    return "" if s in ("", "nan", "None") else s.zfill(9)
+                _tdf["ID"] = _tdf["ID"].apply(_pad_id)
             # ── Append POG columns from A5 to the same table ─────────────────
             _twf_a5 = st.session_state.get(f"_wf_ext_a5_{p}")
             _twf_pog_col = None
@@ -751,7 +768,8 @@ def _render_sheet_content(df_src, p):
             _rs_only_cols = [c for c in _tdf_clean.columns]
             _ccfg = {}
             for _sc2 in _rs_only_cols:
-                _ccfg[_sc2] = st.column_config.TextColumn(_sc2, disabled=True)
+                _lbl = "Item no." if _sc2 == "ID" else _sc2
+                _ccfg[_sc2] = st.column_config.TextColumn(_lbl, disabled=True)
             _ccfg["Status"] = st.column_config.SelectboxColumn(
                 "Status",
                 options=["MAINTAIN", "NEW SOME", "NEW ALL", "DELETE SOME", "DELETE ALL"],

@@ -377,6 +377,95 @@ def _render_data(entry: dict, tab_key: str):
         st.caption(f"{_rows:,} rows · {_cols} columns")
 
 
+def _build_pog_cluster_html(pvt, cl_sel, max_height="520px"):
+    _TH = "#1e2130"; _TC = "#2BBFA4"; _TC2 = "#1a9e8b"; _B = "#2d3350"
+    _COL_W = {"DG_CODE": 74, "ID": 108, "ProductDescription": 230}
+    _row_labels = [c for c in ["DG_CODE", "ID", "ProductDescription"] if c in pvt.columns]
+    _pog_cols   = [c for c in pvt.columns if c not in set(_row_labels)]
+    _N          = len(_pog_cols)
+    _has_desc   = "ProductDescription" in pvt.columns
+    _left_px = {}; _acc = 0
+    for _cn in ["DG_CODE", "ID", "ProductDescription"]:
+        if _cn in pvt.columns:
+            _left_px[_cn] = _acc; _acc += _COL_W[_cn]
+
+    def _stkH(col, top="0px"):
+        _w = _COL_W.get(col, 100); _l = _left_px.get(col, 0)
+        return (f"position:sticky;left:{_l}px;top:{top};z-index:5;"
+                f"background:{_TH};color:#9ba3c2;padding:4px 8px;"
+                f"border:1px solid {_B};font-weight:700;"
+                f"text-align:left;white-space:nowrap;min-width:{_w}px;")
+
+    def _stkB(col, bg):
+        _w = _COL_W.get(col, 100); _l = _left_px.get(col, 0)
+        return (f"position:sticky;left:{_l}px;z-index:1;"
+                f"background:{bg};padding:3px 8px;"
+                f"border:1px solid {_B};white-space:nowrap;min-width:{_w}px;")
+
+    _cl_label = str(cl_sel) if cl_sel else "POG Cluster MOD fixture"
+    # Cluster name: sticky left at the first POG column position so it's always visible
+    _clS = (f"position:sticky;left:{_acc}px;top:0;z-index:4;"
+            f"background:{_TC};color:#fff;padding:4px 12px;"
+            f"border:1px solid #1a8a74;font-weight:700;text-align:left;white-space:nowrap;")
+    _grS = (f"position:sticky;top:0;z-index:3;"
+            f"background:{_TC};color:#fff;padding:4px 8px;"
+            f"border:1px solid #1a8a74;font-weight:700;text-align:center;")
+    _pgS = (f"position:sticky;top:33px;z-index:3;"
+            f"background:{_TC2};color:#fff;padding:3px 6px;"
+            f"border:1px solid #1a8a74;font-weight:600;text-align:center;"
+            f"font-size:0.70rem;min-width:120px;white-space:normal;word-break:break-word;")
+
+    _ht = [
+        f"<div style='overflow-x:auto;overflow-y:auto;"
+        f"max-height:{max_height};font-size:0.78rem;'>",
+        "<table style='border-collapse:collapse;'>",
+        "<thead style='position:sticky;top:0;z-index:4;'><tr>",
+    ]
+    for _lbl in [c for c in ["DG_CODE", "ID"] if c in pvt.columns]:
+        _disp = "Item no." if _lbl == "ID" else _lbl
+        _ht.append(f"<th rowspan='2' style='{_stkH(_lbl)}'>{_disp}</th>")
+    if _has_desc:
+        _ht.append(f"<th colspan='1' style='{_grS}'>POG CLUSTER</th>")
+    if _N:
+        _ht.append(f"<th colspan='{_N}' style='{_clS}'>{_cl_label}</th>")
+    _ht.append("</tr><tr>")
+    if _has_desc:
+        _dh = _stkH("ProductDescription", "33px")
+        _ht.append(f"<th style='{_dh}'>ProductDescription</th>")
+    for _pc in _pog_cols:
+        _spc = str(_pc).replace("<", "&lt;").replace(">", "&gt;")
+        _ht.append(f"<th title='{_spc}' style='{_pgS}'>{_spc}</th>")
+    _ht.append("</tr></thead><tbody>")
+
+    _prev_dg4 = object()
+    for _ri, _row in pvt.iterrows():
+        _rbg = "#0e1120" if _ri % 2 == 0 else "#141829"
+        _ht.append(f"<tr style='background:{_rbg};'>")
+        if "DG_CODE" in pvt.columns:
+            _dv4 = str(_row["DG_CODE"]); _bs = _stkB("DG_CODE", _rbg)
+            _is_first = _dv4 != _prev_dg4; _prev_dg4 = _dv4
+            _dc = "color:#e0e4f7;font-weight:600;" if _is_first else "color:#6b7194;"
+            _ht.append(f"<td style='{_bs}{_dc}'>{_dv4}</td>")
+        if "ID" in pvt.columns:
+            _id_v = str(_row["ID"]).strip()
+            _id_val = _id_v.zfill(9) if _id_v not in ("", "nan", "None") else ""
+            _ib = _stkB("ID", _rbg)
+            _ht.append(f"<td style='{_ib}color:#c8cde8;'>{_id_val}</td>")
+        if _has_desc:
+            _dsc = str(_row["ProductDescription"]).replace("<", "&lt;").replace(">", "&gt;")
+            _db = _stkB("ProductDescription", _rbg)
+            _ht.append(f"<td style='{_db}color:#c8cde8;"
+                       f"max-width:230px;overflow:hidden;text-overflow:ellipsis;'>{_dsc}</td>")
+        for _pc in _pog_cols:
+            _v = _row.get(_pc, float("nan"))
+            _ht.append(f"<td style='color:#e0e4f7;padding:3px 8px;"
+                       f"border:1px solid {_B};text-align:right;'>"
+                       f"{'%.2f' % _v if pd.notna(_v) and _v != 0 else ''}</td>")
+        _ht.append("</tr>")
+    _ht.append("</tbody></table></div>")
+    return "".join(_ht)
+
+
 @st.dialog("POG Cluster Table", width="large")
 def _pog_fullscreen_dialog():
     st.markdown("""
@@ -392,12 +481,28 @@ def _pog_fullscreen_dialog():
         align-items: flex-start !important;
     }
     </style>""", unsafe_allow_html=True)
-    _html = st.session_state.get("_pog_fs_html", "")
-    _lbl  = st.session_state.get("_pog_fs_label", "")
+    _lbl       = st.session_state.get("_pog_fs_label", "")
+    _pvt_fs    = st.session_state.get("_pog_fs_pvt")
+    _cl_sel_fs = st.session_state.get("_pog_fs_cl_sel")
     if _lbl:
         st.caption(_lbl)
-    if _html:
-        st.markdown(_html, unsafe_allow_html=True)
+    _id_srch_fs = st.text_input(
+        "", placeholder="🔎  Search by Item no. (ID)…",
+        label_visibility="collapsed", key="minor_id_srch_fs"
+    )
+    if _pvt_fs is not None:
+        _pvt_fs = _pvt_fs.copy()
+        if _id_srch_fs and "ID" in _pvt_fs.columns:
+            _si = _pvt_fs["ID"].astype(str).str.strip().str.zfill(9)
+            _sq = (str(_id_srch_fs).strip().zfill(9)
+                   if str(_id_srch_fs).strip().isdigit()
+                   else str(_id_srch_fs).strip())
+            _im = _si.str.contains(_sq, case=False, na=False)
+            _pvt_fs = pd.concat([_pvt_fs[_im], _pvt_fs[~_im]]).reset_index(drop=True)
+        st.markdown(
+            _build_pog_cluster_html(_pvt_fs, _cl_sel_fs, max_height="calc(100vh - 110px)"),
+            unsafe_allow_html=True,
+        )
 
 
 # ── Minor dashboard ───────────────────────────────────────────────────────────
@@ -715,7 +820,8 @@ def _render_minor():
         _summary_df = pd.concat([_summary_df, _tot_row], ignore_index=True)
 
     # ── Horizontal pivot: Total Store Apply + Total Item per cluster ───────────
-    if _summary_df is not None and not _summary_df.empty:
+    if (_summary_df is not None and not _summary_df.empty
+            and (_fmt_sel or _div_sel or _dg_sel or _cl_sel)):
         _is_tot2   = _summary_df["ClusterName"] == "Total"
         _data_p    = _summary_df[~_is_tot2]
         # Only show clusters that have actual TotalStoreApply or ItemCount data
@@ -849,102 +955,29 @@ def _render_minor():
                 if _row_labels:
                     _pvt = _pvt.sort_values(_row_labels[0]).reset_index(drop=True)
 
+                # ID search bar — matched row floats to top
+                _id_srch = st.text_input(
+                    "", placeholder="🔎  Search by Item no. (ID)…",
+                    label_visibility="collapsed", key="minor_id_srch"
+                )
+                if _id_srch and "ID" in _pvt.columns:
+                    _si = _pvt["ID"].astype(str).str.strip().str.zfill(9)
+                    _sq = (str(_id_srch).strip().zfill(9)
+                           if str(_id_srch).strip().isdigit()
+                           else str(_id_srch).strip())
+                    _im = _si.str.contains(_sq, case=False, na=False)
+                    _pvt = pd.concat([_pvt[_im], _pvt[~_im]]).reset_index(drop=True)
+
                 _pog_cols = [c for c in _pvt.columns if c not in _row_labels]
                 _N        = len(_pog_cols)
-                _has_desc = "ProductDescription" in _pvt.columns
-                # ── Fixed-column widths & sticky left offsets ─────────────────
-                _TH = "#1e2130"; _TC = "#2BBFA4"; _TC2 = "#1a9e8b"; _B = "#2d3350"
-                _COL_W = {"DG_CODE": 74, "ID": 108, "ProductDescription": 230}
-                _left_px = {}; _acc = 0
-                for _cn in ["DG_CODE", "ID", "ProductDescription"]:
-                    if _cn in _pvt.columns:
-                        _left_px[_cn] = _acc
-                        _acc += _COL_W[_cn]
-                def _stkH(col, top="0px"):
-                    _w = _COL_W.get(col, 100)
-                    _l = _left_px.get(col, 0)
-                    return (f"position:sticky;left:{_l}px;top:{top};z-index:5;"
-                            f"background:{_TH};color:#9ba3c2;padding:4px 8px;"
-                            f"border:1px solid {_B};font-weight:700;"
-                            f"text-align:left;white-space:nowrap;min-width:{_w}px;")
-                def _stkB(col, bg):
-                    _w = _COL_W.get(col, 100)
-                    _l = _left_px.get(col, 0)
-                    return (f"position:sticky;left:{_l}px;z-index:1;"
-                            f"background:{bg};padding:3px 8px;"
-                            f"border:1px solid {_B};white-space:nowrap;min-width:{_w}px;")
-                _grS = (f"position:sticky;top:0;z-index:3;"
-                        f"background:{_TC};color:#fff;padding:4px 8px;"
-                        f"border:1px solid #1a8a74;font-weight:700;text-align:center;")
-                _pgS = (f"position:sticky;top:33px;z-index:3;"
-                        f"background:{_TC2};color:#fff;padding:3px 6px;"
-                        f"border:1px solid #1a8a74;font-weight:600;text-align:center;"
-                        f"font-size:0.70rem;min-width:120px;white-space:normal;"
-                        f"word-break:break-word;")
-                # ── Build HTML ───────────────────────────────────────────────
-                _ht = [
-                    "<div style='overflow-x:auto;overflow-y:auto;"
-                    "max-height:520px;font-size:0.78rem;'>",
-                    "<table style='border-collapse:collapse;'>",
-                    "<thead><tr>",
-                ]
-                # Row 1: DG_CODE + ID (rowspan=2, sticky) + group headers
-                for _lbl in [c for c in ["DG_CODE","ID"] if c in _pvt.columns]:
-                    _ht.append(f"<th rowspan='2' style='{_stkH(_lbl)}'>{_lbl}</th>")
-                if _has_desc:
-                    _ht.append(f"<th colspan='1' style='{_grS}'>POG CLUSTER</th>")
-                if _N:
-                    _cl_label = str(_cl_sel) if _cl_sel else "POG Cluster MOD fixture"
-                    _ht.append(f"<th colspan='{_N}' style='{_grS}'>{_cl_label}</th>")
-                _ht.append("</tr><tr>")
-                # Row 2: ProductDescription (sticky) + each POGName
-                if _has_desc:
-                    _desc_h_style = _stkH("ProductDescription", "33px")
-                    _ht.append(f"<th style='{_desc_h_style}'>ProductDescription</th>")
-                for _pc in _pog_cols:
-                    _spc = str(_pc).replace("<","&lt;").replace(">","&gt;")
-                    _ht.append(f"<th title='{_spc}' style='{_pgS}'>{_spc}</th>")
-                _ht.append("</tr></thead><tbody>")
-                # Data rows — DG_CODE repeated on every row so it stays visible while scrolling
-                _prev_dg4 = object()
-                for _ri, _row in _pvt.iterrows():
-                    _rbg = "#0e1120" if _ri % 2 == 0 else "#141829"
-                    _ht.append(f"<tr style='background:{_rbg};'>")
-                    if "DG_CODE" in _pvt.columns:
-                        _dv4 = str(_row["DG_CODE"])
-                        _bs = _stkB("DG_CODE", _rbg)
-                        _is_first_dg = _dv4 != _prev_dg4
-                        _prev_dg4 = _dv4
-                        _dg_color = "color:#e0e4f7;font-weight:600;" if _is_first_dg else "color:#6b7194;"
-                        _ht.append(f"<td style='{_bs}{_dg_color}'>{_dv4}</td>")
-                    if "ID" in _pvt.columns:
-                        _id_b_style = _stkB("ID", _rbg)
-                        _id_val = str(_row['ID']).lstrip('0') or '0'
-                        _ht.append(
-                            f"<td style='{_id_b_style}color:#c8cde8;'>"
-                            f"{_id_val}</td>")
-                    if _has_desc:
-                        _dsc = str(_row["ProductDescription"]).replace("<","&lt;").replace(">","&gt;")
-                        _desc_b_style = _stkB("ProductDescription", _rbg)
-                        _ht.append(
-                            f"<td style='{_desc_b_style}color:#c8cde8;"
-                            f"max-width:230px;overflow:hidden;text-overflow:ellipsis;'>"
-                            f"{_dsc}</td>")
-                    for _pc in _pog_cols:
-                        _v = _row.get(_pc, float("nan"))
-                        _ht.append(
-                            f"<td style='color:#e0e4f7;padding:3px 8px;"
-                            f"border:1px solid {_B};text-align:right;'>"
-                            f"{'%.2f' % _v if pd.notna(_v) and _v != 0 else ''}</td>")
-                    _ht.append("</tr>")
-                _ht.append("</tbody></table></div>")
-                _right_html  = "".join(_ht)
+                _right_html  = _build_pog_cluster_html(_pvt, _cl_sel)
                 _right_label = f"{len(_pvt):,} items · {_N} POGs"
                 _btn_c, _exp_c = st.columns([1, 8])
                 with _btn_c:
                     if st.button("⛶", key="minor_fs_btn", help="Full screen"):
-                        st.session_state["_pog_fs_html"]  = _right_html
-                        st.session_state["_pog_fs_label"] = _right_label
+                        st.session_state["_pog_fs_pvt"]    = _pvt.copy()
+                        st.session_state["_pog_fs_cl_sel"] = _cl_sel
+                        st.session_state["_pog_fs_label"]  = _right_label
                         _pog_fullscreen_dialog()
                 with _exp_c:
                     with st.expander(_right_label, expanded=True):
