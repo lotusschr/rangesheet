@@ -66,7 +66,7 @@ div[data-testid="stRadio"][data-key="dash_period"] > div[role="radiogroup"] > la
 _, _h_filter = st.columns([2.5, 1])
 with _h_filter:
     _period = st.radio(
-        "Period", ["Day", "Week", "Month"],
+        "Period", ["Week", "Month"],
         horizontal=True, key="dash_period", label_visibility="collapsed",
     )
 
@@ -102,31 +102,33 @@ if _date_filtered and len(_df) < len(merged):
 
 # ── Derive KPIs ───────────────────────────────────────────────────────────────
 status_col = find_col(_df, ["status"])
-sale_col   = find_col(_df, ["to-be total sale", "to be total sale", "to-be sale total"])
-if not sale_col:
-    sale_col = find_col(_df, ["sale", "sales"])
 
 total_skus = len(_df)
-if status_col:
-    _statuses     = _df[status_col].astype(str).str.strip().str.upper()
-    active_range  = int((_statuses.isin(["MAINTAIN", "NEW SOME", "NEWNEW", "NEW"])).sum())
-    low_sales_cnt = int((_statuses.isin(["DELETE SOME", "DELETE ALL"])).sum())
-    pending_cnt   = int((_statuses == "REVIEW").sum())
-else:
-    active_range  = total_skus
-    low_sales_cnt = 0
-    pending_cnt   = 0
 
-pct_active  = round(active_range  / total_skus * 100, 1) if total_skus else 0
-pct_low     = round(low_sales_cnt / total_skus * 100, 1) if total_skus else 0
-pct_pending = round(pending_cnt   / total_skus * 100, 1) if total_skus else 0
-pct_review  = round((total_skus - active_range - low_sales_cnt) / total_skus * 100, 1) if total_skus else 0
-pct_new     = max(0, 100 - pct_active - pct_review - pct_low)
+_pog_col   = find_col(_df, ["pogname", "pog name", "planogramname", "planogram name", "pog"])
+total_pog  = int(_df[_pog_col].dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique()) if _pog_col else 0
+
+_store_col  = find_col(_df, ["store", "store number", "store no", "storeno", "storenumber"])
+total_store = int(_df[_store_col].dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique()) if _store_col else 0
+
+if status_col:
+    _statuses    = _df[status_col].astype(str).str.strip().str.upper()
+    maintain_cnt = int((_statuses == "MAINTAIN").sum())
+    new_new_cnt  = int((_statuses.isin(["NEWNEW", "NEW NEW"])).sum())
+    delete_all_cnt = int((_statuses == "DELETE ALL").sum())
+else:
+    maintain_cnt   = 0
+    new_new_cnt    = 0
+    delete_all_cnt = 0
+
+pct_maintain   = round(maintain_cnt   / total_skus * 100, 1) if total_skus else 0
+pct_new_new    = round(new_new_cnt    / total_skus * 100, 1) if total_skus else 0
+pct_delete_all = round(delete_all_cnt / total_skus * 100, 1) if total_skus else 0
 
 # ── Metric cards ──────────────────────────────────────────────────────────────
 def _metric_card(label, value, delta_text, delta_positive, bar_color, bar_pct):
     delta_color = "#2BBFA4" if delta_positive else "#E05555"
-    val_color   = "#E05555" if label == "LOW SALES SKUS" else "#1A1A1A"
+    val_color   = "#1A1A1A"
     return f"""
 <div style="background:#fff;border-radius:16px;border:1px solid #E8E3DC;
             padding:20px 20px 14px;box-shadow:0 1px 4px rgba(0,0,0,.05);">
@@ -143,26 +145,21 @@ def _metric_card(label, value, delta_text, delta_positive, bar_color, bar_pct):
     </div>
 </div>"""
 
-c1, c2, c3, c4 = st.columns(4, gap="medium")
+c1, c2, c3 = st.columns(3, gap="medium")
 with c1:
     st.markdown(_metric_card(
         "TOTAL SKUS", f"{total_skus:,}",
-        f"+{pct_active:.1f}% vs last month", True, "#2BBFA4", pct_active,
+        f"{total_skus:,} items in range", True, "#2BBFA4", 100,
     ), unsafe_allow_html=True)
 with c2:
     st.markdown(_metric_card(
-        "ACTIVE RANGE", f"{active_range:,}",
-        f"+{pct_active:.1f}% vs last month", True, "#3B82F6", pct_active,
+        "TOTAL POG", f"{total_pog:,}",
+        f"{total_pog:,} planograms", True, "#3B82F6", min(total_pog, 100),
     ), unsafe_allow_html=True)
 with c3:
     st.markdown(_metric_card(
-        "LOW SALES SKUS", f"{low_sales_cnt:,}",
-        f"-{pct_low:.1f}% vs last month", False, "#E05555", pct_low,
-    ), unsafe_allow_html=True)
-with c4:
-    st.markdown(_metric_card(
-        "PENDING REVIEW", f"{pending_cnt:,}",
-        f"+{pending_cnt} new", True, "#F59E0B", min(pct_pending + 5, 100),
+        "TOTAL STORE", f"{total_store:,}",
+        f"{total_store:,} stores", True, "#F59E0B", min(total_store, 100),
     ), unsafe_allow_html=True)
 
 st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
@@ -218,34 +215,56 @@ with left:
     st.markdown("</div>", unsafe_allow_html=True)
 
 with right:
-    items = [
-        ("Active",    pct_active, "#2BBFA4"),
-        ("Review",    pct_review, "#F59E0B"),
-        ("Low Sales", pct_low,    "#E05555"),
-        ("New",       pct_new,    "#3B82F6"),
-    ]
-    rows_html = ""
-    for label, pct, color in items:
-        rows_html += f"""
-<div style="margin-bottom:18px;">
-    <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-        <span style="font-size:13px;color:#1A1A1A;font-weight:500;">{label}</span>
-        <span style="font-size:13px;color:#1A1A1A;font-weight:700;">{pct:.0f}%</span>
-    </div>
-    <div style="background:#EDE8DF;border-radius:99px;height:6px;">
-        <div style="background:{color};border-radius:99px;height:6px;
-                    width:{min(pct,100):.1f}%;transition:width 0.3s;"></div>
-    </div>
-</div>"""
-    st.markdown(f"""
+    st.markdown("""
 <div style="background:#fff;border-radius:16px;border:1px solid #E8E3DC;
-            padding:20px;height:100%;box-sizing:border-box;">
-    <div style="font-size:15px;font-weight:700;color:#1A1A1A;margin-bottom:20px;">
+            padding:20px 20px 8px;box-sizing:border-box;">
+    <div style="font-size:15px;font-weight:700;color:#1A1A1A;margin-bottom:4px;">
         Range Status
     </div>
-    {rows_html}
-</div>
-""", unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
+
+    # ── DEMO data ────────────────────────────────────────────────────────
+    _rs_labels = ["Maintain", "New New", "Delete All"]
+    _rs_vals   = [850,         320,       180        ]
+    _rs_colors = ["#2BBFA4",  "#3B82F6", "#E05555"  ]
+    _rs_total  = sum(_rs_vals)
+
+    if HAS_PLOTLY:
+        fig_rs = go.Figure(go.Pie(
+            labels=_rs_labels,
+            values=_rs_vals,
+            marker=dict(colors=_rs_colors, line=dict(color="#fff", width=2)),
+            hole=0.45,
+            textinfo="value",
+            textfont=dict(size=11, color="#fff"),
+            hovertemplate="<b>%{label}</b><br>%{value:,} SKUs (%{percent})<extra></extra>",
+            sort=False,
+        ))
+        fig_rs.add_annotation(
+            text=f"<b>{_rs_total:,}</b><br><span style='font-size:9px;'>SKUs</span>",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=13, color="#1A1A1A", family="Inter,sans-serif"),
+            align="center",
+        )
+        fig_rs.update_layout(
+            height=260,
+            margin=dict(t=8, b=8, l=8, r=8),
+            showlegend=True,
+            legend=dict(
+                orientation="v", x=1.02, y=0.5,
+                font=dict(size=11, color="#555"),
+            ),
+            paper_bgcolor="#fff",
+            font=dict(family="Inter,sans-serif"),
+        )
+        st.markdown('<div style="background:#fff;border-radius:0 0 16px 16px;border:1px solid #E8E3DC;border-top:none;padding:0 12px 12px;">', unsafe_allow_html=True)
+        st.plotly_chart(fig_rs, use_container_width=True, config={"displayModeBar": False})
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        _rs_rows = ""
+        for _lbl, _pct, _clr in zip(_rs_labels, _rs_vals, _rs_colors):
+            _rs_rows += f'<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #F5F0EA;"><span style="font-size:13px;color:#1A1A1A;">{_lbl}</span><span style="font-size:13px;font-weight:700;color:{_clr};">{_pct}%</span></div>'
+        st.markdown(f'<div style="background:#fff;border-radius:0 0 16px 16px;border:1px solid #E8E3DC;border-top:none;padding:12px 20px;">{_rs_rows}</div>', unsafe_allow_html=True)
 
 # ── Range Architecture Pie Chart ──────────────────────────────────────────────
 st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
