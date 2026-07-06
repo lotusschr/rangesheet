@@ -35,8 +35,8 @@ STATUS_COLORS = {
 
 NAV_ITEMS = [
     ("landpage",  "🗂️", "My Files"),
-    ("rawfiles",  "📁", "View Data"),
-    ("viewdata",  "🔍", "Rangesheet Review"),
+    ("viewdata",  "📁", "View Data"),
+    ("rangesheetreview",  "🔍", "Rangesheet Review"),
     ("dashboard", "📊", "Dashboard"),
     ("report",    "📋", "Report"),
     ("audit",     "🛡️", "Audit Log"),
@@ -553,11 +553,11 @@ span[title="Sign out"] button:hover,
 
 
 # ── Page navigation (Next / Previous) ────────────────────────────────────────
-_PAGE_ORDER  = ["landpage", "rawfiles", "viewdata", "dashboard", "report", "audit"]
+_PAGE_ORDER  = ["landpage", "viewdata", "rangesheetreview", "dashboard", "report", "audit"]
 _PAGE_LABELS = {
     "landpage":  "My Files",
-    "rawfiles":  "View Data",
-    "viewdata":  "Rangesheet Review",
+    "viewdata":  "View Data",
+    "rangesheetreview":  "Rangesheet Review",
     "dashboard": "Dashboard",
     "report":    "Report",
     "audit":     "Audit Log",
