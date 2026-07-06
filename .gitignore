@@ -15,3 +15,7 @@ rangesheet_data/merged/
 /utils/__pycache__
 *.parquet
 *.pyc
+/venv
+*.pyc
+/utils/__pycache__
+/rangesheet_data/cache_large
