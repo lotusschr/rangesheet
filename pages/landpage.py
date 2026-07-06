@@ -184,7 +184,7 @@ with col_upload:
     st.markdown("""
 <div style="font-size:12px;color:#999;margin-bottom:8px;text-align:center;">
     Max <strong style="color:#555;">5 files</strong> per upload &nbsp;·&nbsp;
-    csv, txt, xls, xlsx, xlsb accepted
+    csv, txt, xls, xlsx accepted
 </div>""", unsafe_allow_html=True)
 
     uploaded = st.file_uploader(

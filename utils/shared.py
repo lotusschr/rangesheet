@@ -15,10 +15,10 @@ ROOT_DIR = os.path.dirname(_HERE)
 BASE_DIR = os.path.join(ROOT_DIR, "rangesheet_data")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-APP_CONFIG = {"allowed_extensions": ["csv", "txt", "xlsx", "xls", "xlsb"], "max_file_mb": 0}
+APP_CONFIG = {"allowed_extensions": ["csv", "txt", "xlsx", "xls"], "max_file_mb": 0}
 
 RS_SHEETS = [
-    "Range Sheet_Non-SSPOG", "Range Sheet_SSPOG",
+    "Range Sheet_SSPOG", "Range Sheet_Non-SSPOG",
     "StoreApply_SSPOG", "5.1 ItembyStore", "5.2 ItembyStore_SC",
     "5.3 Upload_product_library", "5.4 Upload to Citrix",
 ]

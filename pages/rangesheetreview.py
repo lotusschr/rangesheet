@@ -801,145 +801,145 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     # Check Range To-be Waterfall = number of planograms this product appears in
                     _tdf["Check Range To-be Waterfall"] = _tdf[_piv_pog_cols].notna().sum(axis=1)
 
-                    # ── TEMPORARY DEBUG EXPANDER ─────────────────────────────────
-                    with st.expander("🔎 debug — pivot diagnostics", expanded=False):
+                    # # ── TEMPORARY DEBUG EXPANDER ─────────────────────────────────
+                    # with st.expander("🔎 debug — pivot diagnostics", expanded=False):
 
-                        # ── 1. Column matching ──────────────────────────────────
-                        st.markdown("**1 · Column matching**")
-                        st.write({
-                            "_pog_src_col (planogram name col)": _pog_src_col,
-                            "_sv_col (sales VALUE col)":         _sv_col,
-                            "_pk_map (std → raw key cols)":      _pk_map,
-                            "_dyn_pog_cols (planogram labels)":  _dyn_pog_cols,
-                        })
+                    #     # ── 1. Column matching ──────────────────────────────────
+                    #     st.markdown("**1 · Column matching**")
+                    #     st.write({
+                    #         "_pog_src_col (planogram name col)": _pog_src_col,
+                    #         "_sv_col (sales VALUE col)":         _sv_col,
+                    #         "_pk_map (std → raw key cols)":      _pk_map,
+                    #         "_dyn_pog_cols (planogram labels)":  _dyn_pog_cols,
+                    #     })
 
-                        # ── 2. Pivot integrity ──────────────────────────────────
-                        st.markdown("**2 · Pivot integrity**")
-                        _n_unique_products = df_view[_pk_raw].drop_duplicates().shape[0]
-                        st.write({
-                            "df_view shape (long rows × cols)":     df_view.shape,
-                            "unique products in df_view":            _n_unique_products,
-                            "_piv shape (products × pog+key cols)": _piv.shape,
-                        })
-                        st.markdown("Pivot columns:")
-                        st.write(list(_piv.columns))
-                        st.markdown("_dyn_pog_cols (expected headers):")
-                        st.write(_dyn_pog_cols)
-                        st.markdown("_piv_pog_cols (intersection — values that actually landed in pivot):")
-                        st.write(_piv_pog_cols)
-                        _missing_in_pivot = [c for c in _dyn_pog_cols if c not in set(_piv.columns)]
-                        if _missing_in_pivot:
-                            st.warning(f"⚠️ These _dyn_pog_cols are NOT in the pivot columns "
-                                       f"(name mismatch?): {_missing_in_pivot}")
+                    #     # ── 2. Pivot integrity ──────────────────────────────────
+                    #     st.markdown("**2 · Pivot integrity**")
+                    #     _n_unique_products = df_view[_pk_raw].drop_duplicates().shape[0]
+                    #     st.write({
+                    #         "df_view shape (long rows × cols)":     df_view.shape,
+                    #         "unique products in df_view":            _n_unique_products,
+                    #         "_piv shape (products × pog+key cols)": _piv.shape,
+                    #     })
+                    #     st.markdown("Pivot columns:")
+                    #     st.write(list(_piv.columns))
+                    #     st.markdown("_dyn_pog_cols (expected headers):")
+                    #     st.write(_dyn_pog_cols)
+                    #     st.markdown("_piv_pog_cols (intersection — values that actually landed in pivot):")
+                    #     st.write(_piv_pog_cols)
+                    #     _missing_in_pivot = [c for c in _dyn_pog_cols if c not in set(_piv.columns)]
+                    #     if _missing_in_pivot:
+                    #         st.warning(f"⚠️ These _dyn_pog_cols are NOT in the pivot columns "
+                    #                    f"(name mismatch?): {_missing_in_pivot}")
 
-                        # ── 3. Merge check ──────────────────────────────────────
-                        st.markdown("**3 · Merge check (join key alignment)**")
-                        # Rows where ALL pog columns are NaN → no pivot match
-                        if _piv_pog_cols:
-                            _blank_mask = _tdf[_piv_pog_cols].isna().all(axis=1)
-                            _n_blank = int(_blank_mask.sum())
-                            st.write(f"Products with ALL pog columns blank after merge: {_n_blank} / {len(_tdf)}")
-                            if _n_blank > 0:
-                                _blank_keys = _tdf.loc[_blank_mask, _pk_std].head(5)
-                                st.markdown("Sample blank product keys in `_tdf` (after merge):")
-                                st.dataframe(_blank_keys)
-                                # Pivot index keys — compare dtypes / repr
-                                _piv_keys_sample = _piv_std[_pk_std].head(5)
-                                st.markdown("Sample pivot key rows in `_piv_std` (should match above):")
-                                st.dataframe(_piv_keys_sample)
-                                # Dtype comparison
-                                _dtype_tdf = {c: str(_tdf[c].dtype) for c in _pk_std}
-                                _dtype_piv = {c: str(_piv_std[c].dtype) for c in _pk_std}
-                                st.write("_tdf key dtypes:", _dtype_tdf)
-                                st.write("_piv_std key dtypes:", _dtype_piv)
+                    #     # ── 3. Merge check ──────────────────────────────────────
+                    #     st.markdown("**3 · Merge check (join key alignment)**")
+                    #     # Rows where ALL pog columns are NaN → no pivot match
+                    #     if _piv_pog_cols:
+                    #         _blank_mask = _tdf[_piv_pog_cols].isna().all(axis=1)
+                    #         _n_blank = int(_blank_mask.sum())
+                    #         st.write(f"Products with ALL pog columns blank after merge: {_n_blank} / {len(_tdf)}")
+                    #         if _n_blank > 0:
+                    #             _blank_keys = _tdf.loc[_blank_mask, _pk_std].head(5)
+                    #             st.markdown("Sample blank product keys in `_tdf` (after merge):")
+                    #             st.dataframe(_blank_keys)
+                    #             # Pivot index keys — compare dtypes / repr
+                    #             _piv_keys_sample = _piv_std[_pk_std].head(5)
+                    #             st.markdown("Sample pivot key rows in `_piv_std` (should match above):")
+                    #             st.dataframe(_piv_keys_sample)
+                    #             # Dtype comparison
+                    #             _dtype_tdf = {c: str(_tdf[c].dtype) for c in _pk_std}
+                    #             _dtype_piv = {c: str(_piv_std[c].dtype) for c in _pk_std}
+                    #             st.write("_tdf key dtypes:", _dtype_tdf)
+                    #             st.write("_piv_std key dtypes:", _dtype_piv)
 
-                        # ── 4. Raw source check ─────────────────────────────────
-                        st.markdown("**4 · Raw source check — df_view rows for blank products**")
-                        if _piv_pog_cols:
-                            _blank_mask2 = _tdf[_piv_pog_cols].isna().all(axis=1)
-                            _sample_blank_stds = _tdf.loc[_blank_mask2, _pk_std].head(3)
-                            if not _sample_blank_stds.empty:
-                                for _, _brow in _sample_blank_stds.iterrows():
-                                    # Build a filter against df_view using raw pk col names
-                                    _filt = pd.Series([True] * len(df_view), index=df_view.index)
-                                    for _s, _r in _pk_map.items():
-                                        _filt &= (df_view[_r].astype(str).str.strip() == str(_brow[_s]).strip())
-                                    _raw_rows = df_view.loc[_filt, _pk_raw + [_pog_src_col] + ([_sv_col] if _sv_col else [])]
-                                    st.markdown(f"Raw rows for key `{tuple(_brow[c] for c in _pk_std)}`:")
-                                    if _raw_rows.empty:
-                                        st.warning("No matching rows found in df_view — key mismatch in the filter itself.")
-                                    else:
-                                        st.dataframe(_raw_rows)
-                            else:
-                                st.success("No blank-product rows found — all products matched the pivot.")
+                    #     # ── 4. Raw source check ─────────────────────────────────
+                    #     st.markdown("**4 · Raw source check — df_view rows for blank products**")
+                    #     if _piv_pog_cols:
+                    #         _blank_mask2 = _tdf[_piv_pog_cols].isna().all(axis=1)
+                    #         _sample_blank_stds = _tdf.loc[_blank_mask2, _pk_std].head(3)
+                    #         if not _sample_blank_stds.empty:
+                    #             for _, _brow in _sample_blank_stds.iterrows():
+                    #                 # Build a filter against df_view using raw pk col names
+                    #                 _filt = pd.Series([True] * len(df_view), index=df_view.index)
+                    #                 for _s, _r in _pk_map.items():
+                    #                     _filt &= (df_view[_r].astype(str).str.strip() == str(_brow[_s]).strip())
+                    #                 _raw_rows = df_view.loc[_filt, _pk_raw + [_pog_src_col] + ([_sv_col] if _sv_col else [])]
+                    #                 st.markdown(f"Raw rows for key `{tuple(_brow[c] for c in _pk_std)}`:")
+                    #                 if _raw_rows.empty:
+                    #                     st.warning("No matching rows found in df_view — key mismatch in the filter itself.")
+                    #                 else:
+                    #                     st.dataframe(_raw_rows)
+                    #         else:
+                    #             st.success("No blank-product rows found — all products matched the pivot.")
 
-                        # ── 5. Pre-render cell comparison ───────────────────────
-                        st.markdown("**5 · Pre-render cell comparison (pre-overlay, pre-reorder)**")
-                        st.write(f"_MAX = {_MAX} | len(_tdf) = {len(_tdf)}")
+                    #     # ── 5. Pre-render cell comparison ───────────────────────
+                    #     st.markdown("**5 · Pre-render cell comparison (pre-overlay, pre-reorder)**")
+                    #     st.write(f"_MAX = {_MAX} | len(_tdf) = {len(_tdf)}")
 
-                        # Any overlay data already in session state?
-                        _dbg_ov_key  = f"{p}_pog_edits"
-                        _dbg_ov_data = st.session_state.get(_dbg_ov_key, {})
-                        st.write(f"_pog_edits entries in session state: {len(_dbg_ov_data)}")
-                        if _dbg_ov_data:
-                            st.write("Sample overlay entries (first 3):",
-                                     dict(list(_dbg_ov_data.items())[:3]))
+                    #     # Any overlay data already in session state?
+                    #     _dbg_ov_key  = f"{p}_pog_actions"
+                    #     _dbg_ov_data = st.session_state.get(_dbg_ov_key, {})
+                    #     st.write(f"_pog_actions entries in session state: {len(_dbg_ov_data)}")
+                    #     if _dbg_ov_data:
+                    #         st.write("Sample overlay entries (first 3):",
+                    #                  dict(list(_dbg_ov_data.items())[:3]))
 
-                        # Auto-pick 3 products that have the most non-NaN values in _piv
-                        _dbg_nonnull_counts = _piv[_piv_pog_cols].notna().sum(axis=1)
-                        _dbg_top_idx = _dbg_nonnull_counts.nlargest(3).index.tolist()
+                    #     # Auto-pick 3 products that have the most non-NaN values in _piv
+                    #     _dbg_nonnull_counts = _piv[_piv_pog_cols].notna().sum(axis=1)
+                    #     _dbg_top_idx = _dbg_nonnull_counts.nlargest(3).index.tolist()
 
-                        for _dbg_pi in _dbg_top_idx:
-                            _dbg_prow  = _piv.loc[_dbg_pi]
-                            _dbg_kstd  = {s: _dbg_prow[_pk_map[s]] for s in _pk_std}
+                    #     for _dbg_pi in _dbg_top_idx:
+                    #         _dbg_prow  = _piv.loc[_dbg_pi]
+                    #         _dbg_kstd  = {s: _dbg_prow[_pk_map[s]] for s in _pk_std}
 
-                            # Locate product in _tdf by matching key values as strings
-                            _dbg_mask = pd.Series([True] * len(_tdf), index=_tdf.index)
-                            for _dbg_s in _pk_std:
-                                _dbg_mask &= (
-                                    _tdf[_dbg_s].astype(str).str.strip()
-                                    == str(_dbg_kstd[_dbg_s]).strip()
-                                )
-                            _dbg_tmatch = _tdf[_dbg_mask]
+                    #         # Locate product in _tdf by matching key values as strings
+                    #         _dbg_mask = pd.Series([True] * len(_tdf), index=_tdf.index)
+                    #         for _dbg_s in _pk_std:
+                    #             _dbg_mask &= (
+                    #                 _tdf[_dbg_s].astype(str).str.strip()
+                    #                 == str(_dbg_kstd[_dbg_s]).strip()
+                    #             )
+                    #         _dbg_tmatch = _tdf[_dbg_mask]
 
-                            _dbg_cap_flag = (
-                                "no" if _dbg_tmatch.empty
-                                else ("YES ⚠️" if _dbg_tmatch.index.min() >= _MAX else "no")
-                            )
-                            st.markdown(
-                                f"**Product key:** `{_dbg_kstd}` — "
-                                f"_tdf row(s): `{_dbg_tmatch.index.tolist()}` "
-                                f"(row index ≥ _MAX={_MAX}? {_dbg_cap_flag})"
-                            )
+                    #         _dbg_cap_flag = (
+                    #             "no" if _dbg_tmatch.empty
+                    #             else ("YES ⚠️" if _dbg_tmatch.index.min() >= _MAX else "no")
+                    #         )
+                    #         st.markdown(
+                    #             f"**Product key:** `{_dbg_kstd}` — "
+                    #             f"_tdf row(s): `{_dbg_tmatch.index.tolist()}` "
+                    #             f"(row index ≥ _MAX={_MAX}? {_dbg_cap_flag})"
+                    #         )
 
-                            _dbg_comp = []
-                            for _dbg_pc in _piv_pog_cols[:40]:
-                                _piv_val = _dbg_prow.get(_dbg_pc, float("nan"))
-                                if _dbg_tmatch.empty:
-                                    _tdf_val  = "PRODUCT NOT IN _tdf"
-                                    _fmt      = ""
-                                elif _dbg_pc not in _dbg_tmatch.columns:
-                                    _tdf_val  = "COLUMN MISSING"
-                                    _fmt      = ""
-                                else:
-                                    _tdf_val = _dbg_tmatch.iloc[0][_dbg_pc]
-                                    try:
-                                        _fmt = (f"{int(float(_tdf_val)):,}"
-                                                if pd.notna(_tdf_val) else "(blank)")
-                                    except (TypeError, ValueError):
-                                        _fmt = f"(err: {_tdf_val!r})"
-                                _dbg_comp.append({
-                                    "planogram col": _dbg_pc,
-                                    "_piv value":    _piv_val,
-                                    "_tdf value":    _tdf_val,
-                                    "type(_tdf)":    type(_tdf_val).__name__,
-                                    "pd.notna":      pd.notna(_tdf_val)
-                                                     if not isinstance(_tdf_val, str)
-                                                     else True,
-                                    "render output": _fmt,
-                                })
-                            st.dataframe(pd.DataFrame(_dbg_comp), height=300, use_container_width=True)
-                    # ── END TEMPORARY DEBUG EXPANDER ─────────────────────────────
+                    #         _dbg_comp = []
+                    #         for _dbg_pc in _piv_pog_cols[:40]:
+                    #             _piv_val = _dbg_prow.get(_dbg_pc, float("nan"))
+                    #             if _dbg_tmatch.empty:
+                    #                 _tdf_val  = "PRODUCT NOT IN _tdf"
+                    #                 _fmt      = ""
+                    #             elif _dbg_pc not in _dbg_tmatch.columns:
+                    #                 _tdf_val  = "COLUMN MISSING"
+                    #                 _fmt      = ""
+                    #             else:
+                    #                 _tdf_val = _dbg_tmatch.iloc[0][_dbg_pc]
+                    #                 try:
+                    #                     _fmt = (f"{int(float(_tdf_val)):,}"
+                    #                             if pd.notna(_tdf_val) else "(blank)")
+                    #                 except (TypeError, ValueError):
+                    #                     _fmt = f"(err: {_tdf_val!r})"
+                    #             _dbg_comp.append({
+                    #                 "planogram col": _dbg_pc,
+                    #                 "_piv value":    _piv_val,
+                    #                 "_tdf value":    _tdf_val,
+                    #                 "type(_tdf)":    type(_tdf_val).__name__,
+                    #                 "pd.notna":      pd.notna(_tdf_val)
+                    #                                  if not isinstance(_tdf_val, str)
+                    #                                  else True,
+                    #                 "render output": _fmt,
+                    #             })
+                    #         st.dataframe(pd.DataFrame(_dbg_comp), height=300, use_container_width=True)
+                    # # ── END TEMPORARY DEBUG EXPANDER ─────────────────────────────
 
                 else:
                     _tdf["Check Range To-be Waterfall"] = ""
@@ -969,387 +969,543 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             if _pc in _tdf.columns:
                                 _tdf.at[_ri, _pc] = _pv
 
-            # ── TEMPORARY: post-overlay debug ────────────────────────────────────
-            if _dyn_pog_cols:
-                with st.expander("🔎 debug — post-overlay / render-ready state", expanded=False):
-                    st.markdown("**Values in `_tdf` AFTER overlay applied, AFTER column reorder — "
-                                "this is exactly what the render loop sees.**")
-                    # Pick first 3 rows of _tdf; show all pog columns
-                    _pog_in_tdf = [c for c in _dyn_pog_cols if c in _tdf.columns]
-                    st.write(f"_dyn_pog_cols count: {len(_dyn_pog_cols)} | "
-                             f"pog cols present in _tdf: {len(_pog_in_tdf)} | "
-                             f"overlay entries: {len(_pog_edits)}")
+            # # ── TEMPORARY: post-overlay debug ────────────────────────────────────
+            # if _dyn_pog_cols:
+            #     with st.expander("🔎 debug — post-overlay / render-ready state", expanded=False):
+            #         st.markdown("**Values in `_tdf` AFTER overlay applied, AFTER column reorder — "
+            #                     "this is exactly what the render loop sees.**")
+            #         # Pick first 3 rows of _tdf; show all pog columns
+            #         _pog_in_tdf = [c for c in _dyn_pog_cols if c in _tdf.columns]
+            #         _dbg_act_ov = st.session_state.get(f"{p}_pog_actions", {})
+            #         st.write(f"_dyn_pog_cols count: {len(_dyn_pog_cols)} | "
+            #                  f"pog cols present in _tdf: {len(_pog_in_tdf)} | "
+            #                  f"action overlay entries: {len(_dbg_act_ov)}")
 
-                    for _dbg_ri in range(min(3, len(_tdf))):
-                        _dbg_rk = _make_rk(_dbg_ri)
-                        _ov_for_row = _pog_edits.get(_dbg_rk, {})
-                        st.markdown(f"**Row {_dbg_ri}** | key={_dbg_rk} | "
-                                    f"overlay entries for this key: {_ov_for_row}")
-                        _post_rows = []
-                        for _pc in _pog_in_tdf[:40]:
-                            _raw = _tdf.at[_dbg_ri, _pc]
-                            try:
-                                _fmt = (f"{int(float(_raw)):,}"
-                                        if pd.notna(_raw) else "(blank)")
-                            except (TypeError, ValueError):
-                                _fmt = f"(err: {_raw!r})"
-                            _post_rows.append({
-                                "planogram col": _pc,
-                                "raw value":     _raw,
-                                "type":          type(_raw).__name__,
-                                "pd.notna":      pd.notna(_raw)
-                                                 if not isinstance(_raw, str) else True,
-                                "render output": _fmt,
-                                "wiped by overlay?": (
-                                    "YES ⚠️" if _pc in _ov_for_row
-                                    and pd.isna(_ov_for_row[_pc]) else "no"
-                                ),
-                            })
-                        st.dataframe(pd.DataFrame(_post_rows), height=300, use_container_width=True)
-            # ── END TEMPORARY post-overlay debug ─────────────────────────────────
+            #         for _dbg_ri in range(min(3, len(_tdf))):
+            #             _dbg_rk = _make_rk(_dbg_ri)
+            #             _ov_for_row = _dbg_act_ov.get(_dbg_rk, {})
+            #             st.markdown(f"**Row {_dbg_ri}** | key={_dbg_rk} | "
+            #                         f"overlay entries for this key: {_ov_for_row}")
+            #             _post_rows = []
+            #             for _pc in _pog_in_tdf[:40]:
+            #                 _raw = _tdf.at[_dbg_ri, _pc]
+            #                 try:
+            #                     _fmt = (f"{int(float(_raw)):,}"
+            #                             if pd.notna(_raw) else "(blank)")
+            #                 except (TypeError, ValueError):
+            #                     _fmt = f"(err: {_raw!r})"
+            #                 _post_rows.append({
+            #                     "planogram col": _pc,
+            #                     "raw value":     _raw,
+            #                     "type":          type(_raw).__name__,
+            #                     "pd.notna":      pd.notna(_raw)
+            #                                      if not isinstance(_raw, str) else True,
+            #                     "render output": _fmt,
+            #                     "wiped by overlay?": (
+            #                         "YES ⚠️" if _pc in _ov_for_row
+            #                         and pd.isna(_ov_for_row[_pc]) else "no"
+            #                     ),
+            #                 })
+            #             st.dataframe(pd.DataFrame(_post_rows), height=300, use_container_width=True)
+            # # ── END TEMPORARY post-overlay debug ─────────────────────────────────
 
-            # ── TEMPORARY: automated reconciliation (proves pivot ≡ raw data) ──
-            if _piv_pog_cols and _sv_col and _pog_src_col:
-                with st.expander("🔍 reconciliation — pivot vs raw data", expanded=False):
-                    _SEP = "\x00\x01"   # separator unlikely to appear in product IDs
+            # # ── TEMPORARY: automated reconciliation (proves pivot ≡ raw data) ──
+            # if _piv_pog_cols and _sv_col and _pog_src_col:
+            #     with st.expander("🔍 reconciliation — pivot vs raw data", expanded=False):
+            #         _SEP = "\x00\x01"   # separator unlikely to appear in product IDs
 
-                    # ── Pre-compute shared key series (used by all 4 checks) ──
-                    # pk string key in df_view (raw col names)
-                    _rc_dfv_pk = df_view[_pk_raw[0]].astype(str)
-                    for _c in _pk_raw[1:]:
-                        _rc_dfv_pk = _rc_dfv_pk + _SEP + df_view[_c].astype(str)
+            #         # ── Pre-compute shared key series (used by all 4 checks) ──
+            #         # pk string key in df_view (raw col names)
+            #         _rc_dfv_pk = df_view[_pk_raw[0]].astype(str)
+            #         for _c in _pk_raw[1:]:
+            #             _rc_dfv_pk = _rc_dfv_pk + _SEP + df_view[_c].astype(str)
 
-                    # pk string key in _tdf (standard col names, same join order)
-                    _rc_tdf_pk = _tdf[_pk_std[0]].astype(str)
-                    for _c in _pk_std[1:]:
-                        _rc_tdf_pk = _rc_tdf_pk + _SEP + _tdf[_c].astype(str)
+            #         # pk string key in _tdf (standard col names, same join order)
+            #         _rc_tdf_pk = _tdf[_pk_std[0]].astype(str)
+            #         for _c in _pk_std[1:]:
+            #             _rc_tdf_pk = _rc_tdf_pk + _SEP + _tdf[_c].astype(str)
 
-                    _rc_displayed_pks = set(_rc_tdf_pk)                          # products in table
-                    _rc_pog_str       = df_view[_pog_src_col].astype(str).str.strip()
-                    _rc_sv_num        = pd.to_numeric(df_view[_sv_col], errors="coerce")
-                    _rc_pk_mask       = _rc_dfv_pk.isin(_rc_displayed_pks)        # rows for displayed products
-                    _rc_pog_mask      = _rc_pog_str.isin(set(_dyn_pog_cols))      # rows for displayed planograms
+            #         _rc_displayed_pks = set(_rc_tdf_pk)                          # products in table
+            #         _rc_pog_str       = df_view[_pog_src_col].astype(str).str.strip()
+            #         _rc_sv_num        = pd.to_numeric(df_view[_sv_col], errors="coerce")
+            #         _rc_pk_mask       = _rc_dfv_pk.isin(_rc_displayed_pks)        # rows for displayed products
+            #         _rc_pog_mask      = _rc_pog_str.isin(set(_dyn_pog_cols))      # rows for displayed planograms
 
-                    # ── Check 1: Grand total ────────────────────────────────────
-                    st.markdown("#### Check 1 — Grand total")
-                    _c1_tdf = float(_tdf[_piv_pog_cols].sum(skipna=True).sum())
-                    _c1_raw = float(_rc_sv_num[_rc_pk_mask & _rc_pog_mask].sum())
-                    _c1_diff = abs(_c1_tdf - _c1_raw)
-                    _c1_ok   = _c1_diff < 0.5
-                    st.write({
-                        "Pivot _tdf total (all pog cols, all displayed products)":
-                            f"{_c1_tdf:,.2f}",
-                        "Raw df_view total (same products + planograms)":
-                            f"{_c1_raw:,.2f}",
-                        "Absolute difference":
-                            f"{_c1_diff:.4f}",
-                    })
-                    if _c1_ok:
-                        st.success("✓ Grand totals match")
-                    else:
-                        st.error(f"✗ Grand total mismatch — diff = {_c1_diff:,.2f}")
+            #         # ── Check 1: Grand total ────────────────────────────────────
+            #         st.markdown("#### Check 1 — Grand total")
+            #         _c1_tdf = float(_tdf[_piv_pog_cols].sum(skipna=True).sum())
+            #         _c1_raw = float(_rc_sv_num[_rc_pk_mask & _rc_pog_mask].sum())
+            #         _c1_diff = abs(_c1_tdf - _c1_raw)
+            #         _c1_ok   = _c1_diff < 0.5
+            #         st.write({
+            #             "Pivot _tdf total (all pog cols, all displayed products)":
+            #                 f"{_c1_tdf:,.2f}",
+            #             "Raw df_view total (same products + planograms)":
+            #                 f"{_c1_raw:,.2f}",
+            #             "Absolute difference":
+            #                 f"{_c1_diff:.4f}",
+            #         })
+            #         if _c1_ok:
+            #             st.success("✓ Grand totals match")
+            #         else:
+            #             st.error(f"✗ Grand total mismatch — diff = {_c1_diff:,.2f}")
 
-                    # ── Check 2: Cell spot-check (8 random non-NaN cells) ───────
-                    st.markdown("#### Check 2 — Cell spot-check (8 random cells)")
-                    _c2_melt = (
-                        _tdf[_pk_std + _piv_pog_cols]
-                        .melt(id_vars=_pk_std, var_name="_pog_", value_name="_val_")
-                        .dropna(subset=["_val_"])
-                        .reset_index(drop=True)
-                    )
-                    _c2_sample = (
-                        _c2_melt.sample(min(8, len(_c2_melt)), random_state=42)
-                        if not _c2_melt.empty else _c2_melt
-                    )
-                    _c2_rows = []
-                    for _, _sr in _c2_sample.iterrows():
-                        _pog_lbl  = _sr["_pog_"]
-                        _tdf_val  = float(_sr["_val_"])
-                        _pk_key   = _SEP.join(str(_sr[c]) for c in _pk_std)
-                        _c2_filt  = (_rc_dfv_pk == _pk_key) & (_rc_pog_str == _pog_lbl)
-                        _raw_sum  = float(_rc_sv_num[_c2_filt].sum())
-                        _c2_rows.append({
-                            **{c: _sr[c] for c in _pk_std},
-                            "planogram":  _pog_lbl,
-                            "raw_sum":    f"{_raw_sum:,.0f}",
-                            "tdf_value":  f"{_tdf_val:,.0f}",
-                            "match?":     "✓" if abs(_raw_sum - _tdf_val) < 0.5 else "✗",
-                        })
-                    _c2_df = pd.DataFrame(_c2_rows)
-                    st.dataframe(_c2_df, hide_index=True, use_container_width=True)
-                    if _c2_df.empty or (_c2_df["match?"] == "✓").all():
-                        st.success("✓ All sampled cells match")
-                    else:
-                        _c2_bad = int((~(_c2_df["match?"] == "✓")).sum())
-                        st.error(f"✗ {_c2_bad} cell(s) mismatch")
+            #         # ── Check 2: Cell spot-check (8 random non-NaN cells) ───────
+            #         st.markdown("#### Check 2 — Cell spot-check (8 random cells)")
+            #         _c2_melt = (
+            #             _tdf[_pk_std + _piv_pog_cols]
+            #             .melt(id_vars=_pk_std, var_name="_pog_", value_name="_val_")
+            #             .dropna(subset=["_val_"])
+            #             .reset_index(drop=True)
+            #         )
+            #         _c2_sample = (
+            #             _c2_melt.sample(min(8, len(_c2_melt)), random_state=42)
+            #             if not _c2_melt.empty else _c2_melt
+            #         )
+            #         _c2_rows = []
+            #         for _, _sr in _c2_sample.iterrows():
+            #             _pog_lbl  = _sr["_pog_"]
+            #             _tdf_val  = float(_sr["_val_"])
+            #             _pk_key   = _SEP.join(str(_sr[c]) for c in _pk_std)
+            #             _c2_filt  = (_rc_dfv_pk == _pk_key) & (_rc_pog_str == _pog_lbl)
+            #             _raw_sum  = float(_rc_sv_num[_c2_filt].sum())
+            #             _c2_rows.append({
+            #                 **{c: _sr[c] for c in _pk_std},
+            #                 "planogram":  _pog_lbl,
+            #                 "raw_sum":    f"{_raw_sum:,.0f}",
+            #                 "tdf_value":  f"{_tdf_val:,.0f}",
+            #                 "match?":     "✓" if abs(_raw_sum - _tdf_val) < 0.5 else "✗",
+            #             })
+            #         _c2_df = pd.DataFrame(_c2_rows)
+            #         st.dataframe(_c2_df, hide_index=True, use_container_width=True)
+            #         if _c2_df.empty or (_c2_df["match?"] == "✓").all():
+            #             st.success("✓ All sampled cells match")
+            #         else:
+            #             _c2_bad = int((~(_c2_df["match?"] == "✓")).sum())
+            #             st.error(f"✗ {_c2_bad} cell(s) mismatch")
 
-                    # ── Check 3: Marginals (5 products, row-total) ───────────────
-                    st.markdown("#### Check 3 — Marginals (5 sample products, row-total)")
-                    _c3_sample = _tdf.sample(min(5, len(_tdf)), random_state=7)
-                    _c3_rows = []
-                    for _, _mr in _c3_sample.iterrows():
-                        _pivot_tot = sum(
-                            float(_mr[c]) for c in _piv_pog_cols
-                            if c in _mr.index and pd.notna(_mr[c])
-                        )
-                        _pk_key  = _SEP.join(str(_mr[c]) for c in _pk_std)
-                        _c3_filt = (_rc_dfv_pk == _pk_key) & _rc_pog_mask
-                        _raw_tot = float(_rc_sv_num[_c3_filt].sum())
-                        _c3_rows.append({
-                            **{c: _mr[c] for c in _pk_std},
-                            "tdf row-total":    f"{_pivot_tot:,.0f}",
-                            "raw df_view sum":  f"{_raw_tot:,.0f}",
-                            "match?": "✓" if abs(_pivot_tot - _raw_tot) < 0.5 else "✗",
-                        })
-                    _c3_df = pd.DataFrame(_c3_rows)
-                    st.dataframe(_c3_df, hide_index=True, use_container_width=True)
-                    if _c3_df.empty or (_c3_df["match?"] == "✓").all():
-                        st.success("✓ All row-totals match")
-                    else:
-                        st.error(f"✗ {int((~(_c3_df['match?'] == '✓')).sum())} row-total(s) mismatch")
+            #         # ── Check 3: Marginals (5 products, row-total) ───────────────
+            #         st.markdown("#### Check 3 — Marginals (5 sample products, row-total)")
+            #         _c3_sample = _tdf.sample(min(5, len(_tdf)), random_state=7)
+            #         _c3_rows = []
+            #         for _, _mr in _c3_sample.iterrows():
+            #             _pivot_tot = sum(
+            #                 float(_mr[c]) for c in _piv_pog_cols
+            #                 if c in _mr.index and pd.notna(_mr[c])
+            #             )
+            #             _pk_key  = _SEP.join(str(_mr[c]) for c in _pk_std)
+            #             _c3_filt = (_rc_dfv_pk == _pk_key) & _rc_pog_mask
+            #             _raw_tot = float(_rc_sv_num[_c3_filt].sum())
+            #             _c3_rows.append({
+            #                 **{c: _mr[c] for c in _pk_std},
+            #                 "tdf row-total":    f"{_pivot_tot:,.0f}",
+            #                 "raw df_view sum":  f"{_raw_tot:,.0f}",
+            #                 "match?": "✓" if abs(_pivot_tot - _raw_tot) < 0.5 else "✗",
+            #             })
+            #         _c3_df = pd.DataFrame(_c3_rows)
+            #         st.dataframe(_c3_df, hide_index=True, use_container_width=True)
+            #         if _c3_df.empty or (_c3_df["match?"] == "✓").all():
+            #             st.success("✓ All row-totals match")
+            #         else:
+            #             st.error(f"✗ {int((~(_c3_df['match?'] == '✓')).sum())} row-total(s) mismatch")
 
-                    # ── Check 4: aggfunc sanity ─────────────────────────────────
-                    st.markdown("#### Check 4 — aggfunc sanity (repeated product×planogram pairs?)")
-                    _c4_df = (
-                        df_view[_rc_pk_mask & _rc_pog_mask]
-                        .assign(_pk_=_rc_dfv_pk, _pog_=_rc_pog_str)
-                        .groupby(["_pk_", "_pog_"], sort=False)
-                        .size()
-                        .reset_index(name="_count_")
-                    )
-                    _c4_repeated = _c4_df[_c4_df["_count_"] > 1]
-                    st.write(
-                        f"Total (product, planogram) pairs in displayed subset: "
-                        f"**{len(_c4_df):,}** | "
-                        f"Pairs appearing >1 time: **{len(_c4_repeated):,}**"
-                    )
-                    if _c4_repeated.empty:
-                        st.success("✓ All pairs unique — aggfunc='sum' ≡ first (no multi-row summing)")
-                    else:
-                        st.warning(
-                            f"⚠️ {len(_c4_repeated):,} pairs repeat. "
-                            f"aggfunc='sum' is adding their rows. "
-                            f"Confirm this is intended (e.g. multi-store rows)."
-                        )
-                        for _, _rr in _c4_repeated.head(3).iterrows():
-                            _c4_filt = (_rc_dfv_pk == _rr["_pk_"]) & (_rc_pog_str == _rr["_pog_"])
-                            _c4_detail = df_view.loc[_c4_filt, _pk_raw + [_pog_src_col, _sv_col]].copy()
-                            _c4_detail["→ summed_to"] = (
-                                pd.to_numeric(_c4_detail[_sv_col], errors="coerce").sum()
-                            )
-                            st.markdown(
-                                f"**pk=`{_rr['_pk_']}`  pog=`{_rr['_pog_']}`** "
-                                f"({int(_rr['_count_'])} rows)"
-                            )
-                            st.dataframe(_c4_detail, hide_index=True)
-            # ── END TEMPORARY reconciliation ──────────────────────────────────
+            #         # ── Check 4: aggfunc sanity ─────────────────────────────────
+            #         st.markdown("#### Check 4 — aggfunc sanity (repeated product×planogram pairs?)")
+            #         _c4_df = (
+            #             df_view[_rc_pk_mask & _rc_pog_mask]
+            #             .assign(_pk_=_rc_dfv_pk, _pog_=_rc_pog_str)
+            #             .groupby(["_pk_", "_pog_"], sort=False)
+            #             .size()
+            #             .reset_index(name="_count_")
+            #         )
+            #         _c4_repeated = _c4_df[_c4_df["_count_"] > 1]
+            #         st.write(
+            #             f"Total (product, planogram) pairs in displayed subset: "
+            #             f"**{len(_c4_df):,}** | "
+            #             f"Pairs appearing >1 time: **{len(_c4_repeated):,}**"
+            #         )
+            #         if _c4_repeated.empty:
+            #             st.success("✓ All pairs unique — aggfunc='sum' ≡ first (no multi-row summing)")
+            #         else:
+            #             st.warning(
+            #                 f"⚠️ {len(_c4_repeated):,} pairs repeat. "
+            #                 f"aggfunc='sum' is adding their rows. "
+            #                 f"Confirm this is intended (e.g. multi-store rows)."
+            #             )
+            #             for _, _rr in _c4_repeated.head(3).iterrows():
+            #                 _c4_filt = (_rc_dfv_pk == _rr["_pk_"]) & (_rc_pog_str == _rr["_pog_"])
+            #                 _c4_detail = df_view.loc[_c4_filt, _pk_raw + [_pog_src_col, _sv_col]].copy()
+            #                 _c4_detail["→ summed_to"] = (
+            #                     pd.to_numeric(_c4_detail[_sv_col], errors="coerce").sum()
+            #                 )
+            #                 st.markdown(
+            #                     f"**pk=`{_rr['_pk_']}`  pog=`{_rr['_pog_']}`** "
+            #                     f"({int(_rr['_count_'])} rows)"
+            #                 )
+            #                 st.dataframe(_c4_detail, hide_index=True)
+            # # ── END TEMPORARY reconciliation ──────────────────────────────────
 
-            # ── Edit-mode toggle ──────────────────────────────────────────────────
-            _em_state  = f"{p}_tbl_edit_mode"
-            _em_widget = f"{p}_tbl_edit_mode_w"
-            _em_c1, _em_c2 = st.columns([9, 1])
-            with _em_c2:
-                _edit_mode = st.toggle("✏️ Edit", key=_em_widget,
-                                       value=st.session_state.get(_em_state, False),
-                                       help="Toggle on to edit planogram assignments. Click Done to commit.")
-            st.session_state[_em_state] = _edit_mode
+            # ── Layout helpers ─────────────────────────────────────────────────────
+            # Column visibility is managed entirely by the AG Grid sidebar + header menu.
+            # State (hide/width/pin) persisted in session state survives DG changes; colIds
+            # for columns that no longer exist in the new DG are silently ignored by AG Grid.
+            _STICKY      = [c for c in ["DG Code", "ID", "Item Name"] if c in _tdf.columns]
+            _dyn_pog_set = set(c for c in _dyn_pog_cols if c in _tdf.columns)
 
-            _COL_W  = {"DG Code": 56, "ID": 90, "Item Name": 210}
+            # ── Single AG Grid — always active, no view/edit toggle ────────────────
+            try:
+                from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+                _AGGRID_OK = True
+            except ImportError:
+                _AGGRID_OK = False
 
-            if not _edit_mode:
-                # ── VIEW MODE: original HTML table, unchanged ─────────────────────
-                _s_left, _s_lefts = 0, {}
-                for _sc in _STICKY:
-                    _s_lefts[_sc] = _s_left
-                    _s_left += _COL_W.get(_sc, 130)
-                _HDR_BG  = "#D9D9D9"
-                _STK_BG  = "#F7F5F2"
-                _CELL_H  = "padding:5px 10px;border:1px solid #E0D9D2;font-size:11px;white-space:nowrap;"
-                _col_list = list(_tdf.columns)
-                # Pre-format Avg Units column before bulk .astype(str) stringifies raw floats.
-                # Must happen here — .astype(str) on line below would turn 1.23456789 → "1.23456789"
-                # before any per-column formatting could run.
-                _avg_u_std = "Avg Units 52wk/ Forecast new item sales"
-                if _avg_u_std in _tdf.columns:
-                    def _fmt_avg_u(v):
-                        if pd.isna(v) or str(v).strip() in ("", "nan", "None"):
-                            return ""
-                        try:
-                            return ("%.5f" % round(float(v), 5)).rstrip("0").rstrip(".")
-                        except (ValueError, TypeError):
-                            return "" if str(v).strip() in ("nan", "None") else str(v)
-                    _tdf = _tdf.copy()
-                    _tdf[_avg_u_std] = _tdf[_avg_u_std].apply(_fmt_avg_u)
-                _arr      = _tdf.fillna("").astype(str).values
-                _th_list, _rows = [], []
-                for _ci, _col in enumerate(_col_list):
-                    if _col in _STICKY:
-                        _lx = _s_lefts[_col]
-                        _w  = _COL_W.get(_col, 130)
-                        if _col == "DG Code":
-                            # DG Code is narrow (80px) — let header wrap so the column stays compact
-                            _th_list.append(
-                                f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
-                                f'border:1px solid #E0D9D2;font-size:10px;font-weight:700;'
-                                f'width:{_w}px;min-width:{_w}px;max-width:{_w}px;'
-                                f'padding:4px 4px;vertical-align:bottom;'
-                                f'white-space:normal;word-break:break-word;overflow-wrap:break-word;">'
-                                f'{_col}</th>')
-                        else:
-                            _th_list.append(
-                                f'<th style="position:sticky;left:{_lx}px;z-index:3;background:{_HDR_BG};'
-                                f'{_CELL_H}font-weight:700;min-width:{_w}px;">{_col}</th>')
-                    elif _col in _dyn_pog_set:
-                        _th_list.append(
-                            f'<th style="background:{_HDR_BG};border:1px solid #E0D9D2;'
-                            f'width:52px;min-width:52px;max-width:52px;height:260px;'
-                            f'padding:6px 2px;text-align:center;vertical-align:bottom;'
-                            f'writing-mode:vertical-rl;text-orientation:mixed;'
-                            f'font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;">'
-                            f'{_col}</th>')
-                    else:
-                        # _REST data columns: wrapped header, narrow fixed width
-                        _th_list.append(
-                            f'<th style="background:{_HDR_BG};border:1px solid #E0D9D2;'
-                            f'font-size:10px;font-weight:700;'
-                            f'width:80px;min-width:40px;max-width:80px;'
-                            f'padding:4px 4px;vertical-align:bottom;'
-                            f'white-space:normal;word-break:break-word;overflow-wrap:break-word;">'
-                            f'{_col}</th>')
-                for _ri in range(len(_tdf)):
-                    _row_h = []
-                    _rb = "#FFFFFF" if _ri % 2 == 0 else "#FAFAF8"
-                    for _ci, _col in enumerate(_col_list):
-                        _vs = _arr[_ri, _ci]
-                        if _vs in ("nan", "None"):
-                            _vs = ""
-                        if _col in _STICKY:
-                            _lx = _s_lefts[_col]
-                            _row_h.append(
-                                f'<td style="position:sticky;left:{_lx}px;z-index:2;background:{_STK_BG};'
-                                f'{_CELL_H}">{_vs}</td>')
-                        elif _col in _dyn_pog_set:
-                            _raw = _tdf.at[_ri, _col]
-                            try:
-                                _vf = f"{float(_raw):,.2f}" if pd.notna(_raw) else ""
-                            except (ValueError, TypeError):
-                                _vf = ""
-                            _row_h.append(
-                                f'<td style="background:{_rb};border:1px solid #E0D9D2;'
-                                f'width:52px;min-width:52px;text-align:right;'
-                                f'font-size:11px;padding:2px 3px;">{_vf}</td>')
-                        else:
-                            # _REST data cells: match header width, clip overflow
-                            _row_h.append(
-                                f'<td style="background:{_rb};border:1px solid #E0D9D2;'
-                                f'font-size:11px;padding:5px 4px;'
-                                f'max-width:80px;white-space:nowrap;'
-                                f'overflow:hidden;text-overflow:ellipsis;">{_vs}</td>')
-                    _rows.append(f'<tr>{"".join(_row_h)}</tr>')
-                st.markdown(
-                    '<div style="overflow-x:auto;border-radius:10px;border:1px solid #E0D9D2;'
-                    'max-height:560px;overflow-y:auto;">'
-                    '<table style="border-collapse:collapse;font-size:11px;min-width:100%;">'
-                    f'<thead style="position:sticky;top:0;z-index:4;"><tr>{"".join(_th_list)}</tr></thead>'
-                    f'<tbody>{"".join(_rows)}</tbody>'
-                    '</table></div>',
-                    unsafe_allow_html=True,
-                )
-
+            if not _AGGRID_OK:
+                st.error("⚠️ `streamlit-aggrid` not installed — run `pip install streamlit-aggrid`.")
             else:
-                # ── EDIT MODE: st.data_editor ─────────────────────────────────────
-                # _tdf already has committed edits from _pog_edits_key applied above,
-                # so it is the correct baseline for the editor.
-                _de_key = f"{p}_de_{_sel_dg_code}"
+                _ACTIONS         = ["", "Keep", "Delete", "New", "Delist"]
+                _ACT_SET         = {"Keep", "Delete", "New", "Delist"}
+                _COL_W           = {"DG Code": 56, "ID": 90, "Item Name": 210}
+                _AVG_U_STD       = "Avg Units 52wk/ Forecast new item sales"
+                _pog_actions_key = f"{p}_pog_actions"
+                _avg_u_edits_key = f"{p}_avg_u_edits"
+                _status_ov_key   = f"{p}_status_overrides"
 
-                # Planogram cols: editable numeric. Sticky cols: default width, disabled.
-                # REST data cols: width="small" to match narrow view-mode headers.
-                # (st.data_editor has no multi-line header support — narrowing is the
-                # closest equivalent to the wrapped headers in view mode.)
-                _de_col_cfg = {}
-                for _c in _tdf.columns:
-                    if _c in _dyn_pog_cols:
-                        _de_col_cfg[_c] = st.column_config.NumberColumn(
-                            _c, format="%.2f", step=0.01)
-                    elif _c == "DG Code":
-                        _de_col_cfg[_c] = st.column_config.Column(_c, disabled=True, width="small")
-                    elif _c in _STICKY:
-                        _de_col_cfg[_c] = st.column_config.Column(_c, disabled=True)
-                    else:
-                        _de_col_cfg[_c] = st.column_config.Column(
-                            _c, disabled=True, width="small")
+                # setdefault instead of get: returns the LIVE in-session dict (or creates it).
+                # Without this, .get() on a missing key returns a temporary {} that is not
+                # the same object as the one _pog_act_store writes into, so _derive_status
+                # always sees an empty dict on the first action and returns "MAINTAIN".
+                _pog_actions      = st.session_state.setdefault(_pog_actions_key, {})
+                _avg_u_edits      = st.session_state.setdefault(_avg_u_edits_key, {})
+                _status_overrides = st.session_state.setdefault(_status_ov_key, {})
 
-                _edited = st.data_editor(
-                    _tdf,
-                    key=_de_key,
-                    column_config=_de_col_cfg,
-                    hide_index=True,
-                    height=560,
-                    use_container_width=True,
-                    num_rows="fixed",
+                # ── Status derivation from action overlay ─────────────────────────
+                def _derive_status(rk: tuple) -> str:
+                    _a = [v for v in _pog_actions.get(rk, {}).values() if v]
+                    if not _a:
+                        return "MAINTAIN"
+                    if "Delist" in _a:
+                        return "Inactive"
+                    _nd, _nn = _a.count("Delete"), _a.count("New")
+                    _np = len(_dyn_pog_cols) or 1
+                    if _nd > 0 and _nn > 0:
+                        return "NEW DELETE SOME" if _is_sspog else "DELETE SOME"
+                    if _nd == _np:
+                        return "DELETE ALL"
+                    if _nd > 0:
+                        return "DELETE SOME"
+                    if _nn == _np:
+                        return "NEWNEW"
+                    if _nn > 0:
+                        return "NEW SOME"
+                    return "MAINTAIN"
+
+                # ── Build display DataFrame: apply action + avg-u + status overlays ─
+                _tdf_display = _tdf.copy().astype(object)
+                for _dri in range(len(_tdf_display)):
+                    _drk = _make_rk(_dri)
+                    for _dpc, _dact in _pog_actions.get(_drk, {}).items():
+                        if _dpc in _tdf_display.columns and _dact:
+                            _tdf_display.at[_dri, _dpc] = _dact
+                    for _dac, _dav in _avg_u_edits.get(_drk, {}).items():
+                        if _dac in _tdf_display.columns:
+                            _tdf_display.at[_dri, _dac] = _dav
+                    if "Status" in _tdf_display.columns and _drk in _status_overrides:
+                        _tdf_display.at[_dri, "Status"] = _status_overrides[_drk]
+
+                # ── JsCode: pog cells show action label OR formatted number ────────
+                _fmt_pog = JsCode("""
+function(params) {
+    if (params.value == null || params.value === '') return '';
+    if (['Keep','Delete','New','Delist'].indexOf(String(params.value)) >= 0)
+        return String(params.value);
+    var n = Number(params.value);
+    if (isNaN(n)) return String(params.value);
+    return n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}""")
+                _style_pog = JsCode("""
+function(params) {
+    var s = {
+        'Keep':   {backgroundColor:'#E8F5E9',color:'#2E7D32',fontWeight:'bold',textAlign:'center'},
+        'Delete': {backgroundColor:'#FFEBEE',color:'#C62828',fontWeight:'bold',textAlign:'center'},
+        'New':    {backgroundColor:'#E3F2FD',color:'#1565C0',fontWeight:'bold',textAlign:'center'},
+        'Delist': {backgroundColor:'#F5F5F5',color:'#757575',fontWeight:'bold',textAlign:'center'},
+    };
+    return s[String(params.value)] || null;
+}""")
+                _fmt_avg_u = JsCode("""
+function(params) {
+    if (params.value == null || params.value === '') return '';
+    var n = Number(params.value);
+    if (isNaN(n)) return String(params.value);
+    var s = n.toFixed(5);
+    s = s.replace(/(\\.[0-9]*?)0+$/, '$1').replace(/\\.$/, '');
+    return s;
+}""")
+
+                # ── CSS: vertical pog headers + bottom-align horizontal headers ───
+                # AG Grid v16 DOM: .ag-header-cell → .ag-cell-label-container
+                #   → .ag-header-cell-label → .ag-header-cell-text (rotate this span)
+                _custom_css = {
+                    ".ag-header-cell.pog-vertical .ag-cell-label-container": {
+                        "height":          "100%",
+                        "padding":         "4px 0",
+                        "justify-content": "center",
+                        "align-items":     "center",
+                    },
+                    ".ag-header-cell.pog-vertical .ag-header-cell-label": {
+                        "height":          "100%",
+                        "justify-content": "center",
+                        "align-items":     "center",
+                    },
+                    ".ag-header-cell.pog-vertical .ag-header-cell-text": {
+                        "writing-mode":  "vertical-rl",
+                        "transform":     "rotate(180deg)",
+                        "white-space":   "normal",
+                        "overflow":      "visible",
+                        "text-overflow": "unset",
+                    },
+                    ".ag-header-cell.pog-vertical": {
+                        "padding": "0 !important",
+                    },
+                    ".ag-header-cell:not(.pog-vertical) .ag-cell-label-container": {
+                        "align-items":    "flex-end",
+                        "padding-bottom": "4px",
+                    },
+                }
+
+                # ── Build GridOptions ─────────────────────────────────────────────
+                # min_column_width must be passed explicitly — omitting it resets to
+                # the parameter default (5), overriding the 110 set by from_dataframe.
+                gb = GridOptionsBuilder.from_dataframe(_tdf_display)
+                gb.configure_default_column(
+                    min_column_width=80,
+                    sortable=True, filter=False, resizable=True,
+                    editable=False, wrapHeaderText=True,
+                    suppressMovable=False,
+                    menuTabs=["generalMenuTab", "columnsMenuTab"],
                 )
+                for _gc in _tdf_display.columns:
+                    _hidden = False   # visibility controlled by grid sidebar/menu; not here
+                    if _gc in set(_STICKY):
+                        gb.configure_column(
+                            _gc, pinned="left",
+                            width=_COL_W.get(_gc, 130), minWidth=_COL_W.get(_gc, 80),
+                            editable=False, hide=_hidden, suppressMovable=True,
+                        )
+                    elif _gc in _dyn_pog_set:
+                        # Pog columns: wide enough for dropdown editor and action labels.
+                        # type=[] clears any numericColumn type that from_dataframe may
+                        # have inferred so our valueFormatter is never overridden.
+                        gb.configure_column(
+                            _gc,
+                            width=72, minWidth=64, maxWidth=80,
+                            headerClass="pog-vertical",
+                            valueFormatter=_fmt_pog,
+                            cellStyle=_style_pog,
+                            editable=True,
+                            cellEditor="agSelectCellEditor",
+                            cellEditorParams={"values": _ACTIONS},
+                            singleClickEdit=False,
+                            hide=_hidden,
+                            type=[],
+                        )
+                    elif _gc == _AVG_U_STD:
+                        gb.configure_column(
+                            _gc, valueFormatter=_fmt_avg_u,
+                            editable=True, hide=_hidden,
+                            wrapHeaderText=True, minWidth=80, width=110,
+                            type=["numericColumn"],
+                        )
+                    elif _gc == "Status":
+                        gb.configure_column(
+                            _gc, editable=False, hide=_hidden,
+                            wrapHeaderText=True, minWidth=80, width=110,
+                            type=[],
+                        )
+                    else:
+                        # Data columns: readable widths, word-wrap headers, user-resizable
+                        gb.configure_column(
+                            _gc, editable=False, hide=_hidden,
+                            wrapHeaderText=True, minWidth=80, width=110,
+                        )
 
-                # Debug: show exactly what the editor recorded as changed
-                st.write("editor delta:", st.session_state.get(_de_key, {}))
+                _go = gb.build()
+                _go["headerHeight"]              = 260 if _dyn_pog_cols else 56
+                _go["rowHeight"]                 = 32
+                _go["suppressRowClickSelection"] = True
+                _go["suppressCellFocus"]         = False
+                # Columns tool panel — lets users re-show hidden columns via a sidebar
+                _go["sideBar"] = {
+                    "toolPanels": [
+                        {
+                            "id": "columns",
+                            "labelDefault": "Columns",
+                            "toolPanel": "agColumnsToolPanel",
+                            "toolPanelParams": {
+                                "suppressRowGroups": True,
+                                "suppressValues":    True,
+                                "suppressPivots":    True,
+                                "suppressPivotMode": True,
+                            },
+                        }
+                    ],
+                    "defaultToolPanel": "",
+                }
 
-                st.caption("Check boxes to edit planogram assignments. Click **Done** to save, or **Discard** to cancel.")
-                _sv_c1, _sv_c2, _sv_c3 = st.columns([6, 1, 1])
-                with _sv_c2:
-                    if st.button("✓ Done", key=f"{p}_tbl_save", use_container_width=True, type="primary"):
-                        # ── Commit only the cells the user actually changed ────────
-                        # st.data_editor stores exactly what changed at
-                        # st.session_state[_de_key]["edited_rows"]:
-                        #   {row_position: {col_name: new_value}}
-                        # We iterate only those entries — never touch other pog cols.
-                        _delta = (st.session_state.get(_de_key) or {}).get("edited_rows", {})
-                        _pog_edits_commit = st.session_state.setdefault(_pog_edits_key, {})
-                        _audit_lines = []
-                        if _STICKY and _delta:
-                            for _ri_str, _cell_changes in _delta.items():
-                                _ri = int(_ri_str)
-                                if _ri >= len(_tdf):
+                # ── Save to file (export edits as xlsx) ──────────────────────────
+                _n_pog   = sum(len(v) for v in _pog_actions.values())
+                _n_avg   = sum(len(v) for v in _avg_u_edits.values())
+                _n_total = _n_pog + _n_avg
+                _save_cols = st.columns([2, 8])
+                with _save_cols[0]:
+                    if _n_total > 0:
+                        _export_rows = []
+                        for _rk2, _acts2 in _pog_actions.items():
+                            _rk2_d = dict(zip(_STICKY, _rk2))
+                            for _pc2, _ac2 in _acts2.items():
+                                _export_rows.append({
+                                    **_rk2_d,
+                                    "Planogram": _pc2,
+                                    "Action": _ac2,
+                                    "Avg Units Override": "",
+                                    "Derived Status": _status_overrides.get(_rk2, ""),
+                                })
+                        for _rk2, _avgs2 in _avg_u_edits.items():
+                            _rk2_d = dict(zip(_STICKY, _rk2))
+                            for _ac2, _av2 in _avgs2.items():
+                                _export_rows.append({
+                                    **_rk2_d,
+                                    "Planogram": "",
+                                    "Action": "",
+                                    "Avg Units Override": _av2,
+                                    "Derived Status": _status_overrides.get(_rk2, ""),
+                                })
+                        _export_df  = pd.DataFrame(_export_rows)
+                        _ts_str     = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        _export_fn  = f"rangesheet_edits_{p}_{_ts_str}.xlsx"
+                        _save_clicked = st.download_button(
+                            "💾 Save to file",
+                            data=df_to_xlsx_bytes(_export_df),
+                            file_name=_export_fn,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"{p}_save_dl",
+                        )
+                        if _save_clicked:
+                            add_audit("Save to file",
+                                      f"tab={p}; {_n_total} change(s) exported to {_export_fn}")
+                            st.success(f"✅ {_n_total} change(s) exported — check your downloads.")
+                    else:
+                        st.button("💾 Save to file", disabled=True, key=f"{p}_save_dl_dis")
+
+                _col_state_key = f"{p}_col_state"
+                _grid_response = AgGrid(
+                    _tdf_display,
+                    gridOptions=_go,
+                    update_mode=GridUpdateMode.VALUE_CHANGED,
+                    custom_css=_custom_css,
+                    theme="balham",
+                    height=700 if _dyn_pog_cols else 560,
+                    fit_columns_on_grid_load=False,
+                    allow_unsafe_jscode=True,
+                    enable_enterprise_modules=True,
+                    columns_state=st.session_state.get(_col_state_key),
+                    key=f"{p}_aggrid",
+                )
+                # Persist column state so hide/width/pin survive reruns and DG changes
+                _saved_col_state = _grid_response.columns_state
+                if _saved_col_state is not None:
+                    st.session_state[_col_state_key] = _saved_col_state
+
+                # ── Auto-commit on VALUE_CHANGED ──────────────────────────────────
+                if _grid_response["data"] is not None:
+                    try:
+                        _new_df = (pd.DataFrame(_grid_response["data"])
+                                   .reindex(columns=_tdf_display.columns))
+                    except Exception:
+                        _new_df = None
+                    if _new_df is not None and len(_new_df) == len(_tdf_display):
+                        _pog_act_store = _pog_actions       # same live dict (setdefault above)
+                        _avg_u_store   = _avg_u_edits
+                        _stat_store    = _status_overrides
+                        _audit_lines   = []
+                        _needs_rerun   = False
+
+                        for _cri in range(len(_tdf_display)):
+                            _crk = _make_rk(_cri)
+
+                            # Pog action changes
+                            for _cpc in list(_dyn_pog_set):
+                                if _cpc not in _tdf_display.columns:
                                     continue
-                                _rk = _make_rk(_ri)   # includes original pog name → unique per row
-                                for _pc, _new_val in _cell_changes.items():
-                                    if _pc not in _dyn_pog_cols:
-                                        continue
-                                    _old_raw = _tdf.at[_ri, _pc]
-                                    # Normalise both sides to float/NaN for comparison
-                                    try:
-                                        _old_num = float(_old_raw)
-                                    except (TypeError, ValueError):
-                                        _old_num = float("nan")
-                                    try:
-                                        _new_num = float(_new_val) if _new_val not in (None, "", pd.NA) else float("nan")
-                                    except (TypeError, ValueError):
-                                        _new_num = float("nan")
-                                    _old_blank = pd.isna(_old_num)
-                                    _new_blank = pd.isna(_new_num)
-                                    _changed = (
-                                        _old_blank != _new_blank
-                                        or (not _old_blank and not _new_blank and _old_num != _new_num)
-                                    )
-                                    if _changed:
-                                        _store = None if _new_blank else _new_num
-                                        _pog_edits_commit.setdefault(_rk, {})[_pc] = _store
-                                        _old_fmt = "blank" if _old_blank else f"{int(_old_num):,}"
-                                        _new_fmt = "blank" if _new_blank else f"{int(_new_num):,}"
-                                        _audit_lines.append(f"{_rk}|{_pc}: {_old_fmt}→{_new_fmt}")
-                        if _audit_lines:
-                            add_audit(
-                                "Edit Planogram Assignments",
-                                f"tab={p}; {len(_audit_lines)} change(s): "
-                                + "; ".join(_audit_lines[:10])
-                                + ("…" if len(_audit_lines) > 10 else ""),
-                            )
-                        st.session_state.pop(_de_key, None)
-                        st.session_state[_em_state] = False
-                        st.rerun()
-                with _sv_c3:
-                    if st.button("✕ Discard", key=f"{p}_tbl_cancel", use_container_width=True):
-                        st.session_state.pop(_de_key, None)
-                        st.session_state[_em_state] = False
-                        st.rerun()
+                                _ov = _tdf_display.at[_cri, _cpc]
+                                _nv = _new_df.at[_cri, _cpc]
+                                _ov_s = ("" if _ov is None or
+                                         (isinstance(_ov, float) and pd.isna(_ov))
+                                         else str(_ov))
+                                _nv_s = ("" if _nv is None or
+                                         (isinstance(_nv, float) and pd.isna(_nv))
+                                         else str(_nv))
+                                if _nv_s in ("nan", "None"):
+                                    _nv_s = ""
+                                if _ov_s == _nv_s:
+                                    continue
+                                _needs_rerun = True
+                                if _nv_s == "" or _nv_s not in _ACT_SET:
+                                    # Blank selected → clear action, revert to showing number
+                                    if _crk in _pog_act_store:
+                                        _pog_act_store[_crk].pop(_cpc, None)
+                                        if not _pog_act_store[_crk]:
+                                            del _pog_act_store[_crk]
+                                    _audit_lines.append(
+                                        f"{_crk}|{_cpc}: {_ov_s!r}→cleared")
+                                else:
+                                    _pog_act_store.setdefault(_crk, {})[_cpc] = _nv_s
+                                    _audit_lines.append(
+                                        f"{_crk}|{_cpc}: {_ov_s!r}→{_nv_s!r}")
+
+                            # Avg Units numeric change
+                            if _AVG_U_STD in _tdf_display.columns:
+                                _ou = _tdf_display.at[_cri, _AVG_U_STD]
+                                _nu = _new_df.at[_cri, _AVG_U_STD]
+                                try:
+                                    _of = (float(_ou) if _ou is not None and not (
+                                               isinstance(_ou, float) and pd.isna(_ou))
+                                           else None)
+                                    _nf = (float(_nu) if _nu is not None and not (
+                                               isinstance(_nu, float) and pd.isna(_nu))
+                                           else None)
+                                except (TypeError, ValueError):
+                                    _of = _nf = None
+                                if _of != _nf:
+                                    _needs_rerun = True
+                                    if _nf is None:
+                                        _avg_u_store.setdefault(_crk, {}).pop(
+                                            _AVG_U_STD, None)
+                                        if not _avg_u_store.get(_crk):
+                                            _avg_u_store.pop(_crk, None)
+                                    else:
+                                        _avg_u_store.setdefault(_crk, {})[_AVG_U_STD] = _nf
+                                    _audit_lines.append(
+                                        f"{_crk}|Avg Units: {_of}→{_nf}")
+
+                        if _needs_rerun:
+                            # Re-derive Status for every row (action changes may affect it)
+                            if "Status" in _tdf.columns:
+                                for _sri in range(len(_tdf)):
+                                    _srk = _make_rk(_sri)
+                                    _derived = _derive_status(_srk)
+                                    _orig = (str(_tdf.at[_sri, "Status"])
+                                             if pd.notna(_tdf.at[_sri, "Status"]) else "")
+                                    if _derived != "MAINTAIN" or _srk in _stat_store:
+                                        _stat_store[_srk] = _derived
+                            if _audit_lines:
+                                add_audit(
+                                    "Planogram Action",
+                                    f"tab={p}; {len(_audit_lines)} change(s): "
+                                    + "; ".join(_audit_lines[:10])
+                                    + ("…" if len(_audit_lines) > 10 else ""),
+                                )
+                            st.rerun()
 
             if len(df_view) > _MAX:
                 st.caption(f"Showing {_MAX:,} of {len(df_view):,} rows — increase Rows to see more")
@@ -1499,7 +1655,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
     if st.session_state.get(f"vw_submit_{p}") is not None:
         st.caption(f"✅ {len(st.session_state[f'vw_submit_{p}']):,} rows submitted to Report")
 
-# Pre-filter SSPOG rows for tabs 1 & 2
+# Pre-filter SSPOG / Non-SSPOG rows
 _pog_col_main = next((c for c in all_cols if "pog" in c.lower() and "cluster" in c.lower()), None)
 _sspog_df = (
     merged[
@@ -1507,12 +1663,34 @@ _sspog_df = (
         ~merged[_pog_col_main].astype(str).str.contains("Non", na=False)
     ] if _pog_col_main else merged
 )
+# Inverse filter — consistent with .str.contains("Non-SSPOG") used elsewhere in the app
+_nonsspog_df = (
+    merged[merged[_pog_col_main].astype(str).str.contains("Non-SSPOG", na=False)]
+    if _pog_col_main else merged
+)
 
 # ── Sheet tabs (scrollable via st.tabs) ───────────────────────────────────────
-_sheet_tabs = st.tabs(RS_SHEETS)
+# Single source of truth for tab labels — defined HERE so Streamlit's file watcher
+# picks up changes immediately without stale module-import caches from utils/shared.py.
+# RS_SHEETS (imported) stays at 7 entries for other pages; this local list owns the UI.
+_TAB_LABELS = [
+    "Range Sheet_SSPOG",
+    "Range Sheet_Non-SSPOG", # (Simple)
+    # "Range Sheet_Non-SSPOG",
+    "StoreApply_SSPOG",
+    "5.1 ItembyStore",
+    "5.2 ItembyStore_SC",
+    "5.3 Upload_product_library",
+    "5.4 Upload to Citrix",
+]
+assert len(_TAB_LABELS) == len(set(_TAB_LABELS)), \
+    f"Duplicate tab labels: {[l for l in _TAB_LABELS if _TAB_LABELS.count(l) > 1]}"
+_sheet_tabs = st.tabs(_TAB_LABELS)
+_tab = {name: t for name, t in zip(_TAB_LABELS, _sheet_tabs)}
+assert len(_tab) == len(_TAB_LABELS), "Bug: tab dict is shorter than label list"
 
 
-with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
+with _tab["Range Sheet_SSPOG"]:
     # ── Step 1: Find pinned HDET (large) and A5 files ────────────────────────
     _ns_hdet_path = None
     _ns_a5_name   = None
@@ -1618,11 +1796,13 @@ with _sheet_tabs[0]:   # Range Sheet_Non-SSPOG
                               fixed_dg_code=st.session_state.get("_ns_loaded_dg_code"),
                               fixed_dg_name=st.session_state.get("_ns_loaded_dg_name"))
 
-with _sheet_tabs[1]:   # Range Sheet_SSPOG
-    _render_sheet_content(_sspog_df, "ss")
-with _sheet_tabs[2]:   # StoreApply_SSPOG
+with _tab["Range Sheet_Non-SSPOG"]: # Simple — p="ns2" avoids key collision with HDET tab (p="ns")
+    _render_sheet_content(_nonsspog_df, "ns2")
+# with _tab["Range Sheet_Non-SSPOG"]:
+#     _render_sheet_content(_nonsspog_df, "nsv")
+with _tab["StoreApply_SSPOG"]:
     _render_sheet_content(_sspog_df, "sa")
-with _sheet_tabs[3]:   # 5.1 ItembyStore
+with _tab["5.1 ItembyStore"]:
     _IB_COLS = [
         "store_no", "store_name", "ID", "ProductDescription",
         "POG_STATUS", "Display Group", "Display group desc",
@@ -1771,7 +1951,7 @@ with _sheet_tabs[3]:   # 5.1 ItembyStore
 
     if st.session_state.get("vw_submit_51") is not None:
         st.caption(f"✅ {len(st.session_state['vw_submit_51']):,} rows submitted to Report")
-with _sheet_tabs[4]:   # 5.2 ItembyStore_SC
+with _tab["5.2 ItembyStore_SC"]:
     _IBS_COLS = [
         "store", "item on POG", "Item Name", "DG", "DG_Des",
         "Status", "Forecast", "avg per wk", "Coperate Status",
@@ -1826,7 +2006,7 @@ with _sheet_tabs[4]:   # 5.2 ItembyStore_SC
 
     if st.session_state.get("vw_submit_52") is not None:
         st.caption(f"✅ {len(st.session_state['vw_submit_52']):,} rows submitted to Report")
-with _sheet_tabs[5]:   # 5.3 Upload_product_library
+with _tab["5.3 Upload_product_library"]:
     _PRODLIB_COLS = ["ID", "Product Description", "Mod_structure_fixture"]
     if "vw_prodlib_data" not in st.session_state or st.session_state.get("_pl_db_sig") != _db_sig:
         st.session_state.vw_prodlib_data = _fill_from_db(_PRODLIB_COLS, merged)
@@ -1870,7 +2050,7 @@ with _sheet_tabs[5]:   # 5.3 Upload_product_library
 
     if st.session_state.get("vw_submit_53") is not None:
         st.caption(f"✅ {len(st.session_state['vw_submit_53']):,} rows submitted to Report")
-with _sheet_tabs[6]:   # 5.4 Upload to Citrix
+with _tab["5.4 Upload to Citrix"]:
     _CITRIX_COLS = [
         "POGName", "store_no", "store_name",
         "POG_WIDTH", "POG_HEIGHT", "POG_DEPTH",
