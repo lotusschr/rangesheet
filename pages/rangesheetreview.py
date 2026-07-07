@@ -1254,45 +1254,59 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _ct_dat_disp = st.session_state.get(f"{p}_ct_dat", {})
 
                 # ── HTML cluster summary table above the grid ─────────────────────
-                # Spacer width = STICKY columns + REST columns before Status
-                _last_set2  = {"Status", "Check Range To-be Waterfall",
-                               "Planogram Name"} | set(_dyn_pog_cols)
+                # The top table is split into two zones to match AG Grid:
+                #   1. Pinned zone  (matches AG Grid pinned-left panel — doesn't scroll)
+                #   2. Body zone    (matches AG Grid body — scrolls in sync)
+                # _pinned_w: width of sticky columns (AG Grid pinned-left panel)
+                # _rest_w:   width of body columns before Status (REST cols)
+                _last_set2   = {"Status", "Check Range To-be Waterfall",
+                                "Planogram Name"} | set(_dyn_pog_cols)
                 _sticky_wmap = {"DG Code": 56, "ID": 90, "Item Name": 210}
-                _sp_w = (
-                    sum(_sticky_wmap.get(c, 110) for c in _STICKY)
-                    + 110 * len([c for c in _tdf.columns
-                                 if c not in set(_STICKY) and c not in _last_set2])
-                )
-                _LW = 150   # row-label cell width
-                _CW = 90    # cluster value cell width
+                _pinned_w    = sum(_sticky_wmap.get(c, 110) for c in _STICKY)
+                _rest_w      = 110 * len([c for c in _tdf.columns
+                                          if c not in set(_STICKY) and c not in _last_set2])
+                # AG Grid balham-matched styles
+                _LW = 220   # Status(110) + Check Range To-be Waterfall(110)
+                _CW = 72    # match POG column width in AG Grid
+                _BRD    = "1px solid #BDC3C7"
+                _HDR_BG = "#f5f7f7"
+                _BASE   = (f"border-right:{_BRD};border-bottom:{_BRD};"
+                           "padding:4px 8px;font-size:12px;white-space:nowrap;"
+                           "overflow:hidden;text-overflow:ellipsis;")
+                _td_s   = _BASE
+                _th_s   = (_BASE + f"background:{_HDR_BG};font-weight:700;"
+                           "text-align:center;color:#222;"
+                           f"border-top:{_BRD};border-left:{_BRD};")
 
-                _td_s  = ("border:1px solid #d0d0d0;padding:3px 6px;"
-                          "font-size:11px;white-space:nowrap;")
-                _th_s  = (_td_s + "background:#f5f5f5;font-weight:bold;"
-                          "text-align:center;")
+                # header row — one column per planogram (aligns with AG Grid body)
+                # Each column header shows the cluster name for that planogram.
+                _ct_hdr  = (f'<td class="cs-spacer" style="min-width:{_rest_w}px;width:{_rest_w}px;border:none;'
+                             f'background:#fff;"></td>')
+                _ct_hdr += (f'<th class="cs-label-col" style="{_th_s}min-width:{_LW}px;width:{_LW}px;">'
+                             f'Cluster</th>')
+                for _pog in _dyn_pog_cols:
+                    _cl_lbl = _pog_to_cl.get(_pog, "")
+                    _ct_hdr += (f'<th style="{_th_s}min-width:{_CW}px;width:{_CW}px;'
+                                f'text-overflow:ellipsis;" title="{_cl_lbl}">{_cl_lbl}</th>')
 
-                # header row
-                _ct_hdr  = f'<td style="min-width:{_sp_w}px;border:none;"></td>'
-                _ct_hdr += (f'<th style="{_th_s}min-width:{_LW}px">'
-                            f'Cluster</th>')
-                for _cn in _ct_cls_disp:
-                    _ct_hdr += (f'<th style="{_th_s}min-width:{_CW}px;'
-                                f'max-width:{_CW}px;overflow:hidden;'
-                                f'text-overflow:ellipsis;">{_cn}</th>')
-
-                # data rows
+                # data rows — one cell per planogram, value = cluster metric for that planogram
                 _ct_body = ""
-                for _rl, _, _ in _CS_ROWS:
-                    _tds  = (f'<td style="min-width:{_sp_w}px;'
-                             f'border:none;"></td>')
-                    _tds += (f'<td style="{_td_s}font-weight:bold;'
-                             f'min-width:{_LW}px">{_rl}</td>')
-                    for _cn in _ct_cls_disp:
-                        _ssv = str(_ct_dat_disp.get(_rl, {}).get(_cn, "") or "")
+                for _ri2, (_rl, _rbg, _rtc) in enumerate(_CS_ROWS):
+                    _even   = _ri2 % 2 == 0
+                    _row_bg = "#ffffff" if _even else "#f9f9f9"
+                    _lbl_s  = (_td_s + f"font-weight:700;color:#222;"
+                               f"background:{_row_bg};border-left:{_BRD};")
+                    _tds  = (f'<td class="cs-spacer" style="min-width:{_rest_w}px;width:{_rest_w}px;border:none;'
+                             f'background:#fff;"></td>')
+                    _tds += f'<td class="cs-label-col" style="{_lbl_s}min-width:{_LW}px;width:{_LW}px;">{_rl}</td>'
+                    for _pog in _dyn_pog_cols:
+                        _cl_key = _pog_to_cl.get(_pog, "")
+                        _ssv = str(_ct_dat_disp.get(_rl, {}).get(_cl_key, "") or "")
                         if _ssv in ("nan", "None"): _ssv = ""
-                        _v   = _ssv if _ssv else _cs_val(_rl, _cn)
-                        _tds += (f'<td style="{_td_s}text-align:center;'
-                                 f'min-width:{_CW}px;max-width:{_CW}px">'
+                        _v   = _ssv if _ssv else _cs_val(_rl, _cl_key)
+                        _dat_s = (_td_s + f"text-align:center;color:#222;"
+                                  f"background:{_row_bg};")
+                        _tds += (f'<td style="{_dat_s}min-width:{_CW}px;width:{_CW}px;">'
                                  f'{_v}</td>')
                     _ct_body += f'<tr>{_tds}</tr>'
 
@@ -1304,12 +1318,24 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     st.caption("⚠️ A5 loaded but planogram-name column not found — "
                                "MODs/FIXTURE/RANGE CLASS blank.")
 
+                # Wrapper: pinned cover on the left (static) + scrollable body on the right
                 st.markdown(
-                    '<div style="overflow-x:auto;margin-bottom:0px;">'
+                    '<style>.cs-scroll-sync::-webkit-scrollbar{height:6px}'
+                    '.cs-scroll-sync::-webkit-scrollbar-track{background:#f1f1f1}'
+                    '.cs-scroll-sync::-webkit-scrollbar-thumb{background:#BDC3C7;border-radius:3px}'
+                    '</style>'
+                    '<div style="position:relative;margin-bottom:0;">'
+                    # pinned cover: blank white area matching AG Grid pinned-left panel
+                    f'<div class="cs-pin-cover" style="position:absolute;left:0;top:0;'
+                    f'width:{_pinned_w}px;height:100%;background:#fff;z-index:5;'
+                    f'border-right:2px solid #BDC3C7;box-sizing:border-box;"></div>'
+                    # scrollable body zone (starts at _pinned_w, matches AG Grid body)
+                    f'<div class="cs-scroll-sync" style="overflow-x:auto;margin-bottom:0;'
+                    f'margin-left:{_pinned_w}px;">'
                     '<table style="border-collapse:collapse;table-layout:fixed;">'
                     f'<thead><tr>{_ct_hdr}</tr></thead>'
                     f'<tbody>{_ct_body}</tbody>'
-                    '</table></div>',
+                    '</table></div></div>',
                     unsafe_allow_html=True,
                 )
 
@@ -1493,6 +1519,57 @@ function(params) {
                 _go = gb.build()
                 _go["headerHeight"]              = 260 if _dyn_pog_cols else 56
                 _go["rowHeight"]                 = 32
+                # Post horizontal scroll position to parent page so the cluster
+                # summary table above can follow. Uses postMessage because the
+                # AgGrid iframe is sandboxed (no allow-same-origin).
+                _go["onGridReady"] = JsCode("""
+function(params){
+  var tries=0;
+  var _busy=false;
+  var iv=setInterval(function(){
+    tries++;
+    var el=document.querySelector('.ag-body-horizontal-scroll-viewport');
+    if(!el&&tries<40){return;}
+    clearInterval(iv);
+    if(!el)return;
+
+    /* ── Compute: pinned width, REST-body spacer, label width ── */
+    try{
+      var state=params.api.getColumnState();
+      var pinnedW=0, spacer=0, lw=0, stage='pre';
+      for(var i=0;i<state.length;i++){
+        var s=state[i];
+        if(s.hide)continue;
+        var cw=s.width||110;
+        if(stage==='pre'){
+          if(s.colId==='Status'){stage='label';lw+=cw;}
+          else if(s.pinned==='left'){pinnedW+=cw;}  /* pinned — not in spacer */
+          else{spacer+=cw;}                          /* body REST col */
+        } else if(stage==='label'){
+          if(cw<=80){break;}   /* hit POG cols (width≤80) */
+          lw+=cw;
+        }
+      }
+      if(lw<110)lw=220;
+      window.parent.postMessage({_cs_pinned:pinnedW,_cs_spacer:spacer,_cs_lw:lw},'*');
+    }catch(e){}
+
+    /* ── Bottom → Top: post scroll position ── */
+    el.addEventListener('scroll',function(){
+      if(_busy)return;
+      window.parent.postMessage({_cs_hscroll:el.scrollLeft},'*');
+    },{passive:true});
+
+    /* ── Top → Bottom: receive scroll command ── */
+    window.addEventListener('message',function(e){
+      if(!e.data||e.data._cs_agscroll===undefined)return;
+      _busy=true;
+      el.scrollLeft=e.data._cs_agscroll;
+      setTimeout(function(){_busy=false;},50);
+    });
+  },250);
+}
+""")
                 _go["suppressRowClickSelection"] = True
                 _go["suppressCellFocus"]         = False
                 # Columns tool panel — lets users re-show hidden columns via a sidebar
@@ -1513,7 +1590,26 @@ function(params) {
                     "defaultToolPanel": "",
                 }
 
-                # ── Save to file (export edits as xlsx) ──────────────────────────
+                _col_state_key = f"{p}_col_state"
+                _grid_response = AgGrid(
+                    _tdf_display,
+                    gridOptions=_go,
+                    update_mode=GridUpdateMode.VALUE_CHANGED,
+                    custom_css=_custom_css,
+                    theme="balham",
+                    height=700 if _dyn_pog_cols else 560,
+                    fit_columns_on_grid_load=False,
+                    allow_unsafe_jscode=True,
+                    enable_enterprise_modules=True,
+                    columns_state=st.session_state.get(_col_state_key),
+                    key=f"{p}_aggrid",
+                )
+                # Persist column state so hide/width/pin survive reruns and DG changes
+                _saved_col_state = _grid_response.columns_state
+                if _saved_col_state is not None:
+                    st.session_state[_col_state_key] = _saved_col_state
+
+                # ── Save to file (moved below AgGrid to eliminate gap above grid) ─
                 _n_pog   = sum(len(v) for v in _pog_actions.values())
                 _n_avg   = sum(len(v) for v in _avg_u_edits.values())
                 _n_total = _n_pog + _n_avg
@@ -1558,24 +1654,95 @@ function(params) {
                     else:
                         st.button("💾 Save to file", disabled=True, key=f"{p}_save_dl_dis")
 
-                _col_state_key = f"{p}_col_state"
-                _grid_response = AgGrid(
-                    _tdf_display,
-                    gridOptions=_go,
-                    update_mode=GridUpdateMode.VALUE_CHANGED,
-                    custom_css=_custom_css,
-                    theme="balham",
-                    height=700 if _dyn_pog_cols else 560,
-                    fit_columns_on_grid_load=False,
-                    allow_unsafe_jscode=True,
-                    enable_enterprise_modules=True,
-                    columns_state=st.session_state.get(_col_state_key),
-                    key=f"{p}_aggrid",
-                )
-                # Persist column state so hide/width/pin survive reruns and DG changes
-                _saved_col_state = _grid_response.columns_state
-                if _saved_col_state is not None:
-                    st.session_state[_col_state_key] = _saved_col_state
+                # ── Receive AG Grid scroll messages → update top cluster table ───
+                # AgGrid iframe is sandboxed, so we use postMessage.
+                # onGridReady (above) posts {_cs_hscroll: x} to window.parent.
+                # This iframe listens on window.parent for those messages and
+                # updates the top table's scrollLeft accordingly.
+                import streamlit.components.v1 as _stcv1
+                _stcv1.html("""<script>
+(function(){
+  var _raf=window.requestAnimationFrame||function(f){setTimeout(f,16);};
+  var _doc=window.parent.document;
+  var _syncBusy=false;
+
+  /* ── Receive messages from AgGrid (bottom → top scroll + spacer) ── */
+  window.parent.addEventListener('message',function(e){
+    if(!e.data)return;
+
+    /* Update pinned cover width + scrollable zone margin-left */
+    if(e.data._cs_pinned!==undefined){
+      var cover=_doc.querySelector('.cs-pin-cover');
+      if(cover){cover.style.width=e.data._cs_pinned+'px';}
+      var sync=_doc.querySelector('.cs-scroll-sync');
+      if(sync){sync.style.marginLeft=e.data._cs_pinned+'px';}
+    }
+
+    /* Update REST cols spacer so body Cluster aligns with body Status */
+    if(e.data._cs_spacer!==undefined){
+      var spacers=_doc.querySelectorAll('.cs-spacer');
+      for(var i=0;i<spacers.length;i++){
+        spacers[i].style.minWidth=e.data._cs_spacer+'px';
+        spacers[i].style.width=e.data._cs_spacer+'px';
+      }
+    }
+
+    /* Update Cluster label col width = Status + Check Range */
+    if(e.data._cs_lw!==undefined){
+      var lbls=_doc.querySelectorAll('.cs-label-col');
+      for(var i=0;i<lbls.length;i++){
+        lbls[i].style.minWidth=e.data._cs_lw+'px';
+        lbls[i].style.width=e.data._cs_lw+'px';
+      }
+    }
+
+    /* Sync top table scrollLeft from AgGrid scroll event */
+    if(e.data._cs_hscroll!==undefined){
+      var top=_doc.querySelector('.cs-scroll-sync');
+      if(!top)return;
+      _syncBusy=true;
+      _raf(function(){
+        top.scrollLeft=e.data._cs_hscroll;
+        setTimeout(function(){_syncBusy=false;},50);
+      });
+    }
+  });
+
+  /* ── Attach top → bottom scroll relay ── */
+  function attachTopRelay(){
+    var top=_doc.querySelector('.cs-scroll-sync');
+    if(!top){setTimeout(attachTopRelay,400);return;}
+    top.addEventListener('scroll',function(){
+      if(_syncBusy)return;
+      var x=top.scrollLeft;
+      /* Broadcast to every iframe — only AgGrid listens for _cs_agscroll */
+      var iframes=_doc.querySelectorAll('iframe');
+      for(var i=0;i<iframes.length;i++){
+        try{iframes[i].contentWindow.postMessage({_cs_agscroll:x},'*');}catch(ex){}
+      }
+    },{passive:true});
+  }
+
+  /* ── Close visual gap between cluster summary and AgGrid ── */
+  function closeGap(){
+    var top=_doc.querySelector('.cs-scroll-sync');
+    if(!top)return;
+    function ancestor(el,attr,val){
+      while(el){if(el.getAttribute&&el.getAttribute(attr)===val)return el;el=el.parentElement;}
+      return null;
+    }
+    var csEl=ancestor(top,'data-testid','element-container');
+    if(csEl)csEl.style.cssText+=';margin-bottom:0!important;padding-bottom:0!important;';
+    var iframes=_doc.querySelectorAll('iframe');
+    for(var i=0;i<iframes.length;i++){
+      var el=ancestor(iframes[i],'data-testid','element-container');
+      if(el&&el!==csEl){el.style.cssText+=';margin-top:0!important;padding-top:0!important;';break;}
+    }
+  }
+
+  setTimeout(function(){closeGap();attachTopRelay();},800);
+})();
+</script>""", height=0)
 
                 # ── Auto-commit on VALUE_CHANGED ──────────────────────────────────
                 if _grid_response["data"] is not None:

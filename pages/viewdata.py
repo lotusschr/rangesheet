@@ -413,8 +413,16 @@ def _build_pog_cluster_html(pvt, cl_sel, max_height="520px"):
             f"font-size:0.70rem;min-width:120px;white-space:normal;word-break:break-word;")
 
     _ht = [
-        f"<div style='overflow-x:auto;overflow-y:auto;"
-        f"max-height:{max_height};font-size:0.78rem;'>",
+        "<style>"
+        ".pog-tbl-wrap::-webkit-scrollbar{height:12px;width:8px}"
+        ".pog-tbl-wrap::-webkit-scrollbar-track{background:#E8E3DC;border-radius:6px}"
+        ".pog-tbl-wrap::-webkit-scrollbar-thumb{background:#2BBFA4;border-radius:6px;border:2px solid #E8E3DC}"
+        ".pog-tbl-wrap::-webkit-scrollbar-thumb:hover{background:#1a9e8b}"
+        ".pog-tbl-wrap::-webkit-scrollbar-corner{background:#E8E3DC}"
+        "</style>"
+        f"<div class='pog-tbl-wrap' style='overflow-x:auto;overflow-y:auto;"
+        f"max-height:{max_height};font-size:0.78rem;"
+        f"scrollbar-width:auto;scrollbar-color:#2BBFA4 #E8E3DC;'>",
         "<table style='border-collapse:collapse;'>",
         "<thead style='position:sticky;top:0;z-index:4;'><tr>",
     ]
