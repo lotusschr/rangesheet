@@ -104,7 +104,7 @@ COLUMN_LABELS = {
     "supplier pack size":                        "Supplier pack size",
     "range tail yyyy":                           "Range Tail YYYY",
     "avg selling price by format":               "AVG selling Price by format",
-    "star line":                                 "Star Line",
+    "star line":                                 "Star Line", # "Star Line",
     "item priority":                             "Item priority",
     "jda vs actual":                             "JDA vs Actual",
     "actual-actual":                             "Actual-Actual",
@@ -843,9 +843,12 @@ COLUMN_MAPPING = {
     "range tail yyyy":                         "Range Tail YYYY",
     "range_tail_yyyy":                         "Range Tail YYYY",
     "range tail":                              "Range Tail YYYY",
-    "star line":                               "Star Line",
-    "star_line":                               "Star Line",
-    "starline":                                "Star Line",
+    # "star line":                               "Star Line",
+    # "star_line":                               "Star Line",
+    # "starline":                                "Star Line",
+    "star line":                               " ",
+    "star_line":                               " ",
+    "starline":                                " ",
     "item priority":                           "Item Priority",
     "item_priority":                           "Item Priority",
     "itempriority":                            "Item Priority",
@@ -891,7 +894,7 @@ COLUMN_MAPPING = {
     "th_tot_sales_volume_52_wk":     "Avg Units 52wk/ Forecast new item sales",
     "forecastsales":                 "Avg Units 52wk/ Forecast new item sales",
     "originalpacksize":              "Supplier Pack Size",
-    "starline":                      "Star Line",
+    # "starline":                      "Star Line",
     "name":                          "Planogram Name",
 }
 
@@ -1924,10 +1927,14 @@ def get_fill(col: str) -> str:
     if "AS-IS" in c or "AS IS" in c or "%MOR" in c:
         return "formula"
     _display = {
+        # "Department", "Section", "Subclass", "Barcode", "TPNA", "ID", "Item Name",
+        # "No. of unit in case", "No. of unit in inner", "Tray total number",
+        # "Express Picking type", "HDET picking type", "EDLP Price by Format",
+        # "Star Line", "Status", "Check Range To-be Waterfall",
         "Department", "Section", "Subclass", "Barcode", "TPNA", "ID", "Item Name",
         "No. of unit in case", "No. of unit in inner", "Tray total number",
         "Express Picking type", "HDET picking type", "EDLP Price by Format",
-        "Star Line", "Status", "Check Range To-be Waterfall",
+        "Status", "Check Range To-be Waterfall",
     }
     if c in _display:
         return "display"

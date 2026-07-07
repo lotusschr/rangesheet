@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import streamlit as st
 import pandas as pd
 import re as _re
+import json as _json
 from datetime import datetime
 from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
@@ -799,7 +800,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _tdf = _tdf.head(_MAX).reset_index(drop=True)
 
                     # Check Range To-be Waterfall = number of planograms this product appears in
-                    _tdf["Check Range To-be Waterfall"] = _tdf[_piv_pog_cols].notna().sum(axis=1)
+                    # _tdf["Check Range To-be Waterfall"] = _tdf[_piv_pog_cols].notna().sum(axis=1)
+                    _tdf["Check Range To-be Waterfall"] = " "
 
                     # # ── TEMPORARY DEBUG EXPANDER ─────────────────────────────────
                     # with st.expander("🔎 debug — pivot diagnostics", expanded=False):
@@ -959,6 +961,17 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             def _make_rk(ri: int) -> tuple:
                 # After pivot _tdf has one row per product — _STICKY alone is unique
                 return tuple(str(_tdf.at[ri, c]) for c in _STICKY)
+
+            # Apply Status updates saved from previous AG Grid dropdown events before
+            # building the display grid. `_tdf` starts from MAINTAIN at creation time,
+            # so this prevents reruns from resetting user-derived statuses.
+            _status_ov_key_pre = f"{p}_status_overrides"
+            _status_overrides_pre = st.session_state.get(_status_ov_key_pre, {})
+            if "Status" in _tdf.columns and _status_overrides_pre:
+                for _ri in range(len(_tdf)):
+                    _rk = _make_rk(_ri)
+                    if _rk in _status_overrides_pre:
+                        _tdf.at[_ri, "Status"] = _status_overrides_pre[_rk]
 
             _pog_edits = st.session_state.get(_pog_edits_key, {})
             if _pog_edits and _dyn_pog_cols and _STICKY:
@@ -1315,7 +1328,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
 
             # ── Single AG Grid — always active, no view/edit toggle ────────────────
             try:
-                from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+                from st_aggrid import (AgGrid, GridOptionsBuilder, GridUpdateMode,
+                                       JsCode, DataReturnMode)
                 _AGGRID_OK = True
             except ImportError:
                 _AGGRID_OK = False
@@ -1323,13 +1337,14 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             if not _AGGRID_OK:
                 st.error("⚠️ `streamlit-aggrid` not installed — run `pip install streamlit-aggrid`.")
             else:
-                _ACTIONS         = ["", "Keep", "Delete", "New", "Delist"]
-                _ACT_SET         = {"Keep", "Delete", "New", "Delist"}
+                _ACTIONS         = ["", "keep", "delete", "new"]
+                _ACT_SET         = {"keep", "delete", "new"}
                 _COL_W           = {"DG Code": 56, "ID": 90, "Item Name": 210}
                 _AVG_U_STD       = "Avg Units 52wk/ Forecast new item sales"
                 _pog_actions_key = f"{p}_pog_actions"
                 _avg_u_edits_key = f"{p}_avg_u_edits"
                 _status_ov_key   = f"{p}_status_overrides"
+                _grid_debug_key  = f"{p}_aggrid_debug"
 
                 # setdefault instead of get: returns the LIVE in-session dict (or creates it).
                 # Without this, .get() on a missing key returns a temporary {} that is not
@@ -1340,23 +1355,46 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _status_overrides = st.session_state.setdefault(_status_ov_key, {})
 
                 # ── Status derivation from action overlay ─────────────────────────
-                def _derive_status(rk: tuple) -> str:
-                    _a = [v for v in _pog_actions.get(rk, {}).values() if v]
-                    if not _a:
+                def _norm_action(action) -> str:
+                    return str(action or "").strip().lower()
+
+                def _derive_status(rk: tuple, df_base: pd.DataFrame, pog_cols: list, sticky_cols: list) -> str:
+                    row_actions = _pog_actions.get(rk, {})
+                    delete_count = sum(1 for v in row_actions.values() if _norm_action(v) == "delete")
+                    new_count = sum(1 for v in row_actions.values() if _norm_action(v) == "new")
+                    if not delete_count and not new_count:
                         return "MAINTAIN"
-                    if "Delist" in _a:
-                        return "Inactive"
-                    _nd, _nn = _a.count("Delete"), _a.count("New")
-                    _np = len(_dyn_pog_cols) or 1
-                    if _nd > 0 and _nn > 0:
-                        return "NEW DELETE SOME" if _is_sspog else "DELETE SOME"
-                    if _nd == _np:
-                        return "DELETE ALL"
-                    if _nd > 0:
+
+                    active_pog_count = 0
+                    if len(df_base) and sticky_cols:
+                        mask = pd.Series([True] * len(df_base))
+                        for i, col in enumerate(sticky_cols):
+                            if i >= len(rk) or col not in df_base.columns:
+                                continue
+                            mask &= (df_base[col].astype(str).str.strip() == str(rk[i]).strip())
+                        if mask.any():
+                            row = df_base[mask].iloc[0]
+                            for pc in pog_cols:
+                                if pc not in row.index:
+                                    continue
+                                val = row[pc]
+                                if val is None or (isinstance(val, float) and pd.isna(val)):
+                                    continue
+                                if str(val).strip() not in ("", "nan", "None", "0", "0.0"):
+                                    active_pog_count += 1
+
+                    active_pog_count = max(active_pog_count, 1)
+                    editable_pog_count = max(len([pc for pc in pog_cols if pc in df_base.columns]), 1)
+
+                    if delete_count and new_count:
                         return "DELETE SOME"
-                    if _nn == _np:
-                        return "NEWNEW"
-                    if _nn > 0:
+                    if delete_count >= active_pog_count:
+                        return "DELETE ALL"
+                    if delete_count:
+                        return "DELETE SOME"
+                    if new_count >= editable_pog_count:
+                        return "NEW NEW"
+                    if new_count:
                         return "NEW SOME"
                     return "MAINTAIN"
 
@@ -1366,18 +1404,22 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _drk = _make_rk(_dri)
                     for _dpc, _dact in _pog_actions.get(_drk, {}).items():
                         if _dpc in _tdf_display.columns and _dact:
-                            _tdf_display.at[_dri, _dpc] = _dact
+                            _tdf_display.at[_dri, _dpc] = _norm_action(_dact)
                     for _dac, _dav in _avg_u_edits.get(_drk, {}).items():
                         if _dac in _tdf_display.columns:
                             _tdf_display.at[_dri, _dac] = _dav
-                    if "Status" in _tdf_display.columns and _drk in _status_overrides:
-                        _tdf_display.at[_dri, "Status"] = _status_overrides[_drk]
+                    if "Status" in _tdf_display.columns:
+                        if _drk in _pog_actions:
+                            _status_overrides[_drk] = _derive_status(_drk, _tdf, _dyn_pog_cols, _STICKY)
+                            _tdf_display.at[_dri, "Status"] = _status_overrides[_drk]
+                        elif _drk in _status_overrides:
+                            _tdf_display.at[_dri, "Status"] = _status_overrides[_drk]
 
                 # ── JsCode: pog cells show action label OR formatted number ────────
                 _fmt_pog = JsCode("""
 function(params) {
     if (params.value == null || params.value === '') return '';
-    if (['Keep','Delete','New','Delist'].indexOf(String(params.value)) >= 0)
+    if (['keep','delete','new'].indexOf(String(params.value)) >= 0)
         return String(params.value);
     var n = Number(params.value);
     if (isNaN(n)) return String(params.value);
@@ -1386,13 +1428,80 @@ function(params) {
                 _style_pog = JsCode("""
 function(params) {
     var s = {
-        'Keep':   {backgroundColor:'#E8F5E9',color:'#2E7D32',fontWeight:'bold',textAlign:'center'},
-        'Delete': {backgroundColor:'#FFEBEE',color:'#C62828',fontWeight:'bold',textAlign:'center'},
-        'New':    {backgroundColor:'#E3F2FD',color:'#1565C0',fontWeight:'bold',textAlign:'center'},
-        'Delist': {backgroundColor:'#F5F5F5',color:'#757575',fontWeight:'bold',textAlign:'center'},
+        'keep':   {backgroundColor:'#E8F5E9',color:'#2E7D32',fontWeight:'bold',textAlign:'center'},
+        'delete': {backgroundColor:'#FFEBEE',color:'#C62828',fontWeight:'bold',textAlign:'center'},
+        'new':    {backgroundColor:'#E3F2FD',color:'#1565C0',fontWeight:'bold',textAlign:'center'},
     };
     return s[String(params.value)] || null;
 }""")
+                _style_status = JsCode("""
+function(params) {
+    var v = String(params.value || '').trim().toUpperCase();
+    var s = {
+        'MAINTAIN':    {backgroundColor:'#E8F8F5',color:'#2BBFA4',fontWeight:'bold',textAlign:'center'},
+        'DELETE SOME': {backgroundColor:'#FEE8E8',color:'#E05555',fontWeight:'bold',textAlign:'center'},
+        'DELETE ALL':  {backgroundColor:'#FFEBEE',color:'#B71C1C',fontWeight:'bold',textAlign:'center'},
+        'NEW SOME':    {backgroundColor:'#E3F2FD',color:'#1565C0',fontWeight:'bold',textAlign:'center'},
+        'NEW NEW':     {backgroundColor:'#F3E5F5',color:'#6A1B9A',fontWeight:'bold',textAlign:'center'},
+        'NEWNEW':      {backgroundColor:'#F3E5F5',color:'#6A1B9A',fontWeight:'bold',textAlign:'center'},
+    };
+    return s[v] || {fontWeight:'bold',textAlign:'center'};
+}""")
+                _pog_cols_js = _json.dumps([c for c in _dyn_pog_cols if c in _tdf_display.columns])
+                _status_col_js = _json.dumps("Status")
+                _on_pog_value_changed = JsCode(f"""
+function(params) {{
+    var pogCols = {_pog_cols_js};
+    var statusCol = {_status_col_js};
+    var data = params.data || {{}};
+    if (!data || pogCols.length === 0 || !(statusCol in data)) return;
+
+    var deleteCount = 0;
+    var newCount = 0;
+    var activeCount = 0;
+
+    function norm(v) {{
+        if (v === null || v === undefined) return '';
+        return String(v).trim().toLowerCase();
+    }}
+    function isActive(v) {{
+        var s = norm(v);
+        if (s === '' || s === 'nan' || s === 'none' || s === '0' || s === '0.0') return false;
+        return s !== 'new';
+    }}
+
+    for (var i = 0; i < pogCols.length; i++) {{
+        var v = data[pogCols[i]];
+        var a = norm(v);
+        if (a === 'delete') deleteCount += 1;
+        if (a === 'new') newCount += 1;
+        if (isActive(v)) activeCount += 1;
+    }}
+
+    activeCount = Math.max(activeCount, 1);
+    var editableCount = Math.max(pogCols.length, 1);
+    var status = 'MAINTAIN';
+
+    if (deleteCount > 0 && newCount > 0) {{
+        status = 'DELETE SOME';
+    }} else if (deleteCount >= activeCount) {{
+        status = 'DELETE ALL';
+    }} else if (deleteCount > 0) {{
+        status = 'DELETE SOME';
+    }} else if (newCount >= editableCount) {{
+        status = 'NEW NEW';
+    }} else if (newCount > 0) {{
+        status = 'NEW SOME';
+    }}
+
+    params.node.setDataValue(statusCol, status);
+    params.api.refreshCells({{
+        rowNodes: [params.node],
+        columns: [statusCol, params.column.getColId()],
+        force: true
+    }});
+}}
+""")
                 _fmt_avg_u = JsCode("""
 function(params) {
     if (params.value == null || params.value === '') return '';
@@ -1459,14 +1568,17 @@ function(params) {
                         # have inferred so our valueFormatter is never overridden.
                         gb.configure_column(
                             _gc,
-                            width=72, minWidth=64, maxWidth=80,
+                            width=86, minWidth=76, maxWidth=96,
                             headerClass="pog-vertical",
                             valueFormatter=_fmt_pog,
+                            cellRenderer=_fmt_pog,
                             cellStyle=_style_pog,
-                            editable=True,
                             cellEditor="agSelectCellEditor",
                             cellEditorParams={"values": _ACTIONS},
-                            singleClickEdit=False,
+                            cellEditorPopup=True,
+                            onCellValueChanged=_on_pog_value_changed,
+                            editable=True,
+                            singleClickEdit=True,
                             hide=_hidden,
                             type=[],
                         )
@@ -1481,6 +1593,7 @@ function(params) {
                         gb.configure_column(
                             _gc, editable=False, hide=_hidden,
                             wrapHeaderText=True, minWidth=80, width=110,
+                            cellStyle=_style_status,
                             type=[],
                         )
                     else:
@@ -1527,7 +1640,7 @@ function(params) {
                                 _export_rows.append({
                                     **_rk2_d,
                                     "Planogram": _pc2,
-                                    "Action": _ac2,
+                                    "Action": _norm_action(_ac2),
                                     "Avg Units Override": "",
                                     "Derived Status": _status_overrides.get(_rk2, ""),
                                 })
@@ -1558,11 +1671,22 @@ function(params) {
                     else:
                         st.button("💾 Save to file", disabled=True, key=f"{p}_save_dl_dis")
 
+                # ── Capture edits from previous render via raw session state ─────
+                # ── เก็บข้อมูลจาก AG Grid ที่เพิ่ง render เสร็จ (ใช้ในรอบถัดไป) ──
+                _grid_data_key = f"{p}_grid_data"
+                _prev_grid_data = st.session_state.get(_grid_data_key)  # ข้อมูลจากรอบก่อน
+
+                # สร้าง AG Grid (ตามเดิม)
                 _col_state_key = f"{p}_col_state"
+                _grid_component_key = f"{p}_aggrid_action_text_v5"
+                _acts = st.session_state.get(_pog_actions_key, {})
+                _db = st.empty()
+
                 _grid_response = AgGrid(
                     _tdf_display,
                     gridOptions=_go,
-                    update_mode=GridUpdateMode.VALUE_CHANGED,
+                    update_on=["cellValueChanged"],  # เปลี่ยนให้ง่าย
+                    data_return_mode=DataReturnMode.AS_INPUT,  # สำคัญ!
                     custom_css=_custom_css,
                     theme="balham",
                     height=700 if _dyn_pog_cols else 560,
@@ -1570,108 +1694,257 @@ function(params) {
                     allow_unsafe_jscode=True,
                     enable_enterprise_modules=True,
                     columns_state=st.session_state.get(_col_state_key),
-                    key=f"{p}_aggrid",
+                    key=_grid_component_key,
                 )
-                # Persist column state so hide/width/pin survive reruns and DG changes
+
+                # เก็บ column state
                 _saved_col_state = _grid_response.columns_state
                 if _saved_col_state is not None:
                     st.session_state[_col_state_key] = _saved_col_state
 
-                # ── Auto-commit on VALUE_CHANGED ──────────────────────────────────
-                if _grid_response["data"] is not None:
+                # ── ใช้ข้อมูลที่เพิ่งได้จาก AG Grid (ถ้ามี) ──
+                # _grid_response.data is None in st-aggrid v1.2.1 (known bug); read
+                # the component value from session state directly instead.
+                _comp_val = st.session_state.get(_grid_component_key)
+                _current_grid_data = None
+                if isinstance(_comp_val, pd.DataFrame):
+                    if len(_comp_val) == len(_tdf_display):
+                        _current_grid_data = _comp_val
+                elif isinstance(_comp_val, dict):
+                    for _dk in ("rowData", "data", "rows", "nodes"):
+                        _rd = _comp_val.get(_dk)
+                        if isinstance(_rd, list) and len(_rd) == len(_tdf_display):
+                            try:
+                                _current_grid_data = pd.DataFrame(_rd)
+                            except Exception:
+                                pass
+                            break
+                if _current_grid_data is None:
+                    _current_grid_data = _grid_response.data
+
+                def _debug_safe(v):
+                    if isinstance(v, (str, int, float, bool)) or v is None:
+                        return v
+                    if isinstance(v, dict):
+                        return {str(k): _debug_safe(val) for k, val in v.items()}
+                    if isinstance(v, (list, tuple)):
+                        return [_debug_safe(x) for x in v]
                     try:
-                        _new_df = (pd.DataFrame(_grid_response["data"])
-                                   .reindex(columns=_tdf_display.columns))
+                        if pd.isna(v):
+                            return None
                     except Exception:
-                        _new_df = None
-                    if _new_df is not None and len(_new_df) == len(_tdf_display):
-                        _pog_act_store = _pog_actions       # same live dict (setdefault above)
-                        _avg_u_store   = _avg_u_edits
-                        _stat_store    = _status_overrides
-                        _audit_lines   = []
-                        _needs_rerun   = False
+                        pass
+                    return str(v)
 
-                        for _cri in range(len(_tdf_display)):
-                            _crk = _make_rk(_cri)
+                _event_data = _grid_response.event_data
+                _debug_snapshot = {
+                    "grid_component_key": _grid_component_key,
+                    "component_value_type": type(_comp_val).__name__,
+                    "grid_response_data_type": type(_grid_response.data).__name__,
+                    "event_data_type": type(_event_data).__name__,
+                    "event_data": _debug_safe(_event_data),
+                    "current_grid_data_type": type(_current_grid_data).__name__,
+                    "current_grid_data_len": (
+                        len(_current_grid_data)
+                        if _current_grid_data is not None and hasattr(_current_grid_data, "__len__")
+                        else None
+                    ),
+                    "expected_rows": len(_tdf_display),
+                    "changed": None,
+                    "selected_row_data": None,
+                    "changed_pog_cell_value": None,
+                    "current_status": None,
+                    "make_rk": None,
+                    "_pog_actions_for_row": None,
+                    "_status_override_for_row": None,
+                    "_pog_actions_all": {
+                        " | ".join(map(str, k)): v for k, v in _pog_actions.items()
+                    },
+                    "_status_overrides_all": {
+                        " | ".join(map(str, k)): v for k, v in _status_overrides.items()
+                    },
+                }
 
-                            # Pog action changes
-                            for _cpc in list(_dyn_pog_set):
-                                if _cpc not in _tdf_display.columns:
-                                    continue
-                                _ov = _tdf_display.at[_cri, _cpc]
-                                _nv = _new_df.at[_cri, _cpc]
-                                _ov_s = ("" if _ov is None or
-                                         (isinstance(_ov, float) and pd.isna(_ov))
-                                         else str(_ov))
-                                _nv_s = ("" if _nv is None or
-                                         (isinstance(_nv, float) and pd.isna(_nv))
-                                         else str(_nv))
-                                if _nv_s in ("nan", "None"):
-                                    _nv_s = ""
-                                if _ov_s == _nv_s:
-                                    continue
-                                _needs_rerun = True
-                                if _nv_s == "" or _nv_s not in _ACT_SET:
-                                    # Blank selected → clear action, revert to showing number
-                                    if _crk in _pog_act_store:
-                                        _pog_act_store[_crk].pop(_cpc, None)
-                                        if not _pog_act_store[_crk]:
-                                            del _pog_act_store[_crk]
-                                    _audit_lines.append(
-                                        f"{_crk}|{_cpc}: {_ov_s!r}→cleared")
+                _event_handled = False
+                if isinstance(_event_data, dict):
+                    _event_column_obj = _event_data.get("column")
+                    _event_column_obj = _event_column_obj if isinstance(_event_column_obj, dict) else {}
+                    _event_col_def = _event_data.get("colDef")
+                    _event_col_def = _event_col_def if isinstance(_event_col_def, dict) else {}
+                    _event_col = (
+                        _event_data.get("colId")
+                        or _event_column_obj.get("colId")
+                        or _event_column_obj.get("field")
+                        or _event_col_def.get("field")
+                    )
+                    _event_new = _event_data.get("newValue", _event_data.get("value"))
+                    _event_old = _event_data.get("oldValue")
+                    _event_row_data = _event_data.get("data") if isinstance(_event_data.get("data"), dict) else {}
+                    _event_row_index = _event_data.get("rowIndex")
+                    if _event_row_index is None and isinstance(_event_data.get("node"), dict):
+                        _event_row_index = _event_data["node"].get("rowIndex")
+                    try:
+                        _event_row_index = int(_event_row_index)
+                    except (TypeError, ValueError):
+                        _event_row_index = None
+
+                    if _event_col in _dyn_pog_set:
+                        _event_val = _norm_action(_event_new)
+                        _event_rk = None
+                        if _event_row_data and _STICKY:
+                            _candidate = tuple(str(_event_row_data.get(c, "")).strip() for c in _STICKY)
+                            if any(_candidate):
+                                _event_rk = _candidate
+                        if _event_rk is None and _event_row_index is not None and 0 <= _event_row_index < len(_tdf_display):
+                            _event_rk = _make_rk(_event_row_index)
+
+                        if _event_rk is not None:
+                            if _event_val in _ACT_SET:
+                                _pog_actions.setdefault(_event_rk, {})[_event_col] = _event_val
+                            else:
+                                if _event_rk in _pog_actions:
+                                    _pog_actions[_event_rk].pop(_event_col, None)
+                                    if not _pog_actions[_event_rk]:
+                                        del _pog_actions[_event_rk]
+
+                            _event_status = _derive_status(_event_rk, _tdf, _dyn_pog_cols, _STICKY)
+                            if _event_rk in _pog_actions:
+                                _status_overrides[_event_rk] = _event_status
+                            else:
+                                _status_overrides.pop(_event_rk, None)
+
+                            _debug_snapshot.update({
+                                "changed": "event_data",
+                                "row_index": _event_row_index,
+                                "planogram_column": _event_col,
+                                "old_display_value": _debug_safe(_event_old),
+                                "changed_pog_cell_value": _event_val,
+                                "selected_row_data": _debug_safe(_event_row_data),
+                                "current_status": _event_status,
+                                "make_rk": _event_rk,
+                                "_pog_actions_for_row": _pog_actions.get(_event_rk, {}).copy(),
+                                "_status_override_for_row": _status_overrides.get(_event_rk),
+                                "_pog_actions_for_row_after": _pog_actions.get(_event_rk, {}).copy(),
+                                "_status_override_for_row_after": _status_overrides.get(_event_rk),
+                                "_pog_actions_all_after": {
+                                    " | ".join(map(str, k)): v for k, v in _pog_actions.items()
+                                },
+                                "_status_overrides_all_after": {
+                                    " | ".join(map(str, k)): v for k, v in _status_overrides.items()
+                                },
+                            })
+                            st.session_state[_grid_debug_key] = _debug_snapshot
+                            _event_handled = True
+
+                if _event_handled:
+                    st.rerun()
+
+                if _current_grid_data is not None and len(_current_grid_data) == len(_tdf_display):
+                    # ใช้ _current_grid_data ในการเปรียบเทียบกับ _tdf_display
+                    _rdf = pd.DataFrame(_current_grid_data).reset_index(drop=True)
+                    _rdf = _rdf.reindex(columns=_tdf_display.columns)
+                    _rc_changed = False
+
+                    for _rri in range(len(_tdf_display)):
+                        _rrk = _make_rk(_rri)
+                        # ── pog columns ──
+                        for _rpc in list(_dyn_pog_set):
+                            if _rpc not in _tdf_display.columns:
+                                continue
+                            _rov = _tdf_display.at[_rri, _rpc]
+                            _rnv = _rdf.at[_rri, _rpc] if _rri < len(_rdf) else None
+                            _rov_s = "" if (_rov is None or (isinstance(_rov, float) and pd.isna(_rov))) else str(_rov)
+                            _rnv_s = "" if (_rnv is None or (isinstance(_rnv, float) and pd.isna(_rnv))) else str(_rnv)
+                            if _rnv_s in ("nan", "None"):
+                                _rnv_s = ""
+                            if _rov_s == _rnv_s:
+                                continue
+                            if _debug_snapshot["changed"] is None:
+                                _debug_snapshot.update({
+                                    "changed": "pog_cell",
+                                    "row_index": _rri,
+                                    "planogram_column": _rpc,
+                                    "old_display_value": _rov_s,
+                                    "changed_pog_cell_value": _rnv_s,
+                                    "selected_row_data": _rdf.iloc[_rri].to_dict(),
+                                    "current_status": (
+                                        _rdf.at[_rri, "Status"]
+                                        if "Status" in _rdf.columns else None
+                                    ),
+                                    "make_rk": _rrk,
+                                    "_pog_actions_for_row": _pog_actions.get(_rrk, {}).copy(),
+                                    "_status_override_for_row": _status_overrides.get(_rrk),
+                                })
+                            _rc_changed = True
+                            if _rnv_s in _ACT_SET:
+                                _pog_actions.setdefault(_rrk, {})[_rpc] = _norm_action(_rnv_s)
+                            else:
+                                if _rrk in _pog_actions:
+                                    _pog_actions[_rrk].pop(_rpc, None)
+                                    if not _pog_actions[_rrk]:
+                                        del _pog_actions[_rrk]
+
+                        # ── avg units column ──
+                        if _AVG_U_STD in _tdf_display.columns:
+                            _rou = _tdf_display.at[_rri, _AVG_U_STD]
+                            _rnu = _rdf.at[_rri, _AVG_U_STD] if _rri < len(_rdf) else None
+                            try:
+                                _rof = float(_rou) if _rou is not None and not (isinstance(_rou, float) and pd.isna(_rou)) else None
+                                _rnf = float(_rnu) if _rnu is not None and not (isinstance(_rnu, float) and pd.isna(_rnu)) else None
+                            except (TypeError, ValueError):
+                                _rof = _rnf = None
+                            if _rof != _rnf:
+                                _rc_changed = True
+                                if _rnf is None:
+                                    _avg_u_edits.get(_rrk, {}).pop(_AVG_U_STD, None)
+                                    if _rrk in _avg_u_edits and not _avg_u_edits[_rrk]:
+                                        del _avg_u_edits[_rrk]
                                 else:
-                                    _pog_act_store.setdefault(_crk, {})[_cpc] = _nv_s
-                                    _audit_lines.append(
-                                        f"{_crk}|{_cpc}: {_ov_s!r}→{_nv_s!r}")
+                                    _avg_u_edits.setdefault(_rrk, {})[_AVG_U_STD] = _rnf
 
-                            # Avg Units numeric change
-                            if _AVG_U_STD in _tdf_display.columns:
-                                _ou = _tdf_display.at[_cri, _AVG_U_STD]
-                                _nu = _new_df.at[_cri, _AVG_U_STD]
-                                try:
-                                    _of = (float(_ou) if _ou is not None and not (
-                                               isinstance(_ou, float) and pd.isna(_ou))
-                                           else None)
-                                    _nf = (float(_nu) if _nu is not None and not (
-                                               isinstance(_nu, float) and pd.isna(_nu))
-                                           else None)
-                                except (TypeError, ValueError):
-                                    _of = _nf = None
-                                if _of != _nf:
-                                    _needs_rerun = True
-                                    if _nf is None:
-                                        _avg_u_store.setdefault(_crk, {}).pop(
-                                            _AVG_U_STD, None)
-                                        if not _avg_u_store.get(_crk):
-                                            _avg_u_store.pop(_crk, None)
-                                    else:
-                                        _avg_u_store.setdefault(_crk, {})[_AVG_U_STD] = _nf
-                                    _audit_lines.append(
-                                        f"{_crk}|Avg Units: {_of}→{_nf}")
+                    if _rc_changed:
+                        # Re-derive Status (ใช้ _derive_status เดิมที่คุณแก้แล้ว)
+                        for _rri2 in range(len(_tdf_display)):
+                            _rrk2 = _make_rk(_rri2)
+                            _st2 = _derive_status(_rrk2, _tdf, _dyn_pog_cols, _STICKY)
+                            if _rrk2 in _pog_actions:
+                                _status_overrides[_rrk2] = _st2
+                            elif _rrk2 in _status_overrides:
+                                del _status_overrides[_rrk2]
+                            # อัปเดต _tdf_display
+                            for _dpc2, _dact2 in _pog_actions.get(_rrk2, {}).items():
+                                if _dpc2 in _tdf_display.columns and _dact2:
+                                    _tdf_display.at[_rri2, _dpc2] = _norm_action(_dact2)
+                            for _dac2, _dav2 in _avg_u_edits.get(_rrk2, {}).items():
+                                if _dac2 in _tdf_display.columns:
+                                    _tdf_display.at[_rri2, _dac2] = _dav2
+                            if "Status" in _tdf_display.columns:
+                                _tdf_display.at[_rri2, "Status"] = _status_overrides.get(_rrk2, _tdf_display.at[_rri2, "Status"])
 
-                        if _needs_rerun:
-                            # Re-derive Status for every row (action changes may affect it)
-                            if "Status" in _tdf.columns:
-                                for _sri in range(len(_tdf)):
-                                    _srk = _make_rk(_sri)
-                                    _derived = _derive_status(_srk)
-                                    _orig = (str(_tdf.at[_sri, "Status"])
-                                             if pd.notna(_tdf.at[_sri, "Status"]) else "")
-                                    if _derived != "MAINTAIN" or _srk in _stat_store:
-                                        _stat_store[_srk] = _derived
-                            if _audit_lines:
-                                add_audit(
-                                    "Planogram Action",
-                                    f"tab={p}; {len(_audit_lines)} change(s): "
-                                    + "; ".join(_audit_lines[:10])
-                                    + ("…" if len(_audit_lines) > 10 else ""),
-                                )
-                            st.rerun()
+                        if _debug_snapshot["changed"] is not None:
+                            _drk = _debug_snapshot["make_rk"]
+                            _debug_snapshot["_pog_actions_for_row_after"] = _pog_actions.get(_drk, {}).copy()
+                            _debug_snapshot["_status_override_for_row_after"] = _status_overrides.get(_drk)
+                            _debug_snapshot["_pog_actions_all_after"] = {
+                                " | ".join(map(str, k)): v for k, v in _pog_actions.items()
+                            }
+                            _debug_snapshot["_status_overrides_all_after"] = {
+                                " | ".join(map(str, k)): v for k, v in _status_overrides.items()
+                            }
+                            st.session_state[_grid_debug_key] = _debug_snapshot
 
-            if len(df_view) > _MAX:
-                st.caption(f"Showing {_MAX:,} of {len(df_view):,} rows — increase Rows to see more")
-            else:
-                st.caption(f"{len(df_view):,} rows · {len(_tdf.columns)} columns")
+                        # ✅ บังคับ rerun ทันที
+                        st.rerun()
+
+                # เก็บข้อมูลปัจจุบันไว้ใน session_state เพื่อใช้ในรอบถัดไป (เผื่อไว้)
+                st.session_state[_grid_data_key] = _current_grid_data
+
+                _db.caption(f"actions saved: {sum(len(v) for v in _acts.values())}")
+
+                with st.expander("AG Grid dropdown debug", expanded=False):
+                    _last_debug = st.session_state.get(_grid_debug_key, _debug_snapshot)
+                    st.caption("After selecting a planogram dropdown, this shows what AG Grid returned and what was saved.")
+                    st.json(_last_debug)
 
         # ── Cluster ───────────────────────────────────────────────────────────
         elif _subview == "🏪 Cluster":
