@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import re as _re
 import json as _json
+import math
 from datetime import datetime
 from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
@@ -1453,6 +1454,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _pog_actions_key = f"{p}_pog_actions"
                 _avg_u_edits_key = f"{p}_avg_u_edits"
                 _status_ov_key   = f"{p}_status_overrides"
+                _pending_del_key = f"{p}_pending_top_delete"
 
                 # setdefault instead of get: returns the LIVE in-session dict (or creates it).
                 # Without this, .get() on a missing key returns a temporary {} that is not
@@ -1461,6 +1463,74 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _pog_actions      = st.session_state.setdefault(_pog_actions_key, {})
                 _avg_u_edits      = st.session_state.setdefault(_avg_u_edits_key, {})
                 _status_overrides = st.session_state.setdefault(_status_ov_key, {})
+
+                def _num_for_rank(v):
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        return None
+                    s = str(v).strip().replace(",", "")
+                    if s in ("", "nan", "None") or s in _ACT_SET:
+                        return None
+                    try:
+                        return float(s)
+                    except (TypeError, ValueError):
+                        return None
+
+                def _delete_is_top10(row_i: int, pog_col: str):
+                    val = _num_for_rank(_tdf.at[row_i, pog_col])
+                    if val is None:
+                        return False, None, None
+                    nums = []
+                    for pc in _dyn_pog_cols:
+                        if pc in _tdf.columns:
+                            n = _num_for_rank(_tdf.at[row_i, pc])
+                            if n is not None:
+                                nums.append(n)
+                    if not nums:
+                        return False, val, None
+                    nums.sort(reverse=True)
+                    cutoff_idx = max(1, int(math.ceil(len(nums) * 0.10))) - 1
+                    cutoff = nums[cutoff_idx]
+                    return val >= cutoff, val, cutoff
+
+                _pending_del = st.session_state.get(_pending_del_key)
+                if _pending_del:
+                    _item_nm = _pending_del.get("item", "")
+                    _pog_nm = _pending_del.get("pog", "")
+                    st.warning(
+                        f"Item {_item_nm} นี้เป็น top 10% แรกของ row นี้ "
+                        f"ใน planogram {_pog_nm}. คุณต้องการลบอยู่ไหม?"
+                    )
+                    _c_ok, _c_cancel = st.columns([1, 1])
+                    if _c_ok.button("Confirm Delete", key=f"{p}_confirm_top_delete"):
+                        _rk = tuple(_pending_del.get("rk", ()))
+                        _pc = _pending_del.get("col", "")
+                        if _rk and _pc:
+                            _pog_actions.setdefault(_rk, {})[_pc] = "Delete"
+                            _acts = [v for v in _pog_actions.get(_rk, {}).values() if v]
+                            if "Delist" in _acts:
+                                _status_overrides[_rk] = "Inactive"
+                            else:
+                                _nd, _nn = _acts.count("Delete"), _acts.count("New")
+                                _np = len(_dyn_pog_cols) or 1
+                                if _nd > 0 and _nn > 0:
+                                    _status_overrides[_rk] = (
+                                        "NEW DELETE SOME" if _is_sspog else "DELETE SOME"
+                                    )
+                                elif _nd == _np:
+                                    _status_overrides[_rk] = "DELETE ALL"
+                                elif _nd > 0:
+                                    _status_overrides[_rk] = "DELETE SOME"
+                                elif _nn == _np:
+                                    _status_overrides[_rk] = "NEWNEW"
+                                elif _nn > 0:
+                                    _status_overrides[_rk] = "NEW SOME"
+                                else:
+                                    _status_overrides[_rk] = "MAINTAIN"
+                        st.session_state.pop(_pending_del_key, None)
+                        st.rerun()
+                    if _c_cancel.button("Cancel", key=f"{p}_cancel_top_delete"):
+                        st.session_state.pop(_pending_del_key, None)
+                        st.rerun()
 
                 # ── Status derivation from action overlay ─────────────────────────
                 def _derive_status(rk: tuple) -> str:
@@ -1525,6 +1595,54 @@ function(params) {
     s = s.replace(/(\\.[0-9]*?)0+$/, '$1').replace(/\\.$/, '');
     return s;
 }""")
+                _pog_cols_js_for_setter = _json.dumps([str(c) for c in _dyn_pog_cols])
+                _delete_guard = JsCode("""
+function(params) {
+    var oldValue = params.oldValue;
+    var newValue = params.newValue;
+    if (String(newValue) !== 'Delete') {
+        params.data[params.colDef.field] = newValue;
+        return true;
+    }
+    var pogCols = __POG_COLS__;
+    var actions = {'Keep':true, 'Delete':true, 'New':true, 'Delist':true};
+    function toNum(v) {
+        if (v === null || v === undefined) return null;
+        var s = String(v).replace(/,/g, '').trim();
+        if (!s || s === 'nan' || s === 'None' || actions[s]) return null;
+        var n = Number(s);
+        return isNaN(n) ? null : n;
+    }
+    var current = toNum(oldValue);
+    if (current === null) current = toNum(params.data[params.colDef.field]);
+    if (current === null) {
+        params.data[params.colDef.field] = newValue;
+        return true;
+    }
+    var nums = [];
+    for (var i = 0; i < pogCols.length; i++) {
+        var n = toNum(params.data[pogCols[i]]);
+        if (n !== null) nums.push(n);
+    }
+    if (!nums.length) {
+        params.data[params.colDef.field] = newValue;
+        return true;
+    }
+    nums.sort(function(a, b) { return b - a; });
+    var cutoffIndex = Math.max(1, Math.ceil(nums.length * 0.10)) - 1;
+    var cutoff = nums[cutoffIndex];
+    if (current >= cutoff) {
+        var item = params.data['Item Name'] || params.data['ID'] || '';
+        var ok = window.confirm(
+            'Item ' + item + ' นี้เป็น top 10% แรกของ row นี้\\n' +
+            'คุณต้องการลบอยู่ไหม?'
+        );
+        if (!ok) return false;
+    }
+    params.data[params.colDef.field] = newValue;
+    return true;
+}
+""".replace("__POG_COLS__", _pog_cols_js_for_setter))
 
                 # ── CSS: vertical pog headers + bottom-align horizontal headers ───
                 # AG Grid v16 DOM: .ag-header-cell → .ag-cell-label-container
@@ -1617,6 +1735,43 @@ function(params) {
                 _go["headerHeight"]              = 260 if _dyn_pog_cols else 56
                 _go["rowHeight"]                 = 32
                 _pog_cols_js = _json.dumps([str(c) for c in _dyn_pog_cols])
+                _go["onCellValueChanged"] = JsCode("""
+function(params) {
+  if (!params || String(params.newValue) !== 'Delete') return;
+  var pogCols = __POG_COLS__;
+  if (pogCols.indexOf(params.colDef.field) < 0) return;
+  var actions = {'Keep':true, 'Delete':true, 'New':true, 'Delist':true};
+  function toNum(v) {
+    if (v === null || v === undefined) return null;
+    var s = String(v).replace(/,/g, '').trim();
+    if (!s || s === 'nan' || s === 'None' || actions[s]) return null;
+    var n = Number(s);
+    return isNaN(n) ? null : n;
+  }
+  var oldNum = toNum(params.oldValue);
+  if (oldNum === null) return;
+  var nums = [];
+  for (var i = 0; i < pogCols.length; i++) {
+    var v = (pogCols[i] === params.colDef.field) ? params.oldValue : params.data[pogCols[i]];
+    var n = toNum(v);
+    if (n !== null) nums.push(n);
+  }
+  if (!nums.length) return;
+  nums.sort(function(a, b) { return b - a; });
+  var cutoffIndex = Math.max(1, Math.ceil(nums.length * 0.10)) - 1;
+  var cutoff = nums[cutoffIndex];
+  if (oldNum >= cutoff) {
+    var item = params.data['Item Name'] || params.data['ID'] || '';
+    var ok = window.confirm(
+      'Item ' + item + ' is in the top 10% for this row.\\n' +
+      'Do you still want to delete it?'
+    );
+    if (!ok) {
+      params.node.setDataValue(params.colDef.field, params.oldValue);
+    }
+  }
+}
+""".replace("__POG_COLS__", _pog_cols_js))
                 # Post horizontal scroll position to parent page so the cluster
                 # summary table above can follow. Uses postMessage because the
                 # AgGrid iframe is sandboxed (no allow-same-origin).
