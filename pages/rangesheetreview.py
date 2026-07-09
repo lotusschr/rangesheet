@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import streamlit as st
 import pandas as pd
 import re as _re
+import json as _json
 from datetime import datetime
 from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
@@ -77,6 +78,87 @@ all_cols = list(merged.columns)
 # ── Column group matching ──────────────────────────────────────────────────────
 def _nc(s):  return str(s).lower().strip().replace('\n', ' ').replace('  ', ' ')
 def _nca(s): return _re.sub(r'[^a-z0-9]', '', _nc(s))   # letters+digits only
+
+@st.cache_data(show_spinner=False)
+def _load_a5_subset(amp: str, mtime: float, dyn_pog_cols_key: tuple):
+    """Load only A5 columns/rows needed for the visible planograms."""
+    _ext = os.path.splitext(amp)[1].lower()
+    _encodings = ("utf-8-sig", "cp874", "latin1")
+    _header = None
+    _enc_used = None
+    _warn = None
+
+    try:
+        if _ext in (".csv", ".txt"):
+            _last_err = None
+            for _enc in _encodings:
+                try:
+                    _header = pd.read_csv(amp, sep="|", encoding=_enc, nrows=0)
+                    _enc_used = _enc
+                    break
+                except Exception as _ce:
+                    _last_err = _ce
+            if _header is None and _last_err is not None:
+                raise _last_err
+        else:
+            _header = pd.read_excel(amp, nrows=0)
+    except Exception as _e:
+        return None, {}, str(_e)
+
+    _cols = list(_header.columns)
+    _cluster_c = (
+        next((c for c in _cols if _nca(c) == _nca("POG_Cluster")), None)
+        or next((c for c in _cols if _nca(c) in ("pogcluster", "clustername")), None)
+    )
+    _pog_candidates = [
+        c for c in _cols
+        if c != _cluster_c and (
+            _nca(c) in ("planogramname", "pogname", "planogram")
+            or "planogram" in _nca(c)
+            or ("pog" in _nca(c) and "cluster" not in _nca(c))
+        )
+    ]
+    _mod_c = next((c for c in _cols if _nca(c) == _nca("no_of_mod")), None)
+    _fix_c = next((c for c in _cols if _nca(c) == _nca("Fixture_code")), None)
+    _rng_c = next((c for c in _cols if _nca(c) == _nca("Range class")), None)
+    _usecols = list(dict.fromkeys([c for c in (
+        _cluster_c, *_pog_candidates, _mod_c, _fix_c, _rng_c
+    ) if c]))
+
+    if not _usecols:
+        return None, {}, "A5 loaded but required columns were not found."
+
+    try:
+        if _ext in (".csv", ".txt"):
+            _a5 = pd.read_csv(amp, sep="|", encoding=_enc_used, usecols=_usecols)
+        else:
+            _a5 = pd.read_excel(amp, usecols=_usecols)
+    except Exception as _e:
+        return None, {}, str(_e)
+
+    _target = {
+        _nca(v) for v in dyn_pog_cols_key
+        if str(v).strip() not in ("", "nan", "None")
+    }
+    _best_col, _best_hit = (_pog_candidates[0] if _pog_candidates else None), -1
+    if _target:
+        for _cand in _pog_candidates:
+            _vals = set(_a5[_cand].dropna().astype(str).str.strip().map(_nca))
+            _hit = len(_vals & _target)
+            if _hit > _best_hit:
+                _best_col, _best_hit = _cand, _hit
+        if _best_col and _best_hit > 0:
+            _mask = _a5[_best_col].astype(str).str.strip().map(_nca).isin(_target)
+            _a5 = _a5.loc[_mask].copy()
+
+    _meta = {
+        "pog": _best_col,
+        "cluster": _cluster_c,
+        "mod": _mod_c,
+        "fixture": _fix_c,
+        "range": _rng_c,
+    }
+    return _a5, _meta, _warn
 
 def _cast_text_cols(df: pd.DataFrame, text_cols: list) -> pd.DataFrame:
     """Cast specified columns to str so TextColumn editors don't crash on int data."""
@@ -1169,83 +1251,79 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     ("%Achieving LRD SALES (AS is)", "#FFFFFF", "#000000"),
                 ]
 
-                # ── Load A5 file (cached per tab prefix) ─────────────────────────
-                _a5_ck   = f"{p}_a5_df"
+                # ── Load A5 file: cached, column-pruned, and filtered to visible POGs ──
                 _a5_warn = None
-                if _a5_ck not in st.session_state:
-                    _a5_raw = None
-                    for _am in load_admin_manifest():
-                        _amp = os.path.join(BASE_DIR, "uploads", _am["name"])
-                        if (os.path.exists(_amp)
-                                and "a5" in _am["name"].lower()
-                                and not is_large_file(_amp)):
-                            try:
-                                _a5_raw = pd.read_excel(_amp)
-                            except Exception as _ae:
-                                _a5_warn = str(_ae)
-                            break
-                    st.session_state[_a5_ck] = _a5_raw
-                _a5 = st.session_state.get(_a5_ck)
+                _a5 = None
+                _a5_meta = {}
+                for _am in load_admin_manifest():
+                    _amp = os.path.join(BASE_DIR, "uploads", _am["name"])
+                    if (os.path.exists(_amp)
+                            and "a5" in _am["name"].lower()
+                            and not is_large_file(_amp)):
+                        _a5, _a5_meta, _a5_warn = _load_a5_subset(
+                            _amp,
+                            os.path.getmtime(_amp),
+                            tuple(str(c) for c in _dyn_pog_cols),
+                        )
+                        break
 
                 # ── Locate columns in A5 ─────────────────────────────────────────
-                _a5_pog_c = _a5_mod_c = _a5_fix_c = _a5_rng_c = None
+                _a5_pog_c = _a5_cluster_c = _a5_mod_c = _a5_fix_c = _a5_rng_c = None
                 if _a5 is not None:
-                    _a5_pog_c = (
-                        next((c for c in _a5.columns
-                              if _nca(c) == _nca("POG Cluster Mod Fixture")), None)
-                        or next((c for c in _a5.columns
-                                 if "pog" in _nca(c) or "planogram" in _nca(c)), None)
-                    )
-                    _a5_mod_c = next((c for c in _a5.columns
-                                      if _nca(c) == _nca("no_of_mod")), None)
-                    _a5_fix_c = next((c for c in _a5.columns
-                                      if _nca(c) == _nca("Fixture_code")), None)
-                    _a5_rng_c = next((c for c in _a5.columns
-                                      if _nca(c) == _nca("Range class")), None)
+                    _a5_pog_c = _a5_meta.get("pog")
+                    _a5_cluster_c = _a5_meta.get("cluster")
+                    _a5_mod_c = _a5_meta.get("mod")
+                    _a5_fix_c = _a5_meta.get("fixture")
+                    _a5_rng_c = _a5_meta.get("range")
 
-                # ── Build pog-name → A5-row lookup ───────────────────────────────
+                # ── Build pog-name → compact A5 lookup ───────────────────────────
                 _a5_lkp: dict = {}
+                _a5_pair_lkp: dict = {}
+                _pog_to_cl: dict = {}
                 if _a5 is not None and _a5_pog_c:
-                    for _, _ar in _a5.iterrows():
-                        _ap = str(_ar[_a5_pog_c]).strip()
-                        if _ap not in ("", "nan", "None"):
-                            _a5_lkp[_nca(_ap)] = _ar
+                    _cols_for_records = [c for c in (
+                        _a5_pog_c, _a5_cluster_c, _a5_mod_c, _a5_fix_c, _a5_rng_c
+                    ) if c and c in _a5.columns]
+                    for _rec in _a5[_cols_for_records].drop_duplicates().to_dict("records"):
+                        _ap = str(_rec.get(_a5_pog_c, "")).strip()
+                        if _ap in ("", "nan", "None"):
+                            continue
+                        _key = _nca(_ap)
+                        _cl = str(_rec.get(_a5_cluster_c, "")).strip() if _a5_cluster_c else ""
+                        _row_vals = {
+                            "mod": _rec.get(_a5_mod_c) if _a5_mod_c else "",
+                            "fixture": _rec.get(_a5_fix_c) if _a5_fix_c else "",
+                            "range": _rec.get(_a5_rng_c) if _a5_rng_c else "",
+                            "cluster": _cl,
+                        }
+                        _a5_lkp[_key] = _row_vals
+                        if _cl not in ("", "nan", "None"):
+                            _a5_pair_lkp[(_key, _nca(_cl))] = _row_vals
+                            _pog_to_cl[_ap] = _cl
+                            _pog_to_cl[_key] = _cl
 
                 # ── Cell-value resolver ───────────────────────────────────────────
-                def _cs_val(row_label: str, pog_col: str) -> str:
-                    _a5r = _a5_lkp.get(_nca(pog_col))
+                def _cs_val(row_label: str, pog_col: str, cluster_name: str = "") -> str:
+                    _pog_key = _nca(pog_col)
+                    _cl_key = _nca(cluster_name)
+                    _a5r = (
+                        _a5_pair_lkp.get((_pog_key, _cl_key))
+                        if _cl_key else None
+                    ) or _a5_lkp.get(_pog_key)
                     if row_label == "TO-BE Stores applied count":
                         return "1"
                     if row_label == "AS-IS Stores applied count":
                         return "1"
                     if row_label == "MODs" and _a5_mod_c:
-                        return (str(_a5r[_a5_mod_c])
-                                if _a5r is not None and pd.notna(_a5r[_a5_mod_c]) else "")
+                        _v = _a5r.get("mod") if _a5r is not None else ""
+                        return str(_v) if pd.notna(_v) else ""
                     if row_label == "FIXTURE" and _a5_fix_c:
-                        return (str(_a5r[_a5_fix_c])
-                                if _a5r is not None and pd.notna(_a5r[_a5_fix_c]) else "")
+                        _v = _a5r.get("fixture") if _a5r is not None else ""
+                        return str(_v) if pd.notna(_v) else ""
                     if row_label == "RANGE CLASS" and _a5_rng_c:
-                        return (str(_a5r[_a5_rng_c])
-                                if _a5r is not None and pd.notna(_a5r[_a5_rng_c]) else "")
+                        _v = _a5r.get("range") if _a5r is not None else ""
+                        return str(_v) if pd.notna(_v) else ""
                     return ""
-
-                # ── Build pog → cluster name mapping ─────────────────────────────
-                _pog_cl_col3 = next(
-                    (c for c in df_view.columns
-                     if _nca(c) == _nca("POG Cluster Mod Fixture")), None
-                ) or next(
-                    (c for c in df_view.columns
-                     if "pogcluster" in _nca(c)
-                     or ("cluster" in _nca(c) and "mod" in _nca(c))), None
-                )
-                _pog_to_cl: dict = {}
-                if _pog_cl_col3 and _pog_src_col:
-                    for _, _mr in (df_view[[_pog_src_col, _pog_cl_col3]]
-                                   .drop_duplicates().iterrows()):
-                        _pn = str(_mr[_pog_src_col]).strip()
-                        _cl = str(_mr[_pog_cl_col3]).strip()
-                        if _pn not in ("", "nan", "None") and _cl not in ("", "nan", "None"):
-                            _pog_to_cl[_pn] = _cl
 
                 # Cluster data source: session state (Cluster tab edits) or auto-fill
                 _ct_cls_disp = list(st.session_state.get(f"{p}_ct_cls") or [])
@@ -1280,14 +1358,19 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
 
                 # header row — one column per planogram (aligns with AG Grid body)
                 # Each column header shows the cluster name for that planogram.
-                _ct_hdr  = (f'<td class="cs-spacer" style="min-width:{_rest_w}px;width:{_rest_w}px;border:none;'
-                             f'background:#fff;"></td>')
-                _ct_hdr += (f'<th class="cs-label-col" style="{_th_s}min-width:{_LW}px;width:{_LW}px;">'
+                _ct_hdr  = (f'<th class="cs-label-col" style="{_th_s}min-width:{_LW}px;'
+                             f'width:{_LW}px;max-width:{_LW}px;">'
                              f'Cluster</th>')
-                for _pog in _dyn_pog_cols:
-                    _cl_lbl = _pog_to_cl.get(_pog, "")
-                    _ct_hdr += (f'<th style="{_th_s}min-width:{_CW}px;width:{_CW}px;'
-                                f'text-overflow:ellipsis;" title="{_cl_lbl}">{_cl_lbl}</th>')
+                for _pi, _pog in enumerate(_dyn_pog_cols):
+                    _cl_lbl = _pog_to_cl.get(_pog) or _pog_to_cl.get(_nca(_pog), "")
+                    _ct_hdr += (f'<th class="cs-pog-cell" data-idx="{_pi}" '
+                                f'style="{_th_s}min-width:{_CW}px;width:{_CW}px;'
+                                f'max-width:{_CW}px;height:128px;padding:2px 4px;'
+                                f'text-overflow:clip;" title="{_cl_lbl}">'
+                                f'<div style="height:124px;display:flex;align-items:center;'
+                                f'justify-content:center;writing-mode:vertical-rl;'
+                                f'transform:rotate(180deg);white-space:nowrap;'
+                                f'overflow:visible;text-overflow:clip;">{_cl_lbl}</div></th>')
 
                 # data rows — one cell per planogram, value = cluster metric for that planogram
                 _ct_body = ""
@@ -1296,18 +1379,32 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _row_bg = "#ffffff" if _even else "#f9f9f9"
                     _lbl_s  = (_td_s + f"font-weight:700;color:#222;"
                                f"background:{_row_bg};border-left:{_BRD};")
-                    _tds  = (f'<td class="cs-spacer" style="min-width:{_rest_w}px;width:{_rest_w}px;border:none;'
-                             f'background:#fff;"></td>')
-                    _tds += f'<td class="cs-label-col" style="{_lbl_s}min-width:{_LW}px;width:{_LW}px;">{_rl}</td>'
-                    for _pog in _dyn_pog_cols:
-                        _cl_key = _pog_to_cl.get(_pog, "")
-                        _ssv = str(_ct_dat_disp.get(_rl, {}).get(_cl_key, "") or "")
-                        if _ssv in ("nan", "None"): _ssv = ""
-                        _v   = _ssv if _ssv else _cs_val(_rl, _cl_key)
+                    _tds  = (f'<td class="cs-label-col" style="{_lbl_s}min-width:{_LW}px;'
+                             f'width:{_LW}px;max-width:{_LW}px;">{_rl}</td>')
+                    for _pi, _pog in enumerate(_dyn_pog_cols):
+                        _cl_key = _pog_to_cl.get(_pog) or _pog_to_cl.get(_nca(_pog), "")
+                        if _rl in ("MODs", "FIXTURE", "RANGE CLASS"):
+                            _v = _cs_val(_rl, _pog, _cl_key)
+                        else:
+                            _ssv = str(_ct_dat_disp.get(_rl, {}).get(_cl_key, "") or "")
+                            if _ssv in ("nan", "None"): _ssv = ""
+                            _v = _ssv if _ssv else _cs_val(_rl, _pog, _cl_key)
                         _dat_s = (_td_s + f"text-align:center;color:#222;"
                                   f"background:{_row_bg};")
-                        _tds += (f'<td style="{_dat_s}min-width:{_CW}px;width:{_CW}px;">'
-                                 f'{_v}</td>')
+                        if _rl == "FIXTURE" and str(_v).strip():
+                            _tds += (f'<td class="cs-pog-cell" data-idx="{_pi}" '
+                                     f'style="{_dat_s}min-width:{_CW}px;width:{_CW}px;'
+                                     f'max-width:{_CW}px;height:112px;padding:2px 4px;'
+                                     f'text-overflow:clip;">'
+                                     f'<div style="height:108px;display:flex;align-items:center;'
+                                     f'justify-content:center;writing-mode:vertical-rl;'
+                                     f'transform:rotate(180deg);white-space:nowrap;'
+                                     f'overflow:visible;text-overflow:clip;">{_v}</div></td>')
+                        else:
+                            _tds += (f'<td class="cs-pog-cell" data-idx="{_pi}" '
+                                     f'style="{_dat_s}min-width:{_CW}px;width:{_CW}px;'
+                                     f'max-width:{_CW}px;">'
+                                     f'{_v}</td>')
                     _ct_body += f'<tr>{_tds}</tr>'
 
                 if _a5_warn:
@@ -1330,8 +1427,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     f'width:{_pinned_w}px;height:100%;background:#fff;z-index:5;'
                     f'border-right:2px solid #BDC3C7;box-sizing:border-box;"></div>'
                     # scrollable body zone (starts at _pinned_w, matches AG Grid body)
-                    f'<div class="cs-scroll-sync" style="overflow-x:auto;margin-bottom:0;'
-                    f'margin-left:{_pinned_w}px;">'
+                    f'<div class="cs-scroll-sync" style="overflow-x:hidden;margin-bottom:0;'
+                    f'margin-left:{_pinned_w + _rest_w}px;">'
                     '<table style="border-collapse:collapse;table-layout:fixed;">'
                     f'<thead><tr>{_ct_hdr}</tr></thead>'
                     f'<tbody>{_ct_body}</tbody>'
@@ -1519,6 +1616,7 @@ function(params) {
                 _go = gb.build()
                 _go["headerHeight"]              = 260 if _dyn_pog_cols else 56
                 _go["rowHeight"]                 = 32
+                _pog_cols_js = _json.dumps([str(c) for c in _dyn_pog_cols])
                 # Post horizontal scroll position to parent page so the cluster
                 # summary table above can follow. Uses postMessage because the
                 # AgGrid iframe is sandboxed (no allow-same-origin).
@@ -1526,6 +1624,38 @@ function(params) {
 function(params){
   var tries=0;
   var _busy=false;
+  var _csPogCols=__POG_COLS__;
+  function csMetrics(){
+    var state=params.api.getColumnState();
+    var byId={}, pinnedW=0, spacer=0, lw=0, seenStatus=false;
+    for(var i=0;i<state.length;i++){
+      var s=state[i];
+      if(s.hide)continue;
+      byId[String(s.colId)]=s;
+      var cw=s.width||110;
+      if(s.pinned==='left'){
+        pinnedW+=cw;
+        continue;
+      }
+      if(s.colId==='Status'){
+        seenStatus=true;
+        lw+=cw;
+        continue;
+      }
+      if(seenStatus&&s.colId==='Check Range To-be Waterfall'){
+        lw+=cw;
+        continue;
+      }
+      if(!seenStatus)spacer+=cw;
+    }
+    if(lw<110)lw=220;
+    var pogW=[];
+    for(var j=0;j<_csPogCols.length;j++){
+      var ps=byId[String(_csPogCols[j])];
+      pogW.push(ps&&!ps.hide ? (ps.width||72) : 72);
+    }
+    return {_cs_pinned:pinnedW,_cs_spacer:spacer,_cs_lw:lw,_cs_pog_widths:pogW};
+  }
   var iv=setInterval(function(){
     tries++;
     var el=document.querySelector('.ag-body-horizontal-scroll-viewport');
@@ -1535,23 +1665,7 @@ function(params){
 
     /* ── Compute: pinned width, REST-body spacer, label width ── */
     try{
-      var state=params.api.getColumnState();
-      var pinnedW=0, spacer=0, lw=0, stage='pre';
-      for(var i=0;i<state.length;i++){
-        var s=state[i];
-        if(s.hide)continue;
-        var cw=s.width||110;
-        if(stage==='pre'){
-          if(s.colId==='Status'){stage='label';lw+=cw;}
-          else if(s.pinned==='left'){pinnedW+=cw;}  /* pinned — not in spacer */
-          else{spacer+=cw;}                          /* body REST col */
-        } else if(stage==='label'){
-          if(cw<=80){break;}   /* hit POG cols (width≤80) */
-          lw+=cw;
-        }
-      }
-      if(lw<110)lw=220;
-      window.parent.postMessage({_cs_pinned:pinnedW,_cs_spacer:spacer,_cs_lw:lw},'*');
+      window.parent.postMessage(csMetrics(),'*');
     }catch(e){}
 
     /* ── Bottom → Top: post scroll position ── */
@@ -1559,6 +1673,13 @@ function(params){
       if(_busy)return;
       window.parent.postMessage({_cs_hscroll:el.scrollLeft},'*');
     },{passive:true});
+    params.api.addEventListener('columnResized',function(ev){
+      if(ev.finished){
+        try{
+          window.parent.postMessage(csMetrics(),'*');
+        }catch(e){}
+      }
+    });
 
     /* ── Top → Bottom: receive scroll command ── */
     window.addEventListener('message',function(e){
@@ -1569,7 +1690,7 @@ function(params){
     });
   },250);
 }
-""")
+""".replace("__POG_COLS__", _pog_cols_js))
                 _go["suppressRowClickSelection"] = True
                 _go["suppressCellFocus"]         = False
                 # Columns tool panel — lets users re-show hidden columns via a sidebar
@@ -1665,6 +1786,17 @@ function(params){
   var _raf=window.requestAnimationFrame||function(f){setTimeout(f,16);};
   var _doc=window.parent.document;
   var _syncBusy=false;
+  var _csPinned=0, _csSpacer=0, _csHScroll=0;
+
+  function applyClusterPosition(){
+    var cover=_doc.querySelector('.cs-pin-cover');
+    var sync=_doc.querySelector('.cs-scroll-sync');
+    if(!sync)return;
+    var left=Math.max(_csPinned, _csPinned + _csSpacer - _csHScroll);
+    sync.style.marginLeft=left+'px';
+    if(cover){cover.style.width=left+'px';}
+    sync.scrollLeft=Math.max(0, _csHScroll - _csSpacer);
+  }
 
   /* ── Receive messages from AgGrid (bottom → top scroll + spacer) ── */
   window.parent.addEventListener('message',function(e){
@@ -1672,19 +1804,14 @@ function(params){
 
     /* Update pinned cover width + scrollable zone margin-left */
     if(e.data._cs_pinned!==undefined){
-      var cover=_doc.querySelector('.cs-pin-cover');
-      if(cover){cover.style.width=e.data._cs_pinned+'px';}
-      var sync=_doc.querySelector('.cs-scroll-sync');
-      if(sync){sync.style.marginLeft=e.data._cs_pinned+'px';}
+      _csPinned=e.data._cs_pinned;
+      applyClusterPosition();
     }
 
-    /* Update REST cols spacer so body Cluster aligns with body Status */
+    /* Update REST cols width so body Cluster aligns with body Status */
     if(e.data._cs_spacer!==undefined){
-      var spacers=_doc.querySelectorAll('.cs-spacer');
-      for(var i=0;i<spacers.length;i++){
-        spacers[i].style.minWidth=e.data._cs_spacer+'px';
-        spacers[i].style.width=e.data._cs_spacer+'px';
-      }
+      _csSpacer=e.data._cs_spacer;
+      applyClusterPosition();
     }
 
     /* Update Cluster label col width = Status + Check Range */
@@ -1693,6 +1820,25 @@ function(params){
       for(var i=0;i<lbls.length;i++){
         lbls[i].style.minWidth=e.data._cs_lw+'px';
         lbls[i].style.width=e.data._cs_lw+'px';
+        lbls[i].style.maxWidth=e.data._cs_lw+'px';
+      }
+    }
+
+    /* Update each top POG column to match the lower grid column width */
+    if(e.data._cs_pog_widths!==undefined){
+      var widths=e.data._cs_pog_widths, cells=_doc.querySelectorAll('.cs-pog-cell'), byIdx={};
+      for(var c=0;c<cells.length;c++){
+        var idx=parseInt(cells[c].getAttribute('data-idx'),10);
+        if(!byIdx[idx])byIdx[idx]=[];
+        byIdx[idx].push(cells[c]);
+      }
+      for(var j=0;j<widths.length;j++){
+        var w=widths[j]+'px';
+        if(byIdx[j])for(var k=0;k<byIdx[j].length;k++){
+          byIdx[j][k].style.minWidth=w;
+          byIdx[j][k].style.width=w;
+          byIdx[j][k].style.maxWidth=w;
+        }
       }
     }
 
@@ -1700,9 +1846,10 @@ function(params){
     if(e.data._cs_hscroll!==undefined){
       var top=_doc.querySelector('.cs-scroll-sync');
       if(!top)return;
+      _csHScroll=e.data._cs_hscroll;
       _syncBusy=true;
       _raf(function(){
-        top.scrollLeft=e.data._cs_hscroll;
+        applyClusterPosition();
         setTimeout(function(){_syncBusy=false;},50);
       });
     }
@@ -1714,7 +1861,7 @@ function(params){
     if(!top){setTimeout(attachTopRelay,400);return;}
     top.addEventListener('scroll',function(){
       if(_syncBusy)return;
-      var x=top.scrollLeft;
+      var x=_csSpacer + top.scrollLeft;
       /* Broadcast to every iframe — only AgGrid listens for _cs_agscroll */
       var iframes=_doc.querySelectorAll('iframe');
       for(var i=0;i<iframes.length;i++){
