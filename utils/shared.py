@@ -500,48 +500,6 @@ header button { visibility: visible !important; }
 </style>
 """, unsafe_allow_html=True)
 
-    _ICON_GREY = (
-        "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1"
-        "MTIgNTEyIj48cGF0aCBmaWxsPSIjNTU1NTU1IiBkPSJNNTAyLjYgMjc4LjZjMTIuNS0xMi41"
-        "IDEyLjUtMzIuOCAwLTQ1LjNsLTEyOC0xMjhjLTEyLjUtMTIuNS0zMi44LTEyLjUtNDUuMyAw"
-        "cy0xMi41IDMyLjggMCA0NS4zTDQwMi43IDIyNCAxOTIgMjI0Yy0xNy43IDAtMzIgMTQuMy0z"
-        "MiAzMnMxNC4zIDMyIDMyIDMybDIxMC43IDAtNzMuNCA3My40Yy0xMi41IDEyLjUtMTIuNSAz"
-        "Mi44IDAgNDUuM3MzMi44IDEyLjUgNDUuMyAwbDEyOC0xMjh6TTE2MCA5NmMxNy43IDAgMzIt"
-        "MTQuMyAzMi0zMnMtMTQuMy0zMi0zMi0zMkw5NiAzMkM0MyAzMiAwIDc1IDAgMTI4TDAgMzg0"
-        "YzAgNTMgNDMgOTYgOTYgOTZsNjQgMGMxNy43IDAgMzItMTQuMyAzMi0zMnMtMTQuMy0zMi0z"
-        "Mi0zMmwtNjQgMGMtMTcuNyAwLTMyLTE0LjMtMzItMzJsMC0yNTZjMC0xNy43IDE0LjMtMzIg"
-        "MzItMzJsNjQgMHoiLz48L3N2Zz4="
-    )
-    _ICON_RED = (
-        "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1"
-        "MTIgNTEyIj48cGF0aCBmaWxsPSIjRTUzOTM1IiBkPSJNNTAyLjYgMjc4LjZjMTIuNS0xMi41"
-        "IDEyLjUtMzIuOCAwLTQ1LjNsLTEyOC0xMjhjLTEyLjUtMTIuNS0zMi44LTEyLjUtNDUuMyAw"
-        "cy0xMi41IDMyLjggMCA0NS4zTDQwMi43IDIyNCAxOTIgMjI0Yy0xNy43IDAtMzIgMTQuMy0z"
-        "MiAzMnMxNC4zIDMyIDMyIDMybDIxMC43IDAtNzMuNCA3My40Yy0xMi41IDEyLjUtMTIuNSAz"
-        "Mi44IDAgNDUuM3MzMi44IDEyLjUgNDUuMyAwbDEyOC0xMjh6TTE2MCA5NmMxNy43IDAgMzIt"
-        "MTQuMyAzMi0zMnMtMTQuMy0zMi0zMi0zMkw5NiAzMkM0MyAzMiAwIDc1IDAgMTI4TDAgMzg0"
-        "YzAgNTMgNDMgOTYgOTYgOTZsNjQgMGMxNy43IDAgMzItMTQuMyAzMi0zMnMtMTQuMy0zMi0z"
-        "Mi0zMmwtNjQgMGMtMTcuNyAwLTMyLTE0LjMtMzItMzJsMC0yNTZjMC0xNy43IDE0LjMtMzIg"
-        "MzItMzJsNjQgMHoiLz48L3N2Zz4="
-    )
-    st.markdown(f"""
-<style>
-button[title="Sign out"],
-div[title="Sign out"] button,
-span[title="Sign out"] button,
-button[title="Sign out"]:hover,
-div[title="Sign out"] button:hover,
-span[title="Sign out"] button:hover,
-.stMarkdown:has(.logout-btn-wrap) ~ div button:hover {{
-    background-color: #FFF0F0 !important;
-    background-image: url("data:image/svg+xml;base64,{_ICON_RED}") !important;
-    border-color: #E53935 !important;
-    color: #E53935 !important;
-}}
-</style>
-""", unsafe_allow_html=True)
-
-
 # ── Page navigation (Next / Previous) ────────────────────────────────────────
 # _PAGE_ORDER  = ["landpage", "rawfiles", "viewdata", "dashboard", "report", "audit"]
 _PAGE_ORDER  = ["landpage", "viewdata", "rangesheetreview", "report", "audit"]
@@ -618,19 +576,6 @@ def render_sidebar(active: str = "landpage"):
         st.markdown("""
 <div style="height:1px;background:rgba(255,255,255,0.08);margin:10px 14px 8px;"></div>
 """, unsafe_allow_html=True)
-
-        m = st.session_state.get("merged_df")
-        if m is not None:
-            st.markdown(
-                f'<p style="padding:2px 16px;color:rgba(255,255,255,0.35);'
-                f'font-size:11px;">Merged: {len(m):,} rows · {len(m.columns)} cols</p>',
-                unsafe_allow_html=True)
-        sinfo = storage_info()
-        st.markdown(
-            f'<p style="padding:2px 16px;color:rgba(255,255,255,0.35);'
-            f'font-size:11px;">📁 {sinfo["files"]} files · {sinfo["total_mb"]} MB</p>',
-            unsafe_allow_html=True)
-
 
 # ── Logout confirmation dialog ─────────────────────────────────────────────────
 @st.dialog("Confirm")
