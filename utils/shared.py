@@ -1082,10 +1082,16 @@ def ensure_hdet_parquet(csv_path: str, status_cb=None) -> str | None:
             chunksize=LARGE_FILE_CHUNK_SIZE,
             dtype=str, low_memory=False, on_bad_lines="skip",
         ):
+            dg_col = _find_dg_col(chunk.columns)
+            if dg_col:
+                try:
+                    chunk = chunk.sort_values(dg_col, kind="mergesort")
+                except Exception:
+                    pass
             table = _pa.Table.from_pandas(chunk.fillna(""), preserve_index=False)
             if writer is None:
                 writer = _pq.ParquetWriter(tmp_path, table.schema, compression="snappy")
-            writer.write_table(table)
+            writer.write_table(table, row_group_size=8192)
             chunk_n += 1
             if status_cb:
                 status_cb(f"  …processed {chunk_n * LARGE_FILE_CHUNK_SIZE:,} rows")
@@ -1774,10 +1780,28 @@ def load_large_file_by_dg(path: str, dg_value: str, use_cache: bool = True) -> p
             _cols    = [f.name for f in _schema]
             dg_col   = _find_dg_col(_cols)
             if dg_col:
-                _tbl   = _pq.read_table(pq_path)
-                _upper = _pc.utf8_upper(_pc.utf8_strip(_tbl[dg_col].cast("string")))
-                _mask  = _pc.equal(_upper, dg_value_upper)
-                result = _tbl.filter(_mask).to_pandas()
+                # Try Parquet predicate pushdown first. This can avoid reading most
+                # row groups for a new DG and is much faster than loading the full
+                # HDET table into memory before filtering.
+                _candidate_vals = list(dict.fromkeys([dg_value, dg_value_upper]))
+                for _cand in _candidate_vals:
+                    try:
+                        _tbl = _pq.read_table(
+                            pq_path,
+                            filters=[(dg_col, "=", _cand)],
+                            use_threads=True,
+                            memory_map=True,
+                        )
+                        if _tbl.num_rows:
+                            result = _tbl.to_pandas()
+                            break
+                    except Exception:
+                        pass
+                if result.empty:
+                    _tbl   = _pq.read_table(pq_path, use_threads=True, memory_map=True)
+                    _upper = _pc.utf8_upper(_pc.utf8_strip(_tbl[dg_col].cast("string")))
+                    _mask  = _pc.equal(_upper, dg_value_upper)
+                    result = _tbl.filter(_mask).to_pandas()
         except Exception:
             result = pd.DataFrame()
 

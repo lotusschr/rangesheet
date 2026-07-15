@@ -1,0 +1,65 @@
+{
+  "pog_actions": [
+    {
+      "key": [
+        "K3I",
+        "016893115",
+        "เอลเซ่บัตเตอร์เค้กรสวานิลลา 15ก.x24"
+      ],
+      "value": {
+        "SOFT CAKE N_G_A C 3 OMM-WHT3_target_5062": "New"
+      }
+    },
+    {
+      "key": [
+        "K3I",
+        "000679003",
+        "ยูโร่คัสตาร์ดเค้ก 144ก."
+      ],
+      "value": {
+        "SOFT CAKE N_G_A C 3 OMM-WHT3_target_5062": "Delete"
+      }
+    }
+  ],
+  "pog_edits": [
+    {
+      "key": [
+        "K3I",
+        "016893115",
+        "เอลเซ่บัตเตอร์เค้กรสวานิลลา 15ก.x24"
+      ],
+      "value": {
+        "SOFT CAKE N_G_A C 3 OMM-WHT3_target_5062": "New"
+      }
+    },
+    {
+      "key": [
+        "K3I",
+        "000679003",
+        "ยูโร่คัสตาร์ดเค้ก 144ก."
+      ],
+      "value": {
+        "SOFT CAKE N_G_A C 3 OMM-WHT3_target_5062": "Delete"
+      }
+    }
+  ],
+  "avg_u_edits": [],
+  "status_overrides": [
+    {
+      "key": [
+        "K3I",
+        "016893115",
+        "เอลเซ่บัตเตอร์เค้กรสวานิลลา 15ก.x24"
+      ],
+      "value": "NEW SOME"
+    },
+    {
+      "key": [
+        "K3I",
+        "000679003",
+        "ยูโร่คัสตาร์ดเค้ก 144ก."
+      ],
+      "value": "DELETE SOME"
+    }
+  ]
+}

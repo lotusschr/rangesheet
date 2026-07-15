@@ -10,6 +10,8 @@ import json as _json
 import math
 import difflib
 import html as _html
+import hashlib as _hashlib
+import io
 from datetime import datetime
 from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
@@ -32,6 +34,168 @@ _user_upload = st.session_state.get("upload_df")
 # Always read the shared admin database — it refreshes for all users whenever
 # the admin pins or unpins a file (bump_shared_db invalidates the cache).
 _shared_df, _ = get_shared_db()
+
+_RS_NEW_ROWS_DIR = os.path.join(BASE_DIR, "rangesheet_data", ".autosave", "rangesheetreview")
+
+
+def _rs_new_rows_path(scope: str) -> str:
+    os.makedirs(_RS_NEW_ROWS_DIR, exist_ok=True)
+    digest = _hashlib.sha1(str(scope).encode("utf-8")).hexdigest()
+    return os.path.join(_RS_NEW_ROWS_DIR, f"new_rows_{digest}.json")
+
+
+def _rs_load_new_rows(scope: str) -> list[dict]:
+    path = _rs_new_rows_path(scope)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _rs_save_new_rows(scope: str, rows: list[dict]) -> None:
+    path = _rs_new_rows_path(scope)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        _json.dump(rows or [], f, ensure_ascii=False, indent=2, default=str)
+    os.replace(tmp, path)
+
+
+def _rs_edit_state_path(scope: str) -> str:
+    os.makedirs(_RS_NEW_ROWS_DIR, exist_ok=True)
+    digest = _hashlib.sha1(str(scope).encode("utf-8")).hexdigest()
+    return os.path.join(_RS_NEW_ROWS_DIR, f"edit_state_{digest}.json")
+
+
+def _rs_table_base_path(scope: str) -> str:
+    os.makedirs(_RS_NEW_ROWS_DIR, exist_ok=True)
+    digest = _hashlib.sha1(str(scope).encode("utf-8")).hexdigest()
+    return os.path.join(_RS_NEW_ROWS_DIR, f"table_base_{digest}.pkl")
+
+
+def _rs_report_packets_path(p: str) -> str:
+    os.makedirs(_RS_NEW_ROWS_DIR, exist_ok=True)
+    return os.path.join(_RS_NEW_ROWS_DIR, f"report_packets_{p}.pkl")
+
+
+def _rs_load_report_packets(p: str) -> dict:
+    path = _rs_report_packets_path(p)
+    if not os.path.exists(path):
+        return {}
+    try:
+        data = pd.read_pickle(path)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _rs_save_report_packets(p: str, packets: dict) -> None:
+    path = _rs_report_packets_path(p)
+    tmp = f"{path}.tmp"
+    pd.to_pickle(packets or {}, tmp)
+    os.replace(tmp, path)
+
+
+def _rs_load_table_base(scope: str) -> dict:
+    path = _rs_table_base_path(scope)
+    if not os.path.exists(path):
+        return {}
+    try:
+        data = pd.read_pickle(path)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _rs_save_table_base(scope: str, data: dict) -> None:
+    path = _rs_table_base_path(scope)
+    tmp = f"{path}.tmp"
+    pd.to_pickle(data or {}, tmp)
+    os.replace(tmp, path)
+
+
+def _rs_pack_keyed_dict(d: dict) -> list[dict]:
+    out = []
+    for k, v in (d or {}).items():
+        key = list(k) if isinstance(k, tuple) else [str(k)]
+        out.append({"key": key, "value": v})
+    return out
+
+
+def _rs_unpack_keyed_dict(items) -> dict:
+    out = {}
+    if not isinstance(items, list):
+        return out
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key", [])
+        if not isinstance(key, list):
+            key = [str(key)]
+        out[tuple(str(x) for x in key)] = item.get("value", {})
+    return out
+
+
+def _rs_load_edit_state(scope: str) -> dict:
+    path = _rs_edit_state_path(scope)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        pog_actions = _rs_unpack_keyed_dict(data.get("pog_actions", []))
+        pog_edits = _rs_unpack_keyed_dict(data.get("pog_edits", []))
+        status_overrides = {
+            k: str(v)
+            for k, v in _rs_unpack_keyed_dict(data.get("status_overrides", [])).items()
+        }
+        for rk, status in list(status_overrides.items()):
+            if str(status).strip().upper() == "DELETE ALL":
+                pog_actions.pop(rk, None)
+                pog_edits.pop(rk, None)
+        return {
+            "pog_actions": pog_actions,
+            "pog_edits": pog_edits,
+            "avg_u_edits": _rs_unpack_keyed_dict(data.get("avg_u_edits", [])),
+            "data_edits": _rs_unpack_keyed_dict(data.get("data_edits", [])),
+            "status_overrides": status_overrides,
+        }
+    except Exception:
+        return {}
+
+
+def _rs_save_edit_state(
+    scope: str,
+    pog_actions: dict,
+    pog_edits: dict,
+    avg_u_edits: dict,
+    status_overrides: dict,
+    data_edits: dict | None = None,
+) -> None:
+    path = _rs_edit_state_path(scope)
+    tmp = f"{path}.tmp"
+    pog_actions = dict(pog_actions or {})
+    pog_edits = dict(pog_edits or {})
+    status_overrides = dict(status_overrides or {})
+    for rk, status in list(status_overrides.items()):
+        if str(status).strip().upper() == "DELETE ALL":
+            pog_actions.pop(rk, None)
+            pog_edits.pop(rk, None)
+    data = {
+        "pog_actions": _rs_pack_keyed_dict(pog_actions),
+        "pog_edits": _rs_pack_keyed_dict(pog_edits),
+        "avg_u_edits": _rs_pack_keyed_dict(avg_u_edits),
+        "data_edits": _rs_pack_keyed_dict(data_edits or {}),
+        "status_overrides": _rs_pack_keyed_dict(status_overrides),
+    }
+    with open(tmp, "w", encoding="utf-8") as f:
+        _json.dump(data, f, ensure_ascii=False, separators=(",", ":"), default=str)
+    os.replace(tmp, path)
 
 # User's own file selection takes priority; fall back to shared admin database.
 if selected_files and _user_upload is not None and len(_user_upload) > 0:
@@ -491,6 +655,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     # function detects locally may not be the same one the picker
                     # above used to resolve fixed_dg_name.
                     _sel_dg_code = fixed_dg_code or ""
+                    st.session_state[f"{p}_selected_dg_code"] = _sel_dg_code
+                    st.session_state[f"{p}_selected_dg_name"] = fixed_dg_name or "ALL"
                     st.markdown(
                         f'<div style="font-size:12px;color:#555;margin-bottom:8px;">'
                         f'DG Code: <strong>{_sel_dg_code or "—"}</strong><br>'
@@ -501,8 +667,13 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _ALL_OPT = "— All (preview 500 rows) —"
                     if dg_options:
                         _dg_combo_opts = [_ALL_OPT] + list(dg_options)
+                        _prev_code = str(st.session_state.get(f"{p}_selected_dg_code", "") or "")
+                        _default_code = _prev_code if _prev_code in _dg_combo_opts else _ALL_OPT
+                        if st.session_state.get(f"{p}_dg_code") not in _dg_combo_opts:
+                            st.session_state[f"{p}_dg_code"] = _default_code
                         _dg_combo_val  = st.selectbox(
                             "Search DG Code", _dg_combo_opts,
+                            index=_dg_combo_opts.index(_default_code),
                             key=f"{p}_dg_code", label_visibility="visible",
                         )
                         _sel_dg_code = "" if _dg_combo_val == _ALL_OPT else _dg_combo_val
@@ -510,6 +681,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         _sel_dg_code = st.text_input(
                             "Search DG Code", placeholder="Type DG code to filter…",
                             key=f"{p}_dg_code", label_visibility="visible")
+                    st.session_state[f"{p}_selected_dg_code"] = _sel_dg_code
                     if _dg_code_col and _dg_name_col and _sel_dg_code:
                         _ns = df_src[df_src[_dg_code_col].astype(str).str.contains(_sel_dg_code, case=False, na=False)]
                         _dg_name_opts = ["ALL"] + sorted(_ns[_dg_name_col].dropna().astype(str).str.strip().unique().tolist())
@@ -517,14 +689,17 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         _dg_name_opts = ["ALL"] + sorted(df_src[_dg_name_col].dropna().astype(str).str.strip().unique().tolist())
                     else:
                         _dg_name_opts = ["ALL"]
-                    _prev_name = st.session_state.get(f"_{p}_dg_name_prev", "ALL")
+                    _prev_name = st.session_state.get(f"{p}_selected_dg_name", st.session_state.get(f"_{p}_dg_name_prev", "ALL"))
                     if _prev_name not in _dg_name_opts:
                         _prev_name = "ALL"
+                    if st.session_state.get(f"{p}_dg_name") not in _dg_name_opts:
+                        st.session_state[f"{p}_dg_name"] = _prev_name
                     _sel_dg_name = st.selectbox(
                         "DG NAME", _dg_name_opts,
                         index=(_dg_name_opts.index(_prev_name) if _prev_name in _dg_name_opts else 0),
                         key=f"{p}_dg_name", label_visibility="visible")
                     st.session_state[f"_{p}_dg_name_prev"] = _sel_dg_name
+                    st.session_state[f"{p}_selected_dg_name"] = _sel_dg_name
                 _static_rows = ""
                 for _sk, _sv2 in [
                     ("MINOR LIVE WEEK", _meta.get("minor_live_week", "—")),
@@ -540,6 +715,56 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 st.markdown(f"""<div style="background:#fff;border-radius:0 0 14px 14px;
                             border:1px solid #E8E3DC;border-top:none;padding:10px 14px 10px;">
                     {_static_rows}</div>""", unsafe_allow_html=True)
+
+        # Persisted dropdown edits must be available before summary panels render.
+        # The main grid loads this state later too, but range architecture/cluster
+        # are above the grid and otherwise miss edits after a browser refresh.
+        _pre_sticky_for_state = [c for c in ["DG Code", "ID", "Item Name"] if c in df_src.columns]
+        _pre_scope_candidates = []
+        for _candidate_sticky in (
+            _pre_sticky_for_state,
+            ["DG Code", "ID", "Item Name"],
+            ["ID", "Item Name"],
+        ):
+            if _candidate_sticky not in _pre_scope_candidates:
+                _pre_scope_candidates.append(_candidate_sticky)
+        _pre_edit_state_scope = (
+            f"{p}|{large_file_path or ''}|"
+            f"{getattr(df_src, 'shape', ('', ''))}|"
+            f"{_sel_dg_code or ''}|{_sel_dg_name or ''}|"
+            f"{','.join(map(str, _pre_sticky_for_state))}"
+        )
+        _pre_edit_state_scope_key = f"{p}_edit_state_scope"
+        if st.session_state.get(_pre_edit_state_scope_key) != _pre_edit_state_scope:
+            _loaded_edit_state = {}
+            _loaded_edit_scope = _pre_edit_state_scope
+            for _scope_sticky in _pre_scope_candidates:
+                _candidate_scope = (
+                    f"{p}|{large_file_path or ''}|"
+                    f"{getattr(df_src, 'shape', ('', ''))}|"
+                    f"{_sel_dg_code or ''}|{_sel_dg_name or ''}|"
+                    f"{','.join(map(str, _scope_sticky))}"
+                )
+                _candidate_state = _rs_load_edit_state(_candidate_scope)
+                if any(_candidate_state.get(_k) for _k in ("pog_actions", "pog_edits", "avg_u_edits", "data_edits", "status_overrides")):
+                    _loaded_edit_state = _candidate_state
+                    _loaded_edit_scope = _candidate_scope
+                    break
+                _legacy_scope = (
+                    f"{p}|{large_file_path or ''}|"
+                    f"{getattr(df_src, 'shape', ('', ''))}|{','.join(map(str, _scope_sticky))}"
+                )
+                _legacy_state = _rs_load_edit_state(_legacy_scope)
+                if any(_legacy_state.get(_k) for _k in ("pog_actions", "pog_edits", "avg_u_edits", "data_edits", "status_overrides")):
+                    _loaded_edit_state = _legacy_state
+                    _loaded_edit_scope = _candidate_scope
+                    break
+            st.session_state[_pre_edit_state_scope_key] = _loaded_edit_scope
+            st.session_state[f"{p}_pog_actions"] = _loaded_edit_state.get("pog_actions", {})
+            st.session_state[f"{p}_pog_edits"] = _loaded_edit_state.get("pog_edits", {})
+            st.session_state[f"{p}_avg_u_edits"] = _loaded_edit_state.get("avg_u_edits", {})
+            st.session_state[f"{p}_data_edits"] = _loaded_edit_state.get("data_edits", {})
+            st.session_state[f"{p}_status_overrides"] = _loaded_edit_state.get("status_overrides", {})
 
         with _arch_c:
             _type_col = (
@@ -560,41 +785,77 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             _is_sspog = (p == "ss")
             TYPES = ["MAINTAIN"] + (["NEW DELETE SOME"] if _is_sspog else []) + ["DELETE SOME","DELETE ALL","NEW SOME","NEWNEW"]
             _status_ov_live = st.session_state.get(f"{p}_status_overrides", {})
-            _sticky_for_arch = [c for c in ["DG Code", "ID", "Item Name"] if c in _ab.columns]
+            _arch_action_store = {}
+            for _store in (
+                st.session_state.get(f"{p}_pog_actions", {}),
+                st.session_state.get(f"{p}_pog_edits", {}),
+            ):
+                if isinstance(_store, dict):
+                    for _rk_a, _acts_a in _store.items():
+                        if isinstance(_acts_a, dict):
+                            _arch_action_store.setdefault(_rk_a, {}).update(_acts_a)
+            def _arch_status_from_actions(_acts):
+                if not isinstance(_acts, dict) or not _acts:
+                    return ""
+                _vals = [str(v).strip().lower() for v in _acts.values() if str(v).strip()]
+                if not _vals:
+                    return ""
+                _del_n = sum(1 for v in _vals if v == "delete")
+                _new_n = sum(1 for v in _vals if v == "new")
+                if _del_n and _new_n:
+                    return "NEW DELETE SOME" if _is_sspog else "DELETE SOME"
+                if _del_n:
+                    return "DELETE SOME"
+                if _new_n:
+                    return "NEW SOME"
+                return ""
+            _arch_action_status_by_rk = {}
+            _arch_action_status_by_id = {}
+            for _rk_a, _acts_a in _arch_action_store.items():
+                _st_a = _arch_status_from_actions(_acts_a)
+                if not _st_a:
+                    continue
+                _arch_action_status_by_rk[_rk_a] = _st_a
+                if isinstance(_rk_a, tuple) and len(_rk_a) > 1:
+                    _arch_action_status_by_id[str(_rk_a[1])] = _st_a
             _id_col_arch = next((c for c in _ab.columns if _nca(c) == _nca("ID")), None)
+            _item_col_arch = (
+                next((c for c in _ab.columns if _nca(c) == _nca("Item Name")), None)
+                or next((c for c in _ab.columns if "item" in _nc(c) and "name" in _nc(c)), None)
+            )
+            _sticky_for_arch = [c for c in [_dg_code_col, _id_col_arch, _item_col_arch] if c and c in _ab.columns]
+            if _id_col_arch and _id_col_arch in _ab.columns:
+                _ab = _ab.drop_duplicates(subset=[_id_col_arch], keep="first").copy()
             def _arch_status_series(base: pd.DataFrame):
-                if _type_col and _type_col in base.columns:
-                    _asis = base[_type_col].astype(str).str.strip().str.upper()
-                else:
-                    _asis = pd.Series(["MAINTAIN"] * len(base), index=base.index)
-                _asis = _asis.replace({"": "MAINTAIN", "NAN": "MAINTAIN", "NONE": "MAINTAIN"})
+                _asis = pd.Series(["MAINTAIN"] * len(base), index=base.index)
                 _tobe = _asis.copy()
-                _used_ov = set()
-                _ov_by_id = {
-                    str(_rk[1] if isinstance(_rk, tuple) and len(_rk) > 1 else _rk): _ov
-                    for _rk, _ov in _status_ov_live.items()
-                }
-                if _status_ov_live:
+                _ov_by_id = {}
+                for _rk, _ov in _status_ov_live.items():
+                    if not isinstance(_rk, tuple):
+                        continue
+                    if len(_rk) >= 3 and _sel_dg_code and str(_rk[0]).strip() != str(_sel_dg_code).strip():
+                        continue
+                    if len(_rk) > 1:
+                        _ov_by_id[str(_rk[1])] = _ov
+                if (_status_ov_live or _arch_action_status_by_rk) and _id_col_arch and _id_col_arch in base.columns:
+                    _mapped_status = base[_id_col_arch].astype(str).map(
+                        lambda _idv: _ov_by_id.get(_idv) or _arch_action_status_by_id.get(_idv) or ""
+                    )
+                    _mapped_status = _mapped_status.astype(str).str.strip().str.upper()
+                    _mapped_mask = _mapped_status.ne("")
+                    if _mapped_mask.any():
+                        _tobe.loc[_mapped_mask] = _mapped_status.loc[_mapped_mask]
+                elif _status_ov_live or _arch_action_status_by_rk:
                     for _idx2, _row2 in base.iterrows():
                         _rk2 = tuple(str(_row2.get(c, "")) for c in _sticky_for_arch) if _sticky_for_arch else None
                         _ov2 = _status_ov_live.get(_rk2) if _rk2 else None
-                        if _ov2 and _rk2:
-                            _used_ov.add(_rk2)
+                        if not _ov2 and _rk2:
+                            _ov2 = _arch_action_status_by_rk.get(_rk2)
                         if not _ov2 and _id_col_arch:
                             _id2 = str(_row2.get(_id_col_arch, ""))
-                            if _id2 not in _used_ov:
-                                _ov2 = _ov_by_id.get(_id2)
-                            if _ov2:
-                                _used_ov.add(_id2)
+                            _ov2 = _ov_by_id.get(_id2) or _arch_action_status_by_id.get(_id2)
                         if _ov2:
                             _tobe.at[_idx2] = str(_ov2).strip().upper()
-                    for _rk3, _ov3 in _status_ov_live.items():
-                        _id3 = str(_rk3[1] if isinstance(_rk3, tuple) and len(_rk3) > 1 else _rk3)
-                        if _rk3 in _used_ov or _id3 in _used_ov:
-                            continue
-                        _maint_idx = _tobe.index[_tobe == "MAINTAIN"]
-                        if len(_maint_idx):
-                            _tobe.at[_maint_idx[0]] = str(_ov3).strip().upper()
                 return _asis, _tobe
             _asis_status, _tobe_status = _arch_status_series(_ab)
             def _fmt(v):
@@ -611,13 +872,15 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _prices = pd.to_numeric(_ab.loc[_idx, _price_col], errors="coerce").fillna(0) if (_price_col and len(_idx) > 0) else pd.Series([], dtype=float)
                 _asis_s = pd.to_numeric(_ab.loc[_idx, _asis_stc], errors="coerce").fillna(0) if (_asis_stc and len(_idx) > 0) else pd.Series([1]*len(_idx), dtype=float)
                 _tobe_s = pd.to_numeric(_ab.loc[_idx, _tobe_stc], errors="coerce").fillna(0) if (_tobe_stc and len(_idx) > 0) else pd.Series([1]*len(_idx), dtype=float)
-                _edlp_p = pd.to_numeric(_ab.loc[_idx, _edlp_col], errors="coerce").fillna(0) if (_edlp_col and len(_idx) > 0) else pd.Series([], dtype=float)
                 _arch_rows.append({"type":_t,"as_is":_ai,"to_be":_tb,
                     "sale_ai":float((_prices*_asis_s).sum()) if len(_prices) else 0.0,
                     "sale_tb":float((_prices*_tobe_s).sum()) if len(_prices) else 0.0,
                     "sale_diff":float((_prices*_tobe_s).sum()-(_prices*_asis_s).sum()) if len(_prices) else 0.0,
-                    "marg_ai":float((_edlp_p*_asis_s).sum()) if len(_edlp_p) else 0.0})
-            _t_ai=sum(r["as_is"] for r in _arch_rows); _t_tb=sum(r["to_be"] for r in _arch_rows)
+                    "marg_ai":0.0})
+            _t_ai=sum(r["as_is"] for r in _arch_rows)
+            _delete_all_tb = next((r["to_be"] for r in _arch_rows if r["type"] == "DELETE ALL"), 0)
+            _newnew_tb = next((r["to_be"] for r in _arch_rows if r["type"] == "NEWNEW"), 0)
+            _t_tb=_t_ai - _delete_all_tb + _newnew_tb
             _t_sai=sum(r["sale_ai"] for r in _arch_rows); _t_stb=sum(r["sale_tb"] for r in _arch_rows)
             _t_sdiff=sum(r["sale_diff"] for r in _arch_rows); _t_mai=sum(r["marg_ai"] for r in _arch_rows)
             _pct_sale=f"{(_t_sdiff/_t_sai*100):.1f}%" if _t_sai else "0.0%"
@@ -698,27 +961,32 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     display mgr = Avg selling price from format</div></div>""", unsafe_allow_html=True)
 
         with _leg_c:
-            st.markdown("""<div style="background:#fff;border-radius:14px;border:1px solid #E8E3DC;padding:16px;">
-              <div style="font-size:10px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px;">Color Note</div>
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-                <div style="width:22px;height:14px;background:#FFFDE7;border:1px solid #E0D9D2;border-radius:3px;flex-shrink:0;"></div>
-                <span style="font-size:11px;color:#555;">Display fill</span></div>
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-                <div style="width:22px;height:14px;background:#FCE4EC;border:1px solid #E0D9D2;border-radius:3px;flex-shrink:0;"></div>
-                <span style="font-size:11px;color:#555;">Merchandiser fill</span></div>
-              <div style="display:flex;align-items:center;gap:8px;">
-                <div style="width:22px;height:14px;background:#F5F5F5;border:1px solid #E0D9D2;border-radius:3px;flex-shrink:0;"></div>
-                <span style="font-size:11px;color:#555;">Formula</span></div></div>""", unsafe_allow_html=True)
+            st.empty()
 
         st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
 
-        _c2, _c3, _c4 = st.columns([4, 1, 1.2])
+        _new_rows_scope = f"{p}|{_sel_dg_code or 'ALL'}|{_sel_dg_name or 'ALL'}|{large_file_path or ''}"
+        _new_rows_key = f"{p}_new_item_rows"
+        _new_rows_placeholder_key = f"{p}_new_item_placeholder_rows"
+        _new_rows_scope_key = f"{p}_new_item_rows_scope"
+        _new_rows_scroll_key = f"{p}_new_item_scroll_key"
+        _new_rows_pending_key = f"{p}_new_item_pending_add"
+        if st.session_state.get(_new_rows_scope_key) != _new_rows_scope:
+            st.session_state[_new_rows_scope_key] = _new_rows_scope
+            st.session_state[_new_rows_key] = _rs_load_new_rows(_new_rows_scope)
+            st.session_state[_new_rows_placeholder_key] = []
+            st.session_state[_new_rows_scroll_key] = ""
+
+        _c2, _c3, _cadd, _c4 = st.columns([4, 1, 1.25, 1.2])
         with _c2:
             _search_q = st.text_input("Search", placeholder="🔎  Search item, barcode, status...",
                                       label_visibility="collapsed", key=f"{p}_search")
         with _c3:
             _n_rows = st.number_input("Rows", min_value=10, max_value=100000, value=500, step=100,
                                       help="Max rows to display", key=f"{p}_nrows")
+        with _cadd:
+            if st.button("Add new item", key=f"{p}_add_new_item", use_container_width=True):
+                st.session_state[_new_rows_pending_key] = int(st.session_state.get(_new_rows_pending_key, 0)) + 10
         with _c4:
             _edit_on = st.toggle("⚙️ Edit Columns", key=f"{p}_edit_cols")
 
@@ -763,7 +1031,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
         # Filter + search
         _pog_c  = next((c for c in _src_cols if "pog" in c.lower() and "cluster" in c.lower()), None)
 
-        if _sel_dg_code and large_file_path:
+        if _sel_dg_code and large_file_path and not fixed_dg_code:
             # Search full HDET file — the 500-row preview may not contain this DG
             _q   = _sel_dg_code.strip()
             _sig = f"{large_file_path}|{_q.upper()}"
@@ -774,10 +1042,10 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _result = load_large_file_by_dg(large_file_path, _q)
                 st.session_state[_sk] = _sig
                 st.session_state[_dk] = _result
-            df_view = st.session_state[_dk].copy()
+            df_view = st.session_state[_dk].copy(deep=False)
             # Keep the lookup quiet; users only need the filtered table here.
         else:
-            df_view = df_src.copy()
+            df_view = df_src.copy(deep=False)
             if _sel_dg_code:
                 _q = _sel_dg_code.strip()
                 if _dg_code_col and _dg_code_col in df_view.columns:
@@ -786,8 +1054,12 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         .str.contains(_q, case=False, na=False)
                     ]
                 else:
-                    df_view = df_view[df_view.apply(
-                        lambda r: r.astype(str).str.contains(_q, case=False, na=False).any(), axis=1)]
+                    _scan_cols = [c for c in df_view.columns if c in df_view.columns]
+                    if _scan_cols:
+                        _scan_mask = df_view[_scan_cols].astype(str).apply(
+                            lambda _col: _col.str.contains(_q, case=False, na=False, regex=False)
+                        ).any(axis=1)
+                        df_view = df_view[_scan_mask]
 
         if _sel_dg_name != "ALL" and _dg_name_col and _dg_name_col in df_view.columns:
             df_view = df_view[df_view[_dg_name_col].astype(str).str.strip() == _sel_dg_name]
@@ -814,10 +1086,14 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _apply_source_search = False
 
         if _apply_source_search:
-            df_view = df_view[df_view.apply(
-                lambda r: r.astype(str).str.contains(
-                    _search_q_text, case=False, na=False, regex=False
-                ).any(), axis=1)]
+            _search_cols = [c for c in df_view.columns]
+            if _search_cols:
+                _search_mask_src = df_view[_search_cols].astype(str).apply(
+                    lambda _col: _col.str.contains(
+                        _search_q_text, case=False, na=False, regex=False
+                    )
+                ).any(axis=1)
+                df_view = df_view[_search_mask_src]
         df_view = df_view.reset_index(drop=True)
 
         # _m_maintain = int((df_view[_stc].astype(str).str.strip()=="MAINTAIN").sum()) if _stc else 0
@@ -891,6 +1167,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             _pk_std       = []
             _pk_raw       = []
             _pk_map       = {}
+            _cs_base_pog_counts = {}
             if _pog_src_col:
                 # All planogram names from full df_view (no row cap — cap products after pivot)
                 _pog_vals_all = df_view[_pog_src_col].astype(str).str.strip()
@@ -909,7 +1186,52 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _pk_std = list(_pk_map.keys())   # standard names with a raw counterpart
                 _pk_raw = list(dict.fromkeys(_pk_map.values()))  # raw names, deduplicated
 
-                if _dyn_pog_cols and _pk_raw:
+                _pivot_cache_key = f"{p}_table_pivot_cache"
+                _source_mtime = (
+                    os.path.getmtime(large_file_path)
+                    if large_file_path and os.path.exists(large_file_path)
+                    else 0
+                )
+                _pivot_sig = (
+                    "pivot_cluster_count_v2",
+                    str(large_file_path or ""),
+                    float(_source_mtime),
+                    str(_sel_dg_code or ""),
+                    str(_sel_dg_name or ""),
+                    str(_search_q_text or "") if _apply_source_search else "",
+                    int(_MAX),
+                    tuple(str(c) for c in _std_all),
+                    tuple(str(c) for c in df_view.columns),
+                    tuple(df_view.shape),
+                    str(_pog_src_col or ""),
+                    str(_sv_col or ""),
+                    tuple(str(c) for c in _pk_raw),
+                    tuple(str(c) for c in _dyn_pog_cols),
+                )
+                _pivot_cache = st.session_state.get(_pivot_cache_key)
+                _pivot_scope = repr(_pivot_sig)
+                if not (
+                    isinstance(_pivot_cache, dict)
+                    and _pivot_cache.get("sig") == _pivot_sig
+                    and isinstance(_pivot_cache.get("tdf"), pd.DataFrame)
+                ):
+                    _disk_cache = _rs_load_table_base(_pivot_scope)
+                    if (
+                        isinstance(_disk_cache, dict)
+                        and _disk_cache.get("sig") == _pivot_sig
+                        and isinstance(_disk_cache.get("tdf"), pd.DataFrame)
+                    ):
+                        _pivot_cache = _disk_cache
+                        st.session_state[_pivot_cache_key] = _disk_cache
+                if (
+                    isinstance(_pivot_cache, dict)
+                    and _pivot_cache.get("sig") == _pivot_sig
+                    and isinstance(_pivot_cache.get("tdf"), pd.DataFrame)
+                ):
+                    _tdf = _pivot_cache["tdf"].copy()
+                    _piv_pog_cols = list(_pivot_cache.get("piv_pog_cols", []))
+                    _cs_base_pog_counts = dict(_pivot_cache.get("cs_as_is_sku_counts", {}) or {})
+                elif _dyn_pog_cols and _pk_raw:
                     # Pivot from FULL df_view: index=product key, columns=planogram, values=sales vol.
                     # aggfunc="sum" handles the case where a (product × planogram) pair appears in
                     # more than one row (e.g. multi-store long format).
@@ -934,6 +1256,10 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _piv_std = (
                         _piv.rename(columns=dict(zip(_pk_raw, _pk_std)))[_pk_std + _piv_pog_cols]
                     )
+                    _cs_base_pog_counts = {
+                        str(_pc): int(pd.to_numeric(_piv_std[_pc], errors="coerce").notna().sum())
+                        for _pc in _piv_pog_cols
+                    }
                     _tdf = _tdf_dedup.merge(_piv_std, on=_pk_std, how="left")
 
                     # Cap at _MAX products (not long rows) and reset index for clean row numbers
@@ -941,6 +1267,21 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
 
                     # Check Range To-be Waterfall = number of planograms this product appears in
                     _tdf["Check Range To-be Waterfall"] = _tdf[_piv_pog_cols].notna().sum(axis=1)
+                    st.session_state[_pivot_cache_key] = {
+                        "sig": _pivot_sig,
+                        "tdf": _tdf.copy(),
+                        "piv_pog_cols": list(_piv_pog_cols),
+                        "cs_as_is_sku_counts": dict(_cs_base_pog_counts),
+                    }
+                    _rs_save_table_base(
+                        _pivot_scope,
+                        {
+                            "sig": _pivot_sig,
+                            "tdf": _tdf.copy(),
+                            "piv_pog_cols": list(_piv_pog_cols),
+                            "cs_as_is_sku_counts": dict(_cs_base_pog_counts),
+                        },
+                    )
 
                     # # ── TEMPORARY DEBUG EXPANDER ─────────────────────────────────
                     # with st.expander("🔎 debug — pivot diagnostics", expanded=False):
@@ -1083,6 +1424,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     # # ── END TEMPORARY DEBUG EXPANDER ─────────────────────────────
 
                 else:
+                    _cs_base_pog_counts = {}
                     _tdf["Check Range To-be Waterfall"] = ""
 
             # Column ordering: sticky left | data cols | Status | planogram cols rightmost
@@ -1098,16 +1440,21 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             # Key = (DG Code, ID, Item Name) — after pivot, one row per product so
             # the sticky columns alone are unique.
             _pog_edits_key = f"{p}_pog_edits"
+            _data_edits_key = f"{p}_data_edits"
 
             def _make_rk(ri: int) -> tuple:
                 # After pivot _tdf has one row per product — _STICKY alone is unique
                 return tuple(str(_tdf.at[ri, c]) for c in _STICKY)
 
             _ROW_KEY_COL = "__rs_row_key"
+            _NEW_ROW_COL = "__rs_added_row"
+            _EDIT_COL = "__rs_last_edit"
             _tdf[_ROW_KEY_COL] = [
                 _json.dumps(_make_rk(_ri), ensure_ascii=False)
                 for _ri in range(len(_tdf))
             ]
+            _tdf[_NEW_ROW_COL] = False
+            _tdf[_EDIT_COL] = ""
             _cs_as_is_sku_counts: dict[str, int] = {}
             _cs_original_present: dict[str, set] = {}
             for _pc in _dyn_pog_cols:
@@ -1115,7 +1462,9 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _num_s = pd.to_numeric(_tdf[_pc], errors="coerce")
                     _present = set(_tdf.index[_num_s.notna()].tolist())
                     _cs_original_present[_pc] = _present
-                    _cs_as_is_sku_counts[_pc] = len(_present)
+                    _cs_as_is_sku_counts[_pc] = int(
+                        _cs_base_pog_counts.get(str(_pc), len(_present))
+                    )
             for _pc in _dyn_pog_cols:
                 if _pc in _tdf.columns:
                     _tdf[_pc] = _tdf[_pc].astype(object)
@@ -1134,6 +1483,46 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 return tuple(str(row.get(c, "")) for c in _STICKY)
 
             _pog_edits = st.session_state.setdefault(_pog_edits_key, {})
+            _data_edits = st.session_state.setdefault(_data_edits_key, {})
+            _pog_actions_live_for_originals = st.session_state.get(f"{p}_pog_actions", {})
+            _status_overrides_live_for_originals = st.session_state.get(f"{p}_status_overrides", {})
+            _orig_action_values = {}
+            _orig_action_rows = set(_pog_edits.keys()) | set(_pog_actions_live_for_originals.keys())
+            _orig_action_rows |= {
+                _rk0 for _rk0, _st0 in (_status_overrides_live_for_originals or {}).items()
+                if str(_st0).strip().upper() == "DELETE ALL"
+            }
+            _orig_action_cells = set()
+            for _store in (_pog_edits, _pog_actions_live_for_originals):
+                for _rk0, _acts0 in (_store or {}).items():
+                    if isinstance(_acts0, dict):
+                        for _pc0, _act0 in _acts0.items():
+                            if _act0 in ("Delete", "New"):
+                                _orig_action_cells.add((_rk0, _pc0))
+            if _orig_action_rows or _orig_action_cells:
+                _orig_cells_by_rk = {}
+                for _rk_cell, _pc0 in _orig_action_cells:
+                    _orig_cells_by_rk.setdefault(_rk_cell, set()).add(_pc0)
+                for _ri0 in range(len(_tdf)):
+                    _rk0 = _make_rk(_ri0)
+                    _restore_cols = (
+                        set(_dyn_pog_cols)
+                        if _rk0 in _orig_action_rows
+                        else set(_orig_cells_by_rk.get(_rk0, ()))
+                    )
+                    for _pc0 in _restore_cols:
+                        if _pc0 not in _tdf.columns:
+                            continue
+                        _ov0 = _tdf.at[_ri0, _pc0]
+                        if _ov0 is None or (isinstance(_ov0, float) and pd.isna(_ov0)):
+                            _ov0 = ""
+                        _orig_action_values[
+                            f"{_tdf.at[_ri0, _ROW_KEY_COL]}\u241f{_pc0}"
+                        ] = "" if str(_ov0) in ("nan", "None") else str(_ov0)
+                        _rk_join = "\u241e".join(str(_x) for _x in _rk0)
+                        _orig_action_values[
+                            f"{_rk_join}\u241f{_pc0}"
+                        ] = "" if str(_ov0) in ("nan", "None") else str(_ov0)
             if _pog_edits and _dyn_pog_cols and _STICKY:
                 for _ri in range(len(_tdf)):
                     _rk = _make_rk(_ri)
@@ -1146,6 +1535,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _pog_cols_in_tdf = [c for c in _dyn_pog_cols if c in _tdf.columns]
                 if _pog_cols_in_tdf:
                     _pog_actions_live = st.session_state.get(f"{p}_pog_actions", {})
+                    _status_overrides_live = st.session_state.get(f"{p}_status_overrides", {})
                     _waterfall_counts = []
                     for _ri in range(len(_tdf)):
                         _rk = _make_rk(_ri)
@@ -1153,6 +1543,9 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             1 for _pc in _pog_cols_in_tdf
                             if _ri in _cs_original_present.get(_pc, set())
                         )
+                        if str(_status_overrides_live.get(_rk, "")).strip().upper() == "DELETE ALL":
+                            _waterfall_counts.append(0)
+                            continue
                         _acts = {}
                         _acts.update(_pog_edits.get(_rk, {}))
                         _acts.update(_pog_actions_live.get(_rk, {}))
@@ -1396,6 +1789,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 # ── Build pog-name → compact A5 lookup ───────────────────────────
                 _a5_lkp: dict = {}
                 _a5_pair_lkp: dict = {}
+                _a5_pog_records: list[dict] = []
                 _pog_to_cl: dict = {}
                 if _a5 is not None and _a5_pog_c:
                     _cols_for_records = [c for c in (
@@ -1413,11 +1807,47 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             "range": _rec.get(_a5_rng_c) if _a5_rng_c else "",
                             "cluster": _cl,
                         }
+                        _a5_pog_records.append({
+                            "pog": _ap,
+                            "key": _key,
+                            "cluster": _cl,
+                        })
                         _a5_lkp[_key] = _row_vals
                         if _cl not in ("", "nan", "None"):
                             _a5_pair_lkp[(_key, _nca(_cl))] = _row_vals
                             _pog_to_cl[_ap] = _cl
                             _pog_to_cl[_key] = _cl
+
+                    def _pog_target_token(_v) -> str:
+                        _m = _re.search(r"(?:target[_\-\s]*|_)(\d{4,})", str(_v or ""), flags=_re.I)
+                        return _m.group(1) if _m else ""
+
+                    # Main table planogram names can be longer than A5 planogram names
+                    # (for example include CRACKER/.../target_5012). Fill the exact
+                    # displayed column -> cluster header map by matching normalized
+                    # names and target codes, so report pages do not fall back to
+                    # "Unspecified".
+                    for _dp in _dyn_pog_cols:
+                        _dp_s = str(_dp)
+                        _dp_key = _nca(_dp_s)
+                        if _pog_to_cl.get(_dp_s) or _pog_to_cl.get(_dp_key):
+                            continue
+                        _dp_target = _pog_target_token(_dp_s)
+                        _best_cl = ""
+                        for _r in _a5_pog_records:
+                            _rk = str(_r.get("key", ""))
+                            if _rk and (_rk in _dp_key or _dp_key in _rk):
+                                _best_cl = str(_r.get("cluster", "")).strip()
+                                break
+                        if not _best_cl and _dp_target:
+                            for _r in _a5_pog_records:
+                                _rk = str(_r.get("key", ""))
+                                if _dp_target and _dp_target in _rk:
+                                    _best_cl = str(_r.get("cluster", "")).strip()
+                                    break
+                        if _best_cl and _best_cl not in ("nan", "None"):
+                            _pog_to_cl[_dp_s] = _best_cl
+                            _pog_to_cl[_dp_key] = _best_cl
 
                 # ── Cell-value resolver ───────────────────────────────────────────
                 _cs_actions_live = st.session_state.get(f"{p}_pog_actions", {})
@@ -1428,8 +1858,26 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     for c in _dyn_pog_cols
                 }
                 _rk_to_idx = {_make_rk(_ari): _ari for _ari in range(len(_tdf))}
+                _cs_status_live = st.session_state.get(f"{p}_status_overrides", {})
+                _cs_delete_all_rks = set()
+                for _srk, _sst in (_cs_status_live or {}).items():
+                    if str(_sst).strip().upper() != "DELETE ALL":
+                        continue
+                    _ari = _rk_to_idx.get(_srk)
+                    if _ari is None:
+                        continue
+                    _cs_delete_all_rks.add(_srk)
+                    for _pc in _dyn_pog_cols:
+                        _pc_s = str(_pc)
+                        if _ari in _cs_original_present.get(_pc, set()):
+                            _cs_delete_counts[_pc_s] = _cs_delete_counts.get(_pc_s, 0) + 1
+                            _cs_to_be_counts[_pc_s] = max(
+                                0, _cs_to_be_counts.get(_pc_s, 0) - 1
+                            )
                 _all_action_keys = set(_cs_actions_live) | set(_pog_edits)
                 for _ark in _all_action_keys:
+                    if _ark in _cs_delete_all_rks:
+                        continue
                     _ari = _rk_to_idx.get(_ark)
                     if _ari is None:
                         continue
@@ -1496,12 +1944,12 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 # _rest_w:   width of body columns before Status (REST cols)
                 _last_set2   = {"Status", "Check Range To-be Waterfall",
                                 "Planogram Name"} | set(_dyn_pog_cols)
-                _sticky_wmap = {"DG Code": 56, "ID": 120, "Item Name": 210}
+                _sticky_wmap = {"DG Code": 86, "ID": 120, "Item Name": 210}
                 _pinned_w    = sum(_sticky_wmap.get(c, 110) for c in _STICKY)
                 _rest_w      = 110 * len([c for c in _tdf.columns
                                           if c not in set(_STICKY) and c not in _last_set2])
                 # AG Grid balham-matched styles
-                _LW = 240   # Status(130) + Check Range To-be Waterfall(110)
+                _LW = 260   # Status + Check Range To-be Waterfall default width
                 _CW = 72    # match POG column width in AG Grid
                 _BRD    = "1px solid #BDC3C7"
                 _HDR_BG = "#f5f7f7"
@@ -1568,6 +2016,28 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                                      f'{_v}</td>')
                     _ct_body += f'<tr>{_tds}</tr>'
 
+                _BRIDGE_H = 178
+                _bridge_cells = (
+                    f'<td class="cs-label-col" style="{_td_s}min-width:{_LW}px;'
+                    f'width:{_LW}px;max-width:{_LW}px;height:{_BRIDGE_H}px;'
+                    f'background:transparent;border-left:{_BRD};border-bottom:0;'
+                    f'border-top:0;"></td>'
+                )
+                for _pi, _pog in enumerate(_dyn_pog_cols):
+                    _bridge_cells += (
+                        f'<td class="cs-pog-cell" data-idx="{_pi}" '
+                        f'style="{_td_s}min-width:{_CW}px;width:{_CW}px;'
+                        f'max-width:{_CW}px;height:{_BRIDGE_H}px;'
+                        f'background:transparent;border-bottom:0;border-top:0;"></td>'
+                    )
+                _ct_bridge = (
+                    '<table class="cs-bridge-table" '
+                    'style="border-collapse:collapse;table-layout:fixed;'
+                    'pointer-events:none;position:absolute;left:0;top:100%;'
+                    'z-index:30;">'
+                    f'<tbody><tr>{_bridge_cells}</tr></tbody></table>'
+                )
+
                 if _a5_warn:
                     st.caption(f"⚠️ A5 load error: {_a5_warn} — MODs/FIXTURE/RANGE CLASS blank.")
                 elif _a5 is None:
@@ -1581,19 +2051,22 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     '<style>.cs-scroll-sync::-webkit-scrollbar{height:6px}'
                     '.cs-scroll-sync::-webkit-scrollbar-track{background:#f1f1f1}'
                     '.cs-scroll-sync::-webkit-scrollbar-thumb{background:#BDC3C7;border-radius:3px}'
+                    '.cs-label-col{position:sticky;left:0;z-index:7;}'
+                    'thead .cs-label-col{z-index:9;}'
                     '</style>'
-                    '<div style="position:relative;margin-bottom:0;">'
+                    '<div style="position:relative;margin-bottom:0;z-index:30;">'
                     # pinned cover: blank white area matching AG Grid pinned-left panel
                     f'<div class="cs-pin-cover" style="position:absolute;left:0;top:0;'
                     f'width:{_pinned_w}px;height:100%;background:#fff;z-index:5;'
                     f'border-right:2px solid #BDC3C7;box-sizing:border-box;"></div>'
                     # scrollable body zone (starts at _pinned_w, matches AG Grid body)
-                    f'<div class="cs-scroll-sync" style="overflow-x:hidden;margin-bottom:0;'
+                    f'<div class="cs-scroll-sync" style="overflow-x:hidden;overflow-y:visible;'
+                    f'position:relative;margin-bottom:0;'
                     f'margin-left:{_pinned_w + _rest_w}px;">'
                     '<table style="border-collapse:collapse;table-layout:fixed;">'
                     f'<thead><tr>{_ct_hdr}</tr></thead>'
                     f'<tbody>{_ct_body}</tbody>'
-                    '</table></div></div>',
+                    f'</table>{_ct_bridge}</div></div>',
                     unsafe_allow_html=True,
                 )
 
@@ -1612,14 +2085,38 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             else:
                 _ACTIONS         = ["", "Keep", "Delete", "New", "Delist"]
                 _ACT_SET         = {"Keep", "Delete", "New", "Delist"}
-                _COL_W           = {"DG Code": 56, "ID": 120, "Item Name": 210}
+                _COL_W           = {"DG Code": 86, "ID": 120, "Item Name": 210}
                 _AVG_U_STD       = "Avg Units 52wk/ Forecast new item sales"
                 _pog_actions_key = f"{p}_pog_actions"
                 _avg_u_edits_key = f"{p}_avg_u_edits"
+                _data_edits_key = f"{p}_data_edits"
                 _status_ov_key   = f"{p}_status_overrides"
                 _pending_del_key = f"{p}_pending_top_delete"
                 _pending_new_key = f"{p}_pending_low_sales_new"
                 _blank_hl_key    = f"{p}_highlight_submit_blanks"
+                _edit_state_scope = (
+                    f"{p}|{large_file_path or ''}|"
+                    f"{getattr(df_src, 'shape', ('', ''))}|"
+                    f"{_sel_dg_code or ''}|{_sel_dg_name or ''}|"
+                    f"{','.join(map(str, _STICKY))}"
+                )
+                _edit_state_scope_key = f"{p}_edit_state_scope"
+                if st.session_state.get(_edit_state_scope_key) != _edit_state_scope:
+                    _loaded_edit_state = _rs_load_edit_state(_edit_state_scope)
+                    if not any(_loaded_edit_state.get(_k) for _k in ("pog_actions", "pog_edits", "avg_u_edits", "data_edits", "status_overrides")):
+                        _legacy_edit_state_scope = (
+                            f"{p}|{large_file_path or ''}|"
+                            f"{getattr(df_src, 'shape', ('', ''))}|{','.join(map(str, _STICKY))}"
+                        )
+                        _legacy_edit_state = _rs_load_edit_state(_legacy_edit_state_scope)
+                        if any(_legacy_edit_state.get(_k) for _k in ("pog_actions", "pog_edits", "avg_u_edits", "data_edits", "status_overrides")):
+                            _loaded_edit_state = _legacy_edit_state
+                    st.session_state[_edit_state_scope_key] = _edit_state_scope
+                    st.session_state[_pog_actions_key] = _loaded_edit_state.get("pog_actions", {})
+                    st.session_state[_pog_edits_key] = _loaded_edit_state.get("pog_edits", {})
+                    st.session_state[_avg_u_edits_key] = _loaded_edit_state.get("avg_u_edits", {})
+                    st.session_state[_data_edits_key] = _loaded_edit_state.get("data_edits", {})
+                    st.session_state[_status_ov_key] = _loaded_edit_state.get("status_overrides", {})
 
                 # setdefault instead of get: returns the LIVE in-session dict (or creates it).
                 # Without this, .get() on a missing key returns a temporary {} that is not
@@ -1627,6 +2124,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 # always sees an empty dict on the first action and returns "MAINTAIN".
                 _pog_actions      = st.session_state.setdefault(_pog_actions_key, {})
                 _avg_u_edits      = st.session_state.setdefault(_avg_u_edits_key, {})
+                _data_edits       = st.session_state.setdefault(_data_edits_key, {})
                 _status_overrides = st.session_state.setdefault(_status_ov_key, {})
 
                 def _num_for_rank(v):
@@ -1669,8 +2167,10 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             rows.append((_metric, _idx))
                     return [idx for _, idx in sorted(rows, key=lambda x: x[0])[:limit]]
 
+                _low_sales_row_set = set(_low_sales_rank_rows(5))
+
                 def _is_low_sales_item(row_i: int) -> bool:
-                    return row_i in set(_low_sales_rank_rows(5))
+                    return row_i in _low_sales_row_set
 
                 def _delete_is_top10(row_i: int, pog_col: str):
                     val = _num_for_rank(_tdf.at[row_i, pog_col])
@@ -1701,7 +2201,17 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
 
                 def _derive_status(rk: tuple) -> str:
                     _acts = {c: v for c, v in _pog_actions.get(rk, {}).items() if v}
+                    _stored_status = str(_status_overrides.get(rk, "")).strip().upper()
                     if not _acts:
+                        if _stored_status in {
+                            "DELETE SOME",
+                            "DELETE ALL",
+                            "NEW SOME",
+                            "NEWNEW",
+                            "NEW DELETE SOME",
+                            "INACTIVE",
+                        }:
+                            return _stored_status
                         return "MAINTAIN"
                     if "Delist" in _acts.values():
                         return "Inactive"
@@ -1734,8 +2244,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _item_nm = _pending_del_items[0].get("item", "") if _pending_del_items else ""
                     _pog_nm = ", ".join(str(x.get("pog", "")) for x in _pending_del_items if x.get("pog"))
                     st.warning(
-                        f"Item {_item_nm} นี้เป็น top 10% แรกของ row นี้ "
-                        f"ใน planogram {_pog_nm}. คุณต้องการลบอยู่ไหม?"
+                        f"Item {_item_nm} is a Top 10% best seller in this row "
+                        f"for planogram {_pog_nm}. Do you still want to delete it?"
                     )
                     _c_ok, _c_cancel = st.columns([1, 1])
                     if _c_ok.button("Confirm Delete", key=f"{p}_confirm_top_delete"):
@@ -1746,6 +2256,14 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                                 _pog_actions.setdefault(_rk, {})[_pc] = "Delete"
                                 _pog_edits.setdefault(_rk, {})[_pc] = "Delete"
                                 _status_overrides[_rk] = _derive_status(_rk)
+                        _rs_save_edit_state(
+                            _edit_state_scope,
+                            _pog_actions,
+                            _pog_edits,
+                            _avg_u_edits,
+                            _status_overrides,
+                            _data_edits,
+                        )
                         st.session_state.pop(_pending_del_key, None)
                         st.rerun()
                     if _c_cancel.button("Cancel", key=f"{p}_cancel_top_delete"):
@@ -1758,8 +2276,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _item_nm = _pending_new_items[0].get("item", "") if _pending_new_items else ""
                     _pog_nm = ", ".join(str(x.get("pog", "")) for x in _pending_new_items if x.get("pog"))
                     st.warning(
-                        f"Item {_item_nm} อยู่ในลิสยอดขายน้อยที่สุด. "
-                        f"คุณแน่ใจไหมที่จะเพิ่มเข้า planogram {_pog_nm}?"
+                        f"Item {_item_nm} is a Top 10% lowest seller. "
+                        f"Are you sure you want to add it to planogram {_pog_nm}?"
                     )
                     _n_ok, _n_cancel = st.columns([1, 1])
                     if _n_ok.button("Confirm New", key=f"{p}_confirm_low_sales_new"):
@@ -1770,6 +2288,14 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                                 _pog_actions.setdefault(_rk, {})[_pc] = "New"
                                 _pog_edits.setdefault(_rk, {})[_pc] = "New"
                                 _status_overrides[_rk] = _derive_status(_rk)
+                        _rs_save_edit_state(
+                            _edit_state_scope,
+                            _pog_actions,
+                            _pog_edits,
+                            _avg_u_edits,
+                            _status_overrides,
+                            _data_edits,
+                        )
                         st.session_state.pop(_pending_new_key, None)
                         st.rerun()
                     if _n_cancel.button("Cancel New", key=f"{p}_cancel_low_sales_new"):
@@ -1777,26 +2303,122 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         st.rerun()
 
                 # ── Build display DataFrame: apply action + avg-u + status overlays ─
-                _tdf_display = _tdf.copy().astype(object)
-                for _dri in range(len(_tdf_display)):
-                    _drk = _make_rk(_dri)
+                _tdf_display = _tdf.copy()
+                _display_rks = [_make_rk(_dri) for _dri in range(len(_tdf_display))]
+                _derived_statuses = [_derive_status(_drk) for _drk in _display_rks]
+                _object_cols_needed = set(_dyn_pog_cols)
+                _object_cols_needed.update(c for _av in _avg_u_edits.values() for c in (_av or {}))
+                _object_cols_needed.update(c for _dv in _data_edits.values() for c in (_dv or {}))
+                _object_cols_needed.update(["Status", _ROW_KEY_COL, _NEW_ROW_COL, _EDIT_COL])
+                _object_cols_needed = [c for c in _object_cols_needed if c in _tdf_display.columns]
+                if _object_cols_needed:
+                    _tdf_display[_object_cols_needed] = _tdf_display[_object_cols_needed].astype(object)
+                for _dri, _drk in enumerate(_display_rks):
+                    _derived_status = _derived_statuses[_dri]
+                    if _derived_status == "DELETE ALL":
+                        for _dpc in _dyn_pog_cols:
+                            if (
+                                _dpc in _tdf_display.columns
+                                and _dri in _cs_original_present.get(_dpc, set())
+                            ):
+                                _tdf_display.at[_dri, _dpc] = "Delete"
                     for _dpc, _dact in _pog_actions.get(_drk, {}).items():
                         if _dpc in _tdf_display.columns and _dact:
                             _tdf_display.at[_dri, _dpc] = _dact
                     for _dac, _dav in _avg_u_edits.get(_drk, {}).items():
                         if _dac in _tdf_display.columns:
                             _tdf_display.at[_dri, _dac] = _dav
+                    for _ddc, _ddv in _data_edits.get(_drk, {}).items():
+                        if _ddc in _tdf_display.columns:
+                            _tdf_display.at[_dri, _ddc] = _ddv
                     if "Status" in _tdf_display.columns:
-                        _tdf_display.at[_dri, "Status"] = _derive_status(_drk)
+                        _tdf_display.at[_dri, "Status"] = _derived_status
 
                 # Force POG cells to text for AgGrid. If these columns are inferred
                 # as numeric, the select editor can visually change but fail to
                 # commit action labels such as Delete/New back to Streamlit.
-                for _dpc in _dyn_pog_cols:
-                    if _dpc in _tdf_display.columns:
-                        _tdf_display[_dpc] = _tdf_display[_dpc].map(
-                            lambda _v: "" if _v is None or pd.isna(_v) else str(_v)
-                        )
+                _display_pog_cols = [c for c in _dyn_pog_cols if c in _tdf_display.columns]
+                if _display_pog_cols:
+                    _pog_text = _tdf_display[_display_pog_cols]
+                    _tdf_display[_display_pog_cols] = _pog_text.where(_pog_text.notna(), "").astype(str)
+
+                _saved_item_rows = list(st.session_state.get(_new_rows_key, []))
+                _placeholder_item_rows = list(st.session_state.get(_new_rows_placeholder_key, []))
+                _pending_new_items = int(st.session_state.pop(_new_rows_pending_key, 0) or 0)
+                if _pending_new_items > 0:
+                    _start_seq = len(_saved_item_rows) + len(_placeholder_item_rows)
+                    for _j in range(_pending_new_items):
+                        _rk_new = ["__NEW__", _new_rows_scope, str(_start_seq + _j)]
+                        _row_new = {c: "" for c in _tdf_display.columns}
+                        _row_new[_ROW_KEY_COL] = _json.dumps(_rk_new, ensure_ascii=False)
+                        _row_new[_NEW_ROW_COL] = True
+                        _placeholder_item_rows.append(_row_new)
+                    st.session_state[_new_rows_placeholder_key] = _placeholder_item_rows
+                    st.session_state[_new_rows_scroll_key] = _placeholder_item_rows[-_pending_new_items].get(_ROW_KEY_COL, "")
+
+                _new_item_rows = _saved_item_rows + _placeholder_item_rows
+
+                if _new_item_rows:
+                    def _new_row_has_input(_row: dict) -> bool:
+                        _skip_cols = {
+                            _ROW_KEY_COL,
+                            _NEW_ROW_COL,
+                            _EDIT_COL,
+                            "Status",
+                            "Check Range To-be Waterfall",
+                        }
+                        for _c, _v in (_row or {}).items():
+                            if _c in _skip_cols:
+                                continue
+                            _s = "" if _v is None else str(_v).strip()
+                            if _s and _s.lower() not in ("nan", "none"):
+                                return True
+                        return False
+
+                    def _new_row_avg_is_numeric(_row: dict) -> bool:
+                        _v = (_row or {}).get(_AVG_U_STD, "")
+                        _s = "" if _v is None else str(_v).replace(",", "").strip()
+                        if not _s or _s.lower() in ("nan", "none"):
+                            return False
+                        try:
+                            float(_s)
+                            return True
+                        except Exception:
+                            return False
+
+                    _normalized_new_rows = []
+                    for _nr in _new_item_rows:
+                        _row_new = {c: _nr.get(c, "") for c in _tdf_display.columns}
+                        _row_new[_ROW_KEY_COL] = _nr.get(_ROW_KEY_COL, "")
+                        _row_new[_NEW_ROW_COL] = True
+                        _id_val = _re.sub(r"\D+", "", str(_row_new.get("ID", "")).strip())[:9]
+                        if "ID" in _row_new:
+                            _row_new["ID"] = _id_val
+                        if "Status" in _row_new:
+                            _row_new["Status"] = (
+                                "NEWNEW"
+                                if _re.fullmatch(r"\d{9}", _id_val)
+                                and _new_row_avg_is_numeric(_row_new)
+                                else ""
+                            )
+                        _normalized_new_rows.append(_row_new)
+                    _new_item_rows = _normalized_new_rows
+                    _saved_new_rows_display = [
+                        _nr for _nr in _new_item_rows
+                        if _new_row_has_input(_nr)
+                    ]
+                    _placeholder_new_rows_display = [
+                        _nr for _nr in _new_item_rows
+                        if not _new_row_has_input(_nr)
+                    ]
+                    st.session_state[_new_rows_key] = _saved_new_rows_display
+                    st.session_state[_new_rows_placeholder_key] = _placeholder_new_rows_display
+                    if len(_saved_new_rows_display) != len(_saved_item_rows):
+                        _rs_save_new_rows(_new_rows_scope, _saved_new_rows_display)
+                    _tdf_display = pd.concat(
+                        [_tdf_display, pd.DataFrame(_new_item_rows)],
+                        ignore_index=True,
+                    )
 
                 _search_pog_match_cols = [
                     c for c in _dyn_pog_cols
@@ -1806,13 +2428,304 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 if _search_q_text and not _search_pog_match_cols:
                     _search_mask = pd.Series(False, index=_tdf_display.index)
                     for _sc in [c for c in _tdf_display.columns if c != _ROW_KEY_COL]:
+                        if _sc in (_NEW_ROW_COL, _EDIT_COL):
+                            continue
                         _search_mask |= _tdf_display[_sc].astype(str).str.contains(
                             _search_q_text, case=False, na=False, regex=False
                         )
+                    if _NEW_ROW_COL in _tdf_display.columns:
+                        _search_mask |= _tdf_display[_NEW_ROW_COL].astype(bool)
                     if _search_mask.any():
                         _tdf_display = _tdf_display.loc[_search_mask]
                     else:
                         _tdf_display = _tdf_display.iloc[0:0]
+
+                def _sspog_layout_xlsx_bytes() -> bytes:
+                    try:
+                        from openpyxl import Workbook
+                        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+                        from openpyxl.utils import get_column_letter
+                    except Exception:
+                        return df_to_xlsx_bytes(_tdf_display.drop(
+                            columns=[c for c in (_ROW_KEY_COL, _NEW_ROW_COL, _EDIT_COL) if c in _tdf_display.columns],
+                            errors="ignore",
+                        ))
+
+                    def _clean_xl(v):
+                        if v is None:
+                            return ""
+                        try:
+                            if pd.isna(v):
+                                return ""
+                        except Exception:
+                            pass
+                        if isinstance(v, str) and v in ("nan", "None", "<NA>"):
+                            return ""
+                        return v
+
+                    def _as_num_or_text(v):
+                        v = _clean_xl(v)
+                        if isinstance(v, str):
+                            s = v.replace(",", "").strip()
+                            if s and s not in _ACT_SET:
+                                try:
+                                    return float(s) if "." in s else int(s)
+                                except Exception:
+                                    return v
+                        return v
+
+                    def _write_matrix(ws, start_row, start_col, data, style_kind="plain"):
+                        thin = Side(style="thin", color="B8B8B8")
+                        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+                        for r_off, row in enumerate(data):
+                            for c_off, val in enumerate(row):
+                                cell = ws.cell(start_row + r_off, start_col + c_off, _clean_xl(val))
+                                cell.border = border
+                                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                                if style_kind == "header" or r_off == 0:
+                                    cell.fill = PatternFill("solid", fgColor="D9D9D9")
+                                    cell.font = Font(bold=True, color="1A1A1A")
+                        return start_row + len(data) - 1
+
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = "Range Sheet SSPOG"
+                    ws.sheet_view.showGridLines = False
+                    thin = Side(style="thin", color="B8B8B8")
+                    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+                    dark_fill = PatternFill("solid", fgColor="808080")
+                    grey_fill = PatternFill("solid", fgColor="D9D9D9")
+                    pale_fill = PatternFill("solid", fgColor="F5F7F7")
+                    pink_fill = PatternFill("solid", fgColor="FCE4EC")
+                    yellow_fill = PatternFill("solid", fgColor="FFF59D")
+                    green_fill = PatternFill("solid", fgColor="C6EFCE")
+                    delete_fill = PatternFill("solid", fgColor="FDE2E2")
+                    new_fill = PatternFill("solid", fgColor="E3F2FD")
+
+                    main_df = _tdf_display.drop(
+                        columns=[c for c in (_ROW_KEY_COL, _NEW_ROW_COL, _EDIT_COL) if c in _tdf_display.columns],
+                        errors="ignore",
+                    ).copy()
+                    for _c in main_df.columns:
+                        if _c in _dyn_pog_cols:
+                            main_df[_c] = main_df[_c].map(_clean_xl)
+
+                    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(8, min(14, len(main_df.columns))))
+                    ws.cell(1, 1, "Range Sheet SSPOG").font = Font(bold=True, size=16, color="FFFFFF")
+                    ws.cell(1, 1).fill = PatternFill("solid", fgColor="2BBFA4")
+                    ws.cell(1, 1).alignment = Alignment(horizontal="left", vertical="center")
+                    ws.row_dimensions[1].height = 26
+                    _export_dg_name = (
+                        fixed_dg_name
+                        or st.session_state.get(f"{p}_selected_dg_name")
+                        or st.session_state.get("_ns_loaded_dg_name")
+                        or _sel_dg_name
+                        or "ALL"
+                    )
+                    if str(_export_dg_name).strip().upper().startswith("— ALL"):
+                        _export_dg_name = "ALL"
+                    ws.cell(2, 1, f"DG Code: {_sel_dg_code or 'ALL'}")
+                    ws.cell(2, 2, f"DG Name: {_export_dg_name or 'ALL'}")
+                    ws.cell(2, 4, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
+                    arch_headers = [
+                        "TYPE", "AS IS", "TO BE",
+                        "Sale AS IS", "Sale TO BE", "Sale DIFF",
+                        "Margin AS IS",
+                    ]
+                    try:
+                        arch_rows_export = list(_arch_rows)
+                    except NameError:
+                        arch_rows_export = []
+                    try:
+                        arch_total_as_is = _t_ai
+                    except NameError:
+                        arch_total_as_is = sum(r.get("as_is", 0) for r in arch_rows_export)
+                    try:
+                        arch_total_to_be = _t_tb
+                    except NameError:
+                        arch_total_to_be = sum(r.get("to_be", 0) for r in arch_rows_export)
+                    try:
+                        arch_total_sale_as_is = _t_sai
+                    except NameError:
+                        arch_total_sale_as_is = sum(r.get("sale_ai", 0) for r in arch_rows_export)
+                    try:
+                        arch_total_sale_to_be = _t_stb
+                    except NameError:
+                        arch_total_sale_to_be = sum(r.get("sale_tb", 0) for r in arch_rows_export)
+                    try:
+                        arch_total_sale_diff = _t_sdiff
+                    except NameError:
+                        arch_total_sale_diff = sum(r.get("sale_diff", 0) for r in arch_rows_export)
+                    try:
+                        arch_total_margin_as_is = _t_mai
+                    except NameError:
+                        arch_total_margin_as_is = sum(r.get("marg_ai", 0) for r in arch_rows_export)
+                    try:
+                        arch_pct_sale = _pct_sale
+                    except NameError:
+                        arch_pct_sale = "0.0%"
+                    arch_data = [["Range architecture", "", "", "Sale Impact / Week", "", "", "Margin Impact / Week"], arch_headers]
+                    for _r in arch_rows_export:
+                        arch_data.append([
+                            _r.get("type", ""),
+                            _r.get("as_is", 0),
+                            _r.get("to_be", 0),
+                            _r.get("sale_ai", 0),
+                            _r.get("sale_tb", 0),
+                            _r.get("sale_diff", 0),
+                            _r.get("marg_ai", 0),
+                        ])
+                    arch_data.append([
+                        "TOTAL SKU",
+                        arch_total_as_is,
+                        arch_total_to_be,
+                        arch_total_sale_as_is,
+                        arch_total_sale_to_be,
+                        arch_total_sale_diff,
+                        arch_total_margin_as_is,
+                    ])
+                    arch_data.append(["% Impact", "", "0.0%", "", "", arch_pct_sale, ""])
+                    arch_end = _write_matrix(ws, 4, 1, arch_data)
+                    for row in ws.iter_rows(min_row=4, max_row=arch_end, min_col=1, max_col=7):
+                        for cell in row:
+                            cell.border = border
+                        row[0].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                    for cell in ws[4]:
+                        if cell.column <= 7:
+                            cell.fill = grey_fill
+                            cell.font = Font(bold=True)
+                    for cell in ws[5]:
+                        if cell.column <= 7:
+                            cell.fill = grey_fill
+                            cell.font = Font(bold=True)
+                    ws.cell(arch_end - 1, 1).font = Font(bold=True)
+                    for col in range(1, 8):
+                        ws.cell(arch_end - 1, col).font = Font(bold=True)
+
+                    main_cols = list(main_df.columns)
+                    first_pog_idx = next((i for i, c in enumerate(main_cols) if c in _dyn_pog_cols), len(main_cols))
+                    main_start_row = max(arch_end + 4, 20)
+                    main_start_col = 1
+                    first_pog_col = main_start_col + first_pog_idx
+                    cluster_label_col = max(main_start_col, first_pog_col - 2)
+                    cluster_start_row = 4
+
+                    try:
+                        cluster_rows_export = list(_CS_ROWS)
+                    except NameError:
+                        cluster_rows_export = []
+                    cluster_cols = [c for c in _dyn_pog_cols if c in main_cols]
+                    cluster_header = ["Cluster"] + [
+                        _pog_to_cl.get(_pog) or _pog_to_cl.get(_nca(_pog), "") or str(_pog)
+                        for _pog in cluster_cols
+                    ]
+                    cluster_matrix = [cluster_header]
+                    for _rl, _rbg, _rtc in cluster_rows_export:
+                        row = [_rl]
+                        for _pog in cluster_cols:
+                            _cl_key = _pog_to_cl.get(_pog) or _pog_to_cl.get(_nca(_pog), "")
+                            if _rl in (
+                                "MODs", "FIXTURE", "RANGE CLASS",
+                                "Total NEW SKUs", "Total DELETE SKUs",
+                                "TO-BE SKUs count", "AS-IS SKUs count",
+                            ):
+                                row.append(_cs_val(_rl, _pog, _cl_key))
+                            else:
+                                _ssv = str(_ct_dat_disp.get(_rl, {}).get(_cl_key, "") or "")
+                                row.append("" if _ssv in ("nan", "None") else (_ssv or _cs_val(_rl, _pog, _cl_key)))
+                        cluster_matrix.append(row)
+                    _write_matrix(ws, cluster_start_row, cluster_label_col, cluster_matrix)
+                    for row in ws.iter_rows(
+                        min_row=cluster_start_row,
+                        max_row=cluster_start_row + len(cluster_matrix) - 1,
+                        min_col=cluster_label_col,
+                        max_col=cluster_label_col + len(cluster_matrix[0]) - 1,
+                    ):
+                        for cell in row:
+                            cell.border = border
+                            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                            if cell.row == cluster_start_row:
+                                cell.fill = grey_fill
+                                cell.font = Font(bold=True)
+                                if cell.column > cluster_label_col:
+                                    cell.alignment = Alignment(textRotation=90, horizontal="center", vertical="center", wrap_text=True)
+                    for r in range(cluster_start_row + 1, cluster_start_row + len(cluster_matrix)):
+                        ws.cell(r, cluster_label_col).font = Font(bold=True)
+                        if ws.cell(r, cluster_label_col).value in ("Total NEW SKUs", "Total DELETE SKUs", "TO-BE SKUs count"):
+                            for c in range(cluster_label_col, cluster_label_col + len(cluster_matrix[0])):
+                                ws.cell(r, c).fill = PatternFill("solid", fgColor="F2F2F2")
+                    ws.row_dimensions[cluster_start_row].height = 54
+                    fixture_row = cluster_start_row + 1 + next((i for i, row in enumerate(cluster_matrix[1:]) if row and row[0] == "FIXTURE"), 3)
+                    ws.row_dimensions[fixture_row].height = 48
+                    for c in range(cluster_label_col + 1, cluster_label_col + len(cluster_matrix[0])):
+                        ws.cell(fixture_row, c).alignment = Alignment(textRotation=90, horizontal="center", vertical="center", wrap_text=True)
+
+                    # Bridge grid lines between cluster summary and main table for one-sheet feel.
+                    bridge_start = cluster_start_row + len(cluster_matrix)
+                    for r in range(bridge_start, main_start_row):
+                        for c in range(cluster_label_col, cluster_label_col + len(cluster_matrix[0])):
+                            ws.cell(r, c).border = Border(left=thin, right=thin)
+
+                    # Main table
+                    for j, col in enumerate(main_cols, start=main_start_col):
+                        cell = ws.cell(main_start_row, j, col)
+                        cell.fill = pale_fill
+                        cell.font = Font(bold=True)
+                        cell.border = border
+                        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                        if col in _dyn_pog_cols:
+                            cell.alignment = Alignment(textRotation=90, horizontal="center", vertical="center", wrap_text=True)
+                    ws.row_dimensions[main_start_row].height = 56
+                    for i, (_, row) in enumerate(main_df.iterrows(), start=main_start_row + 1):
+                        ws.row_dimensions[i].height = 18
+                        for j, col in enumerate(main_cols, start=main_start_col):
+                            val = _as_num_or_text(row.get(col, ""))
+                            cell = ws.cell(i, j, val)
+                            cell.border = border
+                            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
+                            if col == "Item Name":
+                                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=False, shrink_to_fit=True)
+                            if col == "Status":
+                                sv = str(val).upper()
+                                if "DELETE" in sv:
+                                    cell.fill = delete_fill
+                                elif "NEW" in sv:
+                                    cell.fill = yellow_fill
+                            elif col in _dyn_pog_cols:
+                                if str(val) == "Delete":
+                                    cell.fill = delete_fill
+                                    cell.font = Font(color="C00000", bold=True)
+                                elif str(val) == "New":
+                                    cell.fill = new_fill
+                                    cell.font = Font(color="0066CC", bold=True)
+                    # Do not freeze panes here. Freezing at the main table row locks
+                    # the whole summary area in Excel and makes vertical scrolling
+                    # appear stuck on the range architecture section.
+                    ws.freeze_panes = None
+                    ws.auto_filter.ref = (
+                        f"{get_column_letter(main_start_col)}{main_start_row}:"
+                        f"{get_column_letter(main_start_col + len(main_cols) - 1)}"
+                        f"{main_start_row + max(len(main_df), 1)}"
+                    )
+
+                    for idx, col in enumerate(main_cols, start=main_start_col):
+                        if col in ("DG Code", "Status"):
+                            ws.column_dimensions[get_column_letter(idx)].width = 10
+                        elif col == "ID":
+                            ws.column_dimensions[get_column_letter(idx)].width = 11
+                        elif col == "Item Name":
+                            ws.column_dimensions[get_column_letter(idx)].width = 26
+                        elif col in _dyn_pog_cols:
+                            ws.column_dimensions[get_column_letter(idx)].width = 7
+                        else:
+                            ws.column_dimensions[get_column_letter(idx)].width = 11
+                    for col in range(cluster_label_col, cluster_label_col + len(cluster_matrix[0])):
+                        ws.column_dimensions[get_column_letter(col)].width = 7 if col > cluster_label_col else 18
+
+                    out = io.BytesIO()
+                    wb.save(out)
+                    return out.getvalue()
 
                 # ── JsCode: pog cells show action label OR formatted number ────────
                 # Rule-based chatbot over the currently filtered rangesheet view.
@@ -2215,8 +3128,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             if changed else ""
                         )
                         return (
-                            f"{item_txt} ใน planogramme {pending_names} เป็น top 10% ของ row นี้ "
-                            "ต้องยืนยันก่อนลบ กรุณากด Confirm Delete หรือ Cancel ด้านบนตาราง."
+                            f"{item_txt} in planogram {pending_names} is a Top 10% best seller. "
+                            "Please confirm before deleting by clicking Confirm Delete or Cancel above the table."
                             + changed_txt,
                             False,
                         )
@@ -2256,9 +3169,9 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         }
                         scope = "ทุก planogramme" if _chat_all_word(q) else ", ".join(pog_cols)
                         return (
-                            f"{item_txt} อยู่ในลิสยอดขายน้อยที่สุด. "
-                            f"แน่ใจแล้วหรอที่จะเพิ่ม item นี้ลงใน {scope}? "
-                            "ตอบ 'ใช่' เพื่อยืนยัน หรือ 'ไม่' เพื่อยกเลิก",
+                            f"{item_txt} is a Top 10% lowest seller. "
+                            f"Are you sure you want to add this item to {scope}? "
+                            "Reply 'ใช่' to confirm or 'ไม่' to cancel.",
                             False,
                         )
                     _chat_apply_new_rows([row_i], pog_cols)
@@ -2636,9 +3549,9 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                         item_txt = ", ".join(_fmt_item(_tdf.loc[r]) for r in low_rows[:3])
                         scope = "ทุก planogramme" if _chat_all_word(q) else ", ".join(pog_cols)
                         return (
-                            f"{item_txt} อยู่ในลิสยอดขายน้อยที่สุด. "
-                            f"แน่ใจแล้วหรอที่จะเพิ่ม item นี้ลงใน {scope}? "
-                            "ตอบ 'ใช่' เพื่อยืนยัน หรือ 'ไม่' เพื่อยกเลิก"
+                            f"{item_txt} is a Top 10% lowest seller. "
+                            f"Are you sure you want to add this item to {scope}? "
+                            "Reply 'ใช่' to confirm or 'ไม่' to cancel."
                         )
                     changed = _chat_apply_new_rows(rows, pog_cols)
                     scope = "ทุก planogramme" if _chat_all_word(q) else ", ".join(pog_cols)
@@ -2682,7 +3595,7 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                     if top_count:
                         msg = (
                             f"ตั้งค่า Delete แล้ว {changed_count:,} ช่อง สำหรับ {scope}. "
-                            f"มี {top_count:,} ช่องเป็น top 10% ต้องกด Confirm Delete หรือ Cancel ด้านบนตารางก่อน"
+                            f"มี {top_count:,} ช่องเป็น Top 10% best seller ต้องกด Confirm Delete หรือ Cancel ด้านบนตารางก่อน"
                         )
                     else:
                         msg = (
@@ -2810,6 +3723,7 @@ function(params) {
     var highlightBlanks = __HL__;
     var q = __Q__;
     var qn = __QN__;
+    var base = {backgroundColor:'', color:'', fontWeight:'normal', textAlign:'center'};
     function norm(v) {
         return String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]/g, '');
     }
@@ -2834,20 +3748,28 @@ function(params) {
                      String(v) === 'nan' || String(v) === 'None');
         if (blank) return {backgroundColor:'#FFF59D',color:'#000',textAlign:'center'};
     }
-    return s[String(params.value)] || null;
+    return s[String(params.value)] || base;
 }""".replace("__HL__", "true" if _highlight_blanks else "false").replace("__Q__", _search_q_js).replace("__QN__", _search_qn_js))
                 _style_data = JsCode("""
 function(params) {
     var q = __Q__;
+    var avgCol = __AVG_U_COL__;
     var v = params.value;
     var blank = (v == null || String(v).trim() === '' ||
                  String(v) === 'nan' || String(v) === 'None');
+    var field = String((params.colDef && params.colDef.field) || '');
+    if (params.data && params.data['__rs_added_row'] && field === avgCol) {
+        var sAvg = String(v == null ? '' : v).replace(/,/g, '').trim();
+        if (!sAvg || isNaN(Number(sAvg))) {
+            return {backgroundColor:'#FFF8E1', color:'#8A5A00'};
+        }
+    }
     var matched = q && !blank && String(v).toLowerCase().indexOf(q) >= 0;
     if (matched) {
         return {backgroundColor:'#FFF59D',color:'#111',fontWeight:'800'};
     }
     return (__HL__ && blank) ? {backgroundColor:'#FFF59D',color:'#000'} : null;
-}""".replace("__HL__", "true" if _highlight_blanks else "false").replace("__Q__", _search_q_js))
+}""".replace("__HL__", "true" if _highlight_blanks else "false").replace("__Q__", _search_q_js).replace("__AVG_U_COL__", _json.dumps(_AVG_U_STD)))
                 _fmt_status = JsCode("""
 function(params) {
     if (params.value == null) return '';
@@ -2859,15 +3781,12 @@ function(params) {
     var q = __Q__;
     var matched = q && v.toLowerCase().indexOf(q) >= 0;
     var base = {
-        fontWeight: '800',
-        textTransform: 'uppercase',
         textAlign: 'center'
     };
     function mark(style) {
         if (matched) {
             style.backgroundColor = '#FFF59D';
             style.color = '#111';
-            style.fontWeight = '900';
         }
         return style;
     }
@@ -2894,10 +3813,20 @@ function(params) {
     s = s.replace(/(\\.[0-9]*?)0+$/, '$1').replace(/\\.$/, '');
     return s;
 }""")
+                _editable_new_row = JsCode("""
+function(params) {
+    return !!(params.data && params.data['__rs_added_row']);
+}""")
                 _pog_cols_js_for_setter = _json.dumps([str(c) for c in _dyn_pog_cols])
+                _orig_action_values_js = _json.dumps(_orig_action_values, ensure_ascii=False)
                 _pog_action_editor_params = JsCode("""
 function(params) {
     var actions = {'Keep':true, 'Delete':true, 'New':true, 'Delist':true};
+    var origMap = __ORIG_MAP__;
+    var field = String((params.colDef && params.colDef.field) || '');
+    var rowKey = String((params.data && params.data['__rs_row_key']) || '');
+    var origKey = rowKey + '\\u241f' + field;
+    var origValue = Object.prototype.hasOwnProperty.call(origMap, origKey) ? String(origMap[origKey]) : '';
     function isNumericCell(v) {
         if (v === null || v === undefined) return false;
         var s = String(v).replace(/,/g, '').trim();
@@ -2905,9 +3834,13 @@ function(params) {
         return !isNaN(Number(s));
     }
 
-    if (params.value === 'Delete') return {values: ['Delete']};
-    if (params.value === 'New') return {values: ['New']};
+    if (params.value === 'Delete') return {values: origValue ? ['Delete', origValue] : ['Delete', '']};
+    if (params.value === 'New') return {values: origValue ? ['New', origValue] : ['New', '']};
     return isNumericCell(params.value) ? {values: ['Delete']} : {values: ['New']};
+}""".replace("__ORIG_MAP__", _orig_action_values_js))
+                _status_action_editor_params = JsCode("""
+function(params) {
+    return {values: ['MAINTAIN', 'DELETE ALL']};
 }""")
                 _delete_guard = JsCode("""
 function(params) {
@@ -3011,8 +3944,8 @@ function(params) {
     if (current >= cutoff) {
         var item = params.data['Item Name'] || params.data['ID'] || '';
         var ok = window.confirm(
-            'Item ' + item + ' นี้เป็น top 10% แรกของ row นี้\\n' +
-            'คุณต้องการลบอยู่ไหม?'
+            'Item ' + item + ' is a Top 10% best seller in this row.\\n' +
+            'Do you still want to delete it?'
         );
         if (!ok) {
             params.data[params.colDef.field] = oldValue;
@@ -3062,6 +3995,24 @@ function(params) {
                     ".ag-header-cell:not(.pog-vertical) .ag-cell-label-container": {
                         "align-items":    "flex-end",
                         "padding-bottom": "4px",
+                        "width": "100%",
+                    },
+                    ".ag-header-cell:not(.pog-vertical) .ag-header-cell-label": {
+                        "justify-content": "center",
+                        "width": "100%",
+                        "min-width": "0",
+                    },
+                    ".ag-header-cell:not(.pog-vertical) .ag-header-cell-text": {
+                        "display": "block",
+                        "width": "100%",
+                        "max-width": "100%",
+                        "white-space": "normal",
+                        "overflow": "hidden",
+                        "text-overflow": "unset",
+                        "word-break": "normal",
+                        "overflow-wrap": "break-word",
+                        "text-align": "center",
+                        "line-height": "1.18",
                     },
                     ".ag-cell.pog-value-cell": {
                         "font-size": "10px !important",
@@ -3075,6 +4026,22 @@ function(params) {
                     ".ag-cell.pog-value-cell .ag-cell-value": {
                         "overflow": "visible !important",
                         "text-overflow": "clip !important",
+                    },
+                    ".ag-overlay": {
+                        "display": "none !important",
+                        "background": "transparent !important",
+                        "pointer-events": "none !important",
+                    },
+                    ".ag-overlay-loading-wrapper": {
+                        "display": "none !important",
+                        "background": "transparent !important",
+                        "pointer-events": "none !important",
+                    },
+                    ".ag-overlay-loading-center": {
+                        "display": "none !important",
+                    },
+                    ".ag-root-wrapper, .ag-root, .ag-body-viewport, .ag-center-cols-container, .ag-row, .ag-cell": {
+                        "opacity": "1 !important",
                     },
                 }
 
@@ -3105,11 +4072,22 @@ function(params) {
                             _gc, hide=True, suppressColumnsToolPanel=True,
                             suppressMovable=True,
                         )
+                    elif _gc == _EDIT_COL:
+                        gb.configure_column(
+                            _gc, hide=True, suppressColumnsToolPanel=True,
+                            suppressMovable=True,
+                        )
+                    elif _gc == _NEW_ROW_COL:
+                        gb.configure_column(
+                            _gc, hide=True, suppressColumnsToolPanel=True,
+                            suppressMovable=True,
+                        )
                     elif _gc in set(_STICKY):
                         gb.configure_column(
                             _gc, pinned="left",
                             width=_COL_W.get(_gc, 130), minWidth=_COL_W.get(_gc, 80),
-                            editable=False, hide=_hidden, suppressMovable=True,
+                            editable=True, hide=_hidden, suppressMovable=True,
+                            wrapHeaderText=True,
                             headerClass=_header_class(_gc),
                             cellStyle=_style_data,
                         )
@@ -3137,25 +4115,28 @@ function(params) {
                         gb.configure_column(
                             _gc, valueFormatter=_fmt_avg_u,
                             editable=True, hide=_hidden,
-                            wrapHeaderText=True, minWidth=80, width=110,
+                            wrapHeaderText=True, minWidth=120, width=130,
                             headerClass=_header_class(_gc),
                             cellStyle=_style_data,
                             type=["numericColumn"],
                         )
                     elif _gc == "Status":
                         gb.configure_column(
-                            _gc, editable=False, hide=_hidden,
+                            _gc, editable=True, hide=_hidden,
                             wrapHeaderText=True, minWidth=120, width=130,
                             headerClass=_header_class(_gc),
                             valueFormatter=_fmt_status,
                             cellStyle=_style_status,
+                            cellEditor="agSelectCellEditor",
+                            cellEditorParams=_status_action_editor_params,
+                            singleClickEdit=False,
                             type=[],
                         )
                     else:
                         # Data columns: readable widths, word-wrap headers, user-resizable
                         gb.configure_column(
-                            _gc, editable=False, hide=_hidden,
-                            wrapHeaderText=True, minWidth=80, width=110,
+                            _gc, editable=True, hide=_hidden,
+                            wrapHeaderText=True, minWidth=120, width=130,
                             headerClass=_header_class(_gc),
                             cellStyle=_style_data,
                         )
@@ -3164,14 +4145,103 @@ function(params) {
                 _go["headerHeight"]              = 260 if _dyn_pog_cols else 56
                 _go["rowHeight"]                 = 32
                 _pog_cols_js = _json.dumps([str(c) for c in _dyn_pog_cols])
+                _sticky_cols_js = _json.dumps([str(c) for c in _STICKY])
                 _search_scroll_col_js = _json.dumps(
                     str(_search_pog_match_cols[0]) if _search_pog_match_cols else ""
                 )
+                _new_row_scroll_js = _json.dumps(str(st.session_state.get(_new_rows_scroll_key, "") or ""))
                 _go["onCellValueChanged"] = JsCode("""
 function(params) {
   var pogCols = __POG_COLS__;
+  var stickyCols = __STICKY_COLS__;
+  var origMap = __ORIG_MAP__;
+  var avgCol = __AVG_U_COL__;
   var field = String((params.colDef && params.colDef.field) || '');
-  if (pogCols.indexOf(field) < 0 || !params.data) return;
+  if (!params.data) return;
+  params.data['__rs_last_edit'] = field;
+
+  if (field === 'Status') {
+    var sv = String(params.newValue == null ? '' : params.newValue).trim().toUpperCase();
+    if (sv === 'MAINTAIN') {
+      var rowKey = String(params.data['__rs_row_key'] || '');
+      var stickyKey = stickyCols.map(function(c){
+        return String(params.data[c] == null ? '' : params.data[c]);
+      }).join('\\u241e');
+      function originalValue(col) {
+        var k1 = rowKey + '\\u241f' + col;
+        if (Object.prototype.hasOwnProperty.call(origMap, k1)) return origMap[k1];
+        var k2 = stickyKey + '\\u241f' + col;
+        if (Object.prototype.hasOwnProperty.call(origMap, k2)) return origMap[k2];
+        return null;
+      }
+      for (var mi = 0; mi < pogCols.length; mi++) {
+        var mc = String(pogCols[mi]);
+        if (!(mc in params.data)) continue;
+        var mv = params.data[mc];
+        var ov = originalValue(mc);
+        if (ov !== null) {
+          params.data[mc] = ov;
+        } else if (isAction(mv)) {
+          params.data[mc] = '';
+        }
+      }
+      params.data['Status'] = 'MAINTAIN';
+      var mwf = 0;
+      for (var mwc = 0; mwc < pogCols.length; mwc++) {
+        var mpc = String(pogCols[mwc]);
+        if (!(mpc in params.data)) continue;
+        if (isNum(params.data[mpc])) mwf++;
+      }
+      params.data['Check Range To-be Waterfall'] = mwf;
+      try {
+        params.api.refreshCells({rowNodes: [params.node], force: false});
+      } catch (e) {}
+    } else if (sv === 'DELETE ALL') {
+      for (var si = 0; si < pogCols.length; si++) {
+        var sc = String(pogCols[si]);
+        if (!(sc in params.data)) continue;
+        var cv = params.data[sc];
+        if (isNum(cv) || cv === 'Delete') {
+          params.data[sc] = 'Delete';
+        } else if (cv === 'New') {
+          params.data[sc] = '';
+        }
+      }
+      params.data['Status'] = 'DELETE ALL';
+      params.data['Check Range To-be Waterfall'] = 0;
+      try {
+        params.api.refreshCells({rowNodes: [params.node], force: false});
+      } catch (e) {}
+    }
+    return;
+  }
+
+  if (params.data['__rs_added_row']) {
+    var idVal = String(params.data['ID'] == null ? '' : params.data['ID']).trim();
+    var cleanId = idVal.replace(/\D/g, '').slice(0, 9);
+    function isRequiredAvgNumber(v) {
+      if (v === null || v === undefined) return false;
+      var s = String(v).replace(/,/g, '').trim();
+      if (!s || s === 'nan' || s === 'None') return false;
+      return isFinite(Number(s));
+    }
+    if (cleanId !== idVal) {
+      params.data['ID'] = cleanId;
+    }
+    params.data['Status'] = (
+      /^\d{9}$/.test(cleanId) && isRequiredAvgNumber(params.data[avgCol])
+    ) ? 'NEWNEW' : '';
+    try {
+      params.api.refreshCells({
+        rowNodes: [params.node],
+        columns: ['ID', 'Status', avgCol],
+        force: true
+      });
+    } catch (e) {}
+    if (pogCols.indexOf(field) < 0) return;
+  } else if (pogCols.indexOf(field) < 0) {
+    return;
+  }
 
   function isAction(v) {
     return v === 'Keep' || v === 'Delete' || v === 'New' || v === 'Delist';
@@ -3248,7 +4318,7 @@ function(params) {
     });
   } catch (e) {}
 }
-""".replace("__POG_COLS__", _pog_cols_js))
+""".replace("__POG_COLS__", _pog_cols_js).replace("__STICKY_COLS__", _sticky_cols_js).replace("__ORIG_MAP__", _orig_action_values_js).replace("__AVG_U_COL__", _json.dumps(_AVG_U_STD)))
                 # Post horizontal scroll position to parent page so the cluster
                 # summary table above can follow. Uses postMessage because the
                 # AgGrid iframe is sandboxed (no allow-same-origin).
@@ -3258,30 +4328,36 @@ function(params){
   var _busy=false;
   var _csPogCols=__POG_COLS__;
   var _searchScrollCol=__SEARCH_SCROLL_COL__;
+  var _newRowScrollKey=__NEW_ROW_SCROLL_KEY__;
+  var _scrollPostPending=false;
+  var _lastScrollLeft=0;
+  var _lastPostedScrollLeft=-1;
   function csMetrics(){
     var state=params.api.getColumnState();
-    var byId={}, pinnedW=0, spacer=0, lw=0, seenStatus=false;
+    var byId={}, pinnedW=0, nonPinnedOffset=0, statusOffset=null, firstPogOffset=null;
+    var pogSet={};
+    for(var p=0;p<_csPogCols.length;p++){pogSet[String(_csPogCols[p])]=true;}
     for(var i=0;i<state.length;i++){
       var s=state[i];
       if(s.hide)continue;
-      byId[String(s.colId)]=s;
+      var colId=String(s.colId);
+      byId[colId]=s;
       var cw=s.width||110;
       if(s.pinned==='left'){
         pinnedW+=cw;
         continue;
       }
-      if(s.colId==='Status'){
-        seenStatus=true;
-        lw+=cw;
-        continue;
+      if(statusOffset===null && colId==='Status'){
+        statusOffset=nonPinnedOffset;
       }
-      if(seenStatus&&s.colId==='Check Range To-be Waterfall'){
-        lw+=cw;
-        continue;
+      if(firstPogOffset===null && pogSet[colId]){
+        firstPogOffset=nonPinnedOffset;
       }
-      if(!seenStatus)spacer+=cw;
+      nonPinnedOffset+=cw;
     }
-    if(lw<110)lw=220;
+    if(firstPogOffset===null){firstPogOffset=nonPinnedOffset;}
+    var spacer=(statusOffset!==null) ? statusOffset : Math.max(0, firstPogOffset-260);
+    var lw=Math.max(80, firstPogOffset-spacer);
     var pogW=[];
     for(var j=0;j<_csPogCols.length;j++){
       var ps=byId[String(_csPogCols[j])];
@@ -3295,6 +4371,25 @@ function(params){
     if(!el&&tries<40){return;}
     clearInterval(iv);
     if(!el)return;
+
+    if(_newRowScrollKey){
+      setTimeout(function(){
+        try{
+          var targetIndex=-1;
+          params.api.forEachNode(function(node){
+            if(targetIndex<0 && node.data && String(node.data['__rs_row_key'])===String(_newRowScrollKey)){
+              targetIndex=node.rowIndex;
+            }
+          });
+          if(targetIndex>=0){
+            var viewIndex=Math.max(0,targetIndex-3);
+            params.api.ensureIndexVisible(viewIndex,'top');
+            params.api.setFocusedCell(targetIndex,'ID');
+            params.api.startEditingCell({rowIndex:targetIndex,colKey:'ID'});
+          }
+        }catch(e){}
+      },250);
+    }
 
     if(_searchScrollCol){
       setTimeout(function(){
@@ -3317,7 +4412,16 @@ function(params){
     /* ── Bottom → Top: post scroll position ── */
     el.addEventListener('scroll',function(){
       if(_busy)return;
-      window.parent.postMessage({_cs_hscroll:el.scrollLeft},'*');
+      _lastScrollLeft=el.scrollLeft;
+      if(Math.abs(_lastScrollLeft-_lastPostedScrollLeft)<2)return;
+      if(_scrollPostPending)return;
+      _scrollPostPending=true;
+      setTimeout(function(){
+        _scrollPostPending=false;
+        if(Math.abs(_lastScrollLeft-_lastPostedScrollLeft)<2)return;
+        _lastPostedScrollLeft=_lastScrollLeft;
+        window.parent.postMessage({_cs_hscroll:_lastScrollLeft},'*');
+      },100);
     },{passive:true});
     params.api.addEventListener('columnResized',function(ev){
       if(ev.finished){
@@ -3329,16 +4433,24 @@ function(params){
 
     /* ── Top → Bottom: receive scroll command ── */
     window.addEventListener('message',function(e){
-      if(!e.data||e.data._cs_agscroll===undefined)return;
+      if(!e.data)return;
+      if(e.data._cs_agscroll===undefined)return;
       _busy=true;
-      el.scrollLeft=e.data._cs_agscroll;
-      setTimeout(function(){_busy=false;},50);
+      var target=Number(e.data._cs_agscroll)||0;
+      if(Math.abs(el.scrollLeft-target)>1){
+        el.scrollLeft=target;
+      }
+      setTimeout(function(){_busy=false;},80);
     });
   },250);
 }
-""".replace("__POG_COLS__", _pog_cols_js).replace("__SEARCH_SCROLL_COL__", _search_scroll_col_js))
+""".replace("__POG_COLS__", _pog_cols_js).replace("__SEARCH_SCROLL_COL__", _search_scroll_col_js).replace("__NEW_ROW_SCROLL_KEY__", _new_row_scroll_js))
                 _go["suppressRowClickSelection"] = True
                 _go["suppressCellFocus"]         = False
+                _go["suppressLoadingOverlay"]    = True
+                _go["suppressNoRowsOverlay"]     = True
+                _go["overlayLoadingTemplate"]    = "<span></span>"
+                _go["overlayNoRowsTemplate"]     = "<span></span>"
                 # Columns tool panel — lets users re-show hidden columns via a sidebar
                 _go["sideBar"] = {
                     "toolPanels": [
@@ -3367,70 +4479,50 @@ function(params){
                             _cs["width"] = max(int(_cs.get("width") or 0), 120)
                         elif _cid == "Status":
                             _cs["width"] = max(int(_cs.get("width") or 0), 130)
+                        elif (
+                            _cid
+                            and _cid not in (_ROW_KEY_COL, _NEW_ROW_COL, _EDIT_COL)
+                            and _cid not in _dyn_pog_set
+                        ):
+                            _cs["width"] = max(int(_cs.get("width") or 0), 120)
+                st.session_state[f"{p}_latest_grid_df"] = _tdf_display
+                st.session_state[f"{p}_latest_grid_sig"] = f"{_sel_dg_code}|{_sel_dg_name}"
+                _grid_return_js = JsCode("""
+function({streamlitRerunEventTriggerName, eventData}) {
+  var api = eventData && eventData.api;
+  var row = eventData && eventData.data ? eventData.data : null;
+  return {
+    data: row ? [row] : [],
+    columnsState: api && api.getColumnState ? api.getColumnState() : null,
+    trigger: streamlitRerunEventTriggerName || ''
+  };
+}
+""")
                 _grid_response = AgGrid(
                     _tdf_display,
                     gridOptions=_go,
                     update_mode=GridUpdateMode.VALUE_CHANGED,
-                    data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+                    data_return_mode=DataReturnMode.CUSTOM,
+                    custom_jscode_for_grid_return=_grid_return_js,
                     custom_css=_custom_css,
                     theme="balham",
-                    height=700 if _dyn_pog_cols else 560,
+                    height=900 if _dyn_pog_cols else 720,
                     fit_columns_on_grid_load=False,
                     allow_unsafe_jscode=True,
                     enable_enterprise_modules=True,
                     try_to_convert_back_to_original_types=False,
                     columns_state=_active_col_state,
+                    update_on=["cellValueChanged"],
                     key=f"{p}_aggrid",
                 )
                 # Persist column state so hide/width/pin survive reruns and DG changes
-                _saved_col_state = _grid_response.columns_state
+                _saved_col_state = getattr(_grid_response, "columns_state", None)
+                if _saved_col_state is None and hasattr(_grid_response, "get"):
+                    _saved_col_state = _grid_response.get("columnsState")
                 if _saved_col_state is not None:
                     st.session_state[_col_state_key] = _saved_col_state
-
-                # ── Save to file (moved below AgGrid to eliminate gap above grid) ─
-                _n_pog   = sum(len(v) for v in _pog_actions.values())
-                _n_avg   = sum(len(v) for v in _avg_u_edits.values())
-                _n_total = _n_pog + _n_avg
-                _save_cols = st.columns([2, 8])
-                with _save_cols[0]:
-                    if _n_total > 0:
-                        _export_rows = []
-                        for _rk2, _acts2 in _pog_actions.items():
-                            _rk2_d = dict(zip(_STICKY, _rk2))
-                            for _pc2, _ac2 in _acts2.items():
-                                _export_rows.append({
-                                    **_rk2_d,
-                                    "Planogram": _pc2,
-                                    "Action": _ac2,
-                                    "Avg Units Override": "",
-                                    "Derived Status": _status_overrides.get(_rk2, ""),
-                                })
-                        for _rk2, _avgs2 in _avg_u_edits.items():
-                            _rk2_d = dict(zip(_STICKY, _rk2))
-                            for _ac2, _av2 in _avgs2.items():
-                                _export_rows.append({
-                                    **_rk2_d,
-                                    "Planogram": "",
-                                    "Action": "",
-                                    "Avg Units Override": _av2,
-                                    "Derived Status": _status_overrides.get(_rk2, ""),
-                                })
-                        _export_df  = pd.DataFrame(_export_rows)
-                        _ts_str     = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        _export_fn  = f"rangesheet_edits_{p}_{_ts_str}.xlsx"
-                        _save_clicked = st.download_button(
-                            "💾 Save to file",
-                            data=df_to_xlsx_bytes(_export_df),
-                            file_name=_export_fn,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"{p}_save_dl",
-                        )
-                        if _save_clicked:
-                            add_audit("Save to file",
-                                      f"tab={p}; {_n_total} change(s) exported to {_export_fn}")
-                            st.success(f"✅ {_n_total} change(s) exported — check your downloads.")
-                    else:
-                        st.button("💾 Save to file", disabled=True, key=f"{p}_save_dl_dis")
+                if st.session_state.get(_new_rows_scroll_key):
+                    st.session_state[_new_rows_scroll_key] = ""
 
                 # ── Receive AG Grid scroll messages → update top cluster table ───
                 # AgGrid iframe is sandboxed, so we use postMessage.
@@ -3444,6 +4536,7 @@ function(params){
   var _doc=window.parent.document;
   var _syncBusy=false;
   var _csPinned=0, _csSpacer=0, _csHScroll=0;
+  var _relayFrames=null, _relayFrameTs=0, _lastRelayX=-1, _relayPending=false;
 
   function applyClusterPosition(){
     var cover=_doc.querySelector('.cs-pin-cover');
@@ -3452,7 +4545,12 @@ function(params){
     var left=Math.max(_csPinned, _csPinned + _csSpacer - _csHScroll);
     sync.style.marginLeft=left+'px';
     if(cover){cover.style.width=left+'px';}
-    sync.scrollLeft=Math.max(0, _csHScroll - _csSpacer);
+    var target=Math.max(0, _csHScroll - _csSpacer);
+    if(Math.abs(sync.scrollLeft-target)>1){
+      _syncBusy=true;
+      sync.scrollLeft=target;
+      setTimeout(function(){_syncBusy=false;},80);
+    }
   }
 
   /* ── Receive messages from AgGrid (bottom → top scroll + spacer) ── */
@@ -3519,11 +4617,22 @@ function(params){
     top.addEventListener('scroll',function(){
       if(_syncBusy)return;
       var x=_csSpacer + top.scrollLeft;
-      /* Broadcast to every iframe — only AgGrid listens for _cs_agscroll */
-      var iframes=_doc.querySelectorAll('iframe');
-      for(var i=0;i<iframes.length;i++){
-        try{iframes[i].contentWindow.postMessage({_cs_agscroll:x},'*');}catch(ex){}
-      }
+      if(Math.abs(x-_lastRelayX)<2)return;
+      if(_relayPending)return;
+      _relayPending=true;
+      setTimeout(function(){
+        _relayPending=false;
+        if(Math.abs(x-_lastRelayX)<2)return;
+        _lastRelayX=x;
+        var now=Date.now();
+        if(!_relayFrames || now-_relayFrameTs>2000){
+          _relayFrames=_doc.querySelectorAll('iframe');
+          _relayFrameTs=now;
+        }
+        for(var i=0;i<_relayFrames.length;i++){
+          try{_relayFrames[i].contentWindow.postMessage({_cs_agscroll:x},'*');}catch(ex){}
+        }
+      },80);
     },{passive:true});
   }
 
@@ -3544,36 +4653,216 @@ function(params){
     }
   }
 
-  setTimeout(function(){closeGap();attachTopRelay();},800);
+  setTimeout(function(){
+    var old=_doc.getElementById('rs-floating-hscroll');
+    if(old&&old.parentNode){old.parentNode.removeChild(old);}
+    var oldStyle=_doc.getElementById('rs-floating-hscroll-style');
+    if(oldStyle&&oldStyle.parentNode){oldStyle.parentNode.removeChild(oldStyle);}
+    closeGap();
+    attachTopRelay();
+  },800);
 })();
 </script>""", height=0)
 
                 # ── Auto-commit on VALUE_CHANGED ──────────────────────────────────
-                if _grid_response["data"] is not None:
+                _grid_data = (
+                    _grid_response.get("data")
+                    if hasattr(_grid_response, "get")
+                    else _grid_response["data"]
+                )
+                if _grid_data is not None:
                     try:
-                        _new_df = (pd.DataFrame(_grid_response["data"])
+                        _new_df = (pd.DataFrame(_grid_data)
                                    .reindex(columns=_tdf_display.columns))
                     except Exception:
                         _new_df = None
                     if _new_df is not None and len(_new_df) > 0:
+                        if len(_new_df) >= len(_tdf_display):
+                            st.session_state[f"{p}_latest_grid_df"] = _new_df
+                            st.session_state[f"{p}_latest_grid_sig"] = f"{_sel_dg_code}|{_sel_dg_name}"
                         _pog_act_store = _pog_actions       # same live dict (setdefault above)
                         _pog_edit_store = _pog_edits
                         _avg_u_store   = _avg_u_edits
+                        _data_edit_store = _data_edits
                         _stat_store    = _status_overrides
                         _audit_lines   = []
                         _needs_rerun   = False
+                        _needs_confirm_rerun = False
+                        _changed_rks   = set()
+                        _new_rows_changed = False
+                        _new_rows_for_commit = (
+                            list(st.session_state.get(_new_rows_key, []))
+                            + list(st.session_state.get(_new_rows_placeholder_key, []))
+                        )
+                        _new_rows_by_key = {
+                            str(_nr.get(_ROW_KEY_COL, "")): dict(_nr)
+                            for _nr in _new_rows_for_commit
+                        }
+                        _existing_action_rks = (
+                            set(_pog_act_store.keys())
+                            | set(_pog_edit_store.keys())
+                            | set(_stat_store.keys())
+                        )
+                        _id_sticky_idx = _STICKY.index("ID") if "ID" in _STICKY else None
+                        _existing_rk_by_id = {}
+                        if _id_sticky_idx is not None:
+                            for _erk in _existing_action_rks:
+                                if len(_erk) > _id_sticky_idx:
+                                    _existing_rk_by_id[str(_erk[_id_sticky_idx])] = _erk
 
-                        for _nri, _nrow in _new_df.iterrows():
-                            _crk = _row_to_rk(_nrow)
+                        def _resolve_grid_rk(_row):
+                            _rk_exact = _row_to_rk(_row)
+                            if _rk_exact in _rk_to_i or _rk_exact in _existing_action_rks:
+                                return _rk_exact
+                            if _id_sticky_idx is not None and "ID" in _row:
+                                _rk_by_id = _existing_rk_by_id.get(str(_row.get("ID", "")))
+                                if _rk_by_id is not None:
+                                    return _rk_by_id
+                            return _rk_exact
+
+                        _dyn_cols_in_new = [c for c in _dyn_pog_cols if c in _new_df.columns]
+                        if _EDIT_COL in _new_df.columns:
+                            _edit_mask = _new_df[_EDIT_COL].fillna("").astype(str).ne("")
+                        else:
+                            _edit_mask = pd.Series(False, index=_new_df.index)
+                        if "Status" in _new_df.columns:
+                            _status_s = _new_df["Status"].fillna("").astype(str).str.upper()
+                            if bool(_edit_mask.any()):
+                                # Fast path: the grid's valueSetter/onCellValueChanged marks
+                                # exactly the edited row.  Scanning every existing action row
+                                # here makes each dropdown feel like a full-table recalculation.
+                                _candidate_df = _new_df.loc[_edit_mask]
+                            else:
+                                _grid_rks = _new_df.apply(_resolve_grid_rk, axis=1)
+                                _existing_mask = _grid_rks.apply(lambda _rk: _rk in _existing_action_rks)
+                                _store_status_s = _grid_rks.apply(
+                                    lambda _rk: str(_stat_store.get(_rk, "MAINTAIN")).strip().upper()
+                                )
+                                _status_mismatch_mask = _status_s.ne(_store_status_s)
+                                _maintain_mask = _status_s.eq("MAINTAIN") & _existing_mask
+                                _action_status_mask = (
+                                    _status_s.isin(["DELETE SOME", "DELETE ALL", "NEW SOME", "NEWNEW"])
+                                    & _status_mismatch_mask
+                                )
+                                _candidate_df = _new_df.loc[
+                                    _maintain_mask | _action_status_mask
+                                ]
+                        else:
+                            _candidate_df = _new_df.loc[_edit_mask]
+
+                        for _nri, _nrow in _candidate_df.iterrows():
+                            _edit_field = str(_nrow.get(_EDIT_COL, "") or "")
+                            _status_edit = str(_nrow.get("Status", "") or "").strip().upper()
+                            _crk = _resolve_grid_rk(_nrow)
                             _cri = _rk_to_i.get(_crk)
                             if _cri is None:
+                                if bool(_nrow.get(_NEW_ROW_COL, False)):
+                                    _rk_raw = str(_nrow.get(_ROW_KEY_COL, ""))
+                                    if _rk_raw:
+                                        _nr = {
+                                            c: ("" if _nrow.get(c, "") is None else _nrow.get(c, ""))
+                                            for c in _tdf_display.columns
+                                            if c not in (_NEW_ROW_COL, _EDIT_COL)
+                                        }
+                                        _nr[_ROW_KEY_COL] = _rk_raw
+                                        _nr[_NEW_ROW_COL] = True
+                                        _id_val = _re.sub(r"\D+", "", str(_nr.get("ID", "")).strip())[:9]
+                                        if "ID" in _nr:
+                                            _nr["ID"] = _id_val
+                                        if "Status" in _nr:
+                                            _nr["Status"] = (
+                                                "NEWNEW"
+                                                if _re.fullmatch(r"\d{9}", _id_val)
+                                                and _new_row_avg_is_numeric(_nr)
+                                                else ""
+                                            )
+                                        if _new_row_has_input(_nr):
+                                            _prev = _new_rows_by_key.get(_rk_raw)
+                                            if _prev != _nr:
+                                                _new_rows_by_key[_rk_raw] = _nr
+                                                _new_rows_changed = True
+                                        elif _rk_raw in _new_rows_by_key:
+                                            _new_rows_by_key.pop(_rk_raw, None)
+                                            _new_rows_changed = True
+                                continue
+                            if not _edit_field and not (
+                                (
+                                    _status_edit == "MAINTAIN"
+                                    and _crk in _existing_action_rks
+                                )
+                                or (
+                                    _status_edit == "DELETE ALL"
+                                    and str(_stat_store.get(_crk, "MAINTAIN")).strip().upper() != "DELETE ALL"
+                                )
+                                or (
+                                    _status_edit in ("DELETE SOME", "NEW SOME", "NEWNEW")
+                                    and str(_stat_store.get(_crk, "MAINTAIN")).strip().upper() != _status_edit
+                                )
+                            ):
                                 continue
 
                             # Pog action changes
-                            for _cpc in list(_dyn_pog_set):
+                            _action_cols = set()
+                            _status_row_edit = _edit_field == "Status" or (
+                                _status_edit == "MAINTAIN"
+                                and _crk in _existing_action_rks
+                            ) or (
+                                _status_edit == "DELETE ALL"
+                                and str(_stat_store.get(_crk, "MAINTAIN")).strip().upper() != "DELETE ALL"
+                            )
+                            if _status_row_edit and _status_edit == "MAINTAIN":
+                                _action_cols.update(_pog_act_store.get(_crk, {}).keys())
+                                _action_cols.update(_pog_edit_store.get(_crk, {}).keys())
+                                for _scan_pc in _dyn_cols_in_new:
+                                    if str(_nrow.get(_scan_pc, "")) in _ACT_SET:
+                                        _action_cols.add(_scan_pc)
+                            elif _status_row_edit and _status_edit == "DELETE ALL":
+                                pass
+                            elif _edit_field in _dyn_pog_set:
+                                _action_cols.update(_pog_act_store.get(_crk, {}).keys())
+                                _action_cols.update(_pog_edit_store.get(_crk, {}).keys())
+                                _action_cols.add(_edit_field)
+                            elif _status_edit in ("DELETE SOME", "NEW SOME", "NEWNEW"):
+                                _action_cols.update(_pog_act_store.get(_crk, {}).keys())
+                                _action_cols.update(_pog_edit_store.get(_crk, {}).keys())
+                                for _scan_pc in _dyn_cols_in_new:
+                                    if str(_nrow.get(_scan_pc, "")) in _ACT_SET:
+                                        _action_cols.add(_scan_pc)
+                            if _status_row_edit and _status_edit == "MAINTAIN":
+                                if (
+                                    _crk in _pog_act_store
+                                    or _crk in _pog_edit_store
+                                    or _crk in _stat_store
+                                    or _action_cols
+                                ):
+                                    _pog_act_store.pop(_crk, None)
+                                    _pog_edit_store.pop(_crk, None)
+                                    _stat_store.pop(_crk, None)
+                                    _needs_rerun = True
+                                    _changed_rks.add(_crk)
+                                    _audit_lines.append(f"{_crk}: status -> MAINTAIN")
+                                continue
+                            if _status_row_edit and _status_edit == "DELETE ALL":
+                                if (
+                                    _pog_act_store.get(_crk)
+                                    or _pog_edit_store.get(_crk)
+                                    or _stat_store.get(_crk) != "DELETE ALL"
+                                ):
+                                    _pog_act_store.pop(_crk, None)
+                                    _pog_edit_store.pop(_crk, None)
+                                    _stat_store[_crk] = "DELETE ALL"
+                                    _needs_rerun = True
+                                    _changed_rks.add(_crk)
+                                    _audit_lines.append(f"{_crk}: status -> DELETE ALL")
+                                continue
+                            for _cpc in _action_cols:
                                 if _cpc not in _tdf_display.columns:
                                     continue
-                                _ov = _tdf_display.at[_cri, _cpc]
+                                _had_action = (
+                                    _cpc in _pog_act_store.get(_crk, {})
+                                    or _cpc in _pog_edit_store.get(_crk, {})
+                                )
+                                _ov = _tdf.at[_cri, _cpc]
                                 _nv = _nrow.get(_cpc, "")
                                 _ov_s = ("" if _ov is None or
                                          (isinstance(_ov, float) and pd.isna(_ov))
@@ -3583,9 +4872,22 @@ function(params){
                                          else str(_nv))
                                 if _nv_s in ("nan", "None"):
                                     _nv_s = ""
-                                if _ov_s == _nv_s:
+                                if _status_row_edit and _status_edit == "DELETE ALL":
+                                    _nv_s = "Delete"
+                                elif _status_row_edit and _status_edit == "MAINTAIN":
+                                    _nv_s = ""
+                                if (
+                                    _status_row_edit
+                                    and _status_edit == "DELETE ALL"
+                                    and _had_action
+                                    and _pog_act_store.get(_crk, {}).get(_cpc) == "Delete"
+                                    and _pog_edit_store.get(_crk, {}).get(_cpc) == "Delete"
+                                ):
+                                    continue
+                                if _ov_s == _nv_s and not _had_action:
                                     continue
                                 _needs_rerun = True
+                                _changed_rks.add(_crk)
                                 if _nv_s == "" or _nv_s not in _ACT_SET:
                                     # Blank selected → clear action, revert to showing number
                                     if _crk in _pog_act_store:
@@ -3599,7 +4901,10 @@ function(params){
                                     _audit_lines.append(
                                         f"{_crk}|{_cpc}: {_ov_s!r}→cleared")
                                 else:
-                                    if _nv_s == "Delete":
+                                    if _nv_s == "Delete" and not (
+                                        _status_row_edit
+                                        and _status_edit == "DELETE ALL"
+                                    ):
                                         _is_top, _cell_val, _cutoff = _delete_is_top10(_cri, _cpc)
                                         if _is_top:
                                             _item = (
@@ -3617,6 +4922,7 @@ function(params){
                                                 "value": _cell_val,
                                                 "cutoff": _cutoff,
                                             }
+                                            _needs_confirm_rerun = True
                                             _audit_lines.append(
                                                 f"{_crk}|{_cpc}: Delete blocked for top10 confirm")
                                             continue
@@ -3634,6 +4940,7 @@ function(params){
                                             "pog": _cpc,
                                             "item": _item,
                                         }
+                                        _needs_confirm_rerun = True
                                         _audit_lines.append(
                                             f"{_crk}|{_cpc}: New blocked for low-sales confirm")
                                         continue
@@ -3643,8 +4950,8 @@ function(params){
                                         f"{_crk}|{_cpc}: {_ov_s!r}→{_nv_s!r}")
 
                             # Avg Units numeric change
-                            if _AVG_U_STD in _tdf_display.columns:
-                                _ou = _tdf_display.at[_cri, _AVG_U_STD]
+                            if _edit_field == _AVG_U_STD and _AVG_U_STD in _tdf_display.columns:
+                                _ou = _tdf.at[_cri, _AVG_U_STD]
                                 _nu = _nrow.get(_AVG_U_STD, None)
                                 try:
                                     _of = (float(_ou) if _ou is not None and not (
@@ -3667,13 +4974,73 @@ function(params){
                                     _audit_lines.append(
                                         f"{_crk}|Avg Units: {_of}→{_nf}")
 
+                            # Plain main-table edits: allow users to delete/type values
+                            # in regular columns and keep those edits across refreshes.
+                            _plain_blocked = (
+                                _ROW_KEY_COL,
+                                _NEW_ROW_COL,
+                                _EDIT_COL,
+                                "Status",
+                                "Check Range To-be Waterfall",
+                            )
+                            if (
+                                _edit_field
+                                and _edit_field in _tdf_display.columns
+                                and _edit_field not in _plain_blocked
+                                and _edit_field not in _dyn_pog_set
+                                and _edit_field != _AVG_U_STD
+                            ):
+                                _old_plain = _tdf.at[_cri, _edit_field] if _edit_field in _tdf.columns else ""
+                                _new_plain = _nrow.get(_edit_field, "")
+
+                                def _plain_norm(_v):
+                                    if _v is None:
+                                        return ""
+                                    try:
+                                        if pd.isna(_v):
+                                            return ""
+                                    except Exception:
+                                        pass
+                                    return str(_v)
+
+                                _old_s = _plain_norm(_old_plain)
+                                _new_s = _plain_norm(_new_plain)
+                                if _old_s != _new_s:
+                                    _needs_rerun = True
+                                    _data_edit_store.setdefault(_crk, {})[_edit_field] = _new_plain
+                                    _audit_lines.append(
+                                        f"{_crk}|{_edit_field}: {_old_s!r}→{_new_s!r}"
+                                    )
+                                elif _edit_field in _data_edit_store.get(_crk, {}):
+                                    _needs_rerun = True
+                                    _data_edit_store[_crk].pop(_edit_field, None)
+                                    if not _data_edit_store.get(_crk):
+                                        _data_edit_store.pop(_crk, None)
+                                    _audit_lines.append(
+                                        f"{_crk}|{_edit_field}: restored original"
+                                    )
+
                         if _needs_rerun:
-                            # Re-derive Status for every row (action changes may affect it)
+                            if _new_rows_changed:
+                                _session_new_rows = list(_new_rows_by_key.values())
+                                _saved_new_rows = [
+                                    _r for _r in _session_new_rows
+                                    if _new_row_has_input(_r)
+                                ]
+                                _placeholder_new_rows = [
+                                    _r for _r in _session_new_rows
+                                    if not _new_row_has_input(_r)
+                                ]
+                                st.session_state[_new_rows_key] = _saved_new_rows
+                                st.session_state[_new_rows_placeholder_key] = _placeholder_new_rows
+                                _rs_save_new_rows(_new_rows_scope, _saved_new_rows)
+                            # Re-derive Status only for rows touched by this edit.
                             if "Status" in _tdf.columns:
-                                for _sri in range(len(_tdf)):
-                                    _srk = _make_rk(_sri)
+                                for _srk in _changed_rks:
                                     _derived = _derive_status(_srk)
-                                    if _derived != "MAINTAIN" or _srk in _stat_store:
+                                    if _derived == "MAINTAIN":
+                                        _stat_store.pop(_srk, None)
+                                    else:
                                         _stat_store[_srk] = _derived
                             if _audit_lines:
                                 add_audit(
@@ -3682,7 +5049,29 @@ function(params){
                                     + "; ".join(_audit_lines[:10])
                                     + ("…" if len(_audit_lines) > 10 else ""),
                                 )
-                            st.rerun()
+                            _rs_save_edit_state(
+                                _edit_state_scope,
+                                _pog_act_store,
+                                _pog_edit_store,
+                                _avg_u_store,
+                                _stat_store,
+                                _data_edit_store,
+                            )
+                            if _needs_confirm_rerun:
+                                st.rerun()
+                        elif _new_rows_changed:
+                            _session_new_rows = list(_new_rows_by_key.values())
+                            _saved_new_rows = [
+                                _r for _r in _session_new_rows
+                                if _new_row_has_input(_r)
+                            ]
+                            _placeholder_new_rows = [
+                                _r for _r in _session_new_rows
+                                if not _new_row_has_input(_r)
+                            ]
+                            st.session_state[_new_rows_key] = _saved_new_rows
+                            st.session_state[_new_rows_placeholder_key] = _placeholder_new_rows
+                            _rs_save_new_rows(_new_rows_scope, _saved_new_rows)
 
             # Row-count helper hidden to keep the review page clean.
 
@@ -3826,14 +5215,160 @@ function(params){
     _submit_missing_key = f"{p}_submit_missing_blanks"
     _blank_hl_key = f"{p}_highlight_submit_blanks"
 
-    def _scan_blank_cells(_df: pd.DataFrame):
-        _scan = _df.reset_index(drop=True)
+    def _strip_submit_internal_cols(_df: pd.DataFrame) -> pd.DataFrame:
+        _drop_cols = [
+            c for c in ("__rs_row_key", "__rs_added_row", "__rs_last_edit")
+            if c in _df.columns
+        ]
+        return _df.drop(columns=_drop_cols) if _drop_cols else _df
+
+    def _submit_payload_df(limit_rows: int | None = None, keep_internal: bool = False):
+        _base = st.session_state.get(f"{p}_latest_grid_df")
+        if st.session_state.get(f"{p}_latest_grid_sig") != f"{_sel_dg_code}|{_sel_dg_name}":
+            _base = None
+        if not isinstance(_base, pd.DataFrame):
+            _base = locals().get("_tdf_display", None)
+        if isinstance(_base, pd.DataFrame):
+            _src = _base
+        else:
+            _src = df_view
+        if limit_rows is not None:
+            _src = _src.head(limit_rows)
+        _out = _src.reset_index(drop=True)
+        if not keep_internal:
+            _out = _strip_submit_internal_cols(_out)
+        return _out
+
+    def _submit_to_report_packet(payload_override: pd.DataFrame | None = None):
+        if isinstance(payload_override, pd.DataFrame):
+            _payload = _strip_submit_internal_cols(payload_override.reset_index(drop=True))
+        else:
+            _payload = _submit_payload_df()
+        _pog_cluster_map = {}
+        try:
+            for _pog in locals().get("_dyn_pog_cols", []) or []:
+                _cl = locals().get("_pog_to_cl", {}).get(_pog) or locals().get("_pog_to_cl", {}).get(_nca(_pog), "")
+                if str(_cl).strip():
+                    _pog_cluster_map[str(_pog)] = str(_cl).strip()
+                    _pog_cluster_map[_nca(_pog)] = str(_cl).strip()
+        except Exception:
+            _pog_cluster_map = {}
+        _dg_label_parts = []
+        if str(_sel_dg_code or "").strip():
+            _dg_label_parts.append(str(_sel_dg_code).strip())
+        if str(_sel_dg_name or "").strip() and str(_sel_dg_name).strip().upper() != "ALL":
+            _dg_label_parts.append(str(_sel_dg_name).strip())
+        _dg_label = " - ".join(_dg_label_parts) or "All DG"
+        _submitted_dt = datetime.now()
+        _dg_key = f"{_sel_dg_code or 'ALL'}|{_sel_dg_name or 'ALL'}"
+        _packet_key = f"{_dg_key}|{_submitted_dt.strftime('%Y%m%d%H%M%S%f')}"
+        _packets_key = f"vw_submit_reports_{p}"
+        _packets = st.session_state.get(_packets_key, {})
+        if not isinstance(_packets, dict):
+            _packets = {}
+        _saved_packets = _rs_load_report_packets(p) if not _packets else {}
+        if isinstance(_saved_packets, dict) and _saved_packets:
+            _saved_packets.update(_packets)
+            _packets = _saved_packets
+        _packets[_packet_key] = {
+            "label": _dg_label,
+            "dg_key": _dg_key,
+            "df": _payload,
+            "pog_cluster_map": _pog_cluster_map,
+            "submitted_at": _submitted_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "submitted_order": _submitted_dt.strftime("%Y%m%d%H%M%S%f"),
+        }
+        st.session_state[_packets_key] = _packets
+        _rs_save_report_packets(p, _packets)
+        st.session_state[f"vw_submit_{p}"] = _payload
+        st.session_state["management_report_source"] = "all"
+        st.session_state["management_report_latest_source"] = p
+        st.session_state["management_report_packet"] = _packet_key
+
+    def _scan_blank_cells(_df: pd.DataFrame, max_rows: int = 50, max_cells: int = 250):
+        _skip_cols = {"__rs_row_key", "__rs_added_row", "__rs_last_edit"}
+        _scan = _df.head(max_rows).reset_index(drop=True)
+        _scan = _scan.drop(columns=[c for c in _skip_cols if c in _scan.columns], errors="ignore")
+        if _scan.empty:
+            return []
+        _str = _scan.astype("string")
+        _blank_mask = _scan.isna() | _str.apply(
+            lambda _col: _col.str.strip().isin(("", "nan", "None", "<NA>"))
+        )
+        _locs = _blank_mask.stack()
+        _idxs = list(_locs[_locs].head(max_cells).index)
+        return [
+            {"row": int(_ri) + 1, "column": str(_col)}
+            for _ri, _col in _idxs
+        ]
+
+    def _is_blank_submit_value(_val) -> bool:
+        if _val is None:
+            return True
+        try:
+            if pd.isna(_val):
+                return True
+        except Exception:
+            pass
+        return str(_val).strip().lower() in ("", "nan", "none", "<na>")
+
+    def _new_item_required_missing(_df: pd.DataFrame) -> list[dict]:
+        if not isinstance(_df, pd.DataFrame) or "__rs_added_row" not in _df.columns:
+            return []
+        _skip_cols = {
+            "__rs_row_key",
+            "__rs_added_row",
+            "__rs_last_edit",
+            "Status",
+            "Check Range To-be Waterfall",
+        }
+        _avg_required_name = locals().get(
+            "_AVG_U_STD",
+            "Avg Units 52wk/ Forecast new item sales",
+        )
+        _avg_col = _avg_required_name if _avg_required_name in _df.columns else None
         _missing = []
-        for _ri, _row in _scan.iterrows():
-            for _col in _scan.columns:
-                _val = _row[_col]
-                if pd.isna(_val) or str(_val).strip() in ("", "nan", "None"):
-                    _missing.append({"row": int(_ri) + 1, "column": str(_col)})
+        _added_mask = _df["__rs_added_row"].astype(str).str.lower().isin(("true", "1", "yes"))
+        for _ri, _row in _df.loc[_added_mask].reset_index(drop=False).iterrows():
+            _has_input = False
+            for _col in _df.columns:
+                if _col in _skip_cols:
+                    continue
+                if not _is_blank_submit_value(_row.get(_col, "")):
+                    _has_input = True
+                    break
+            if not _has_input:
+                continue
+
+            _row_no = int(_row.get("index", _ri)) + 1
+            _id_raw = "" if "ID" not in _df.columns else str(_row.get("ID", "")).strip()
+            _id_digits = _re.sub(r"\D+", "", _id_raw)
+            if not _re.fullmatch(r"\d{9}", _id_digits):
+                _missing.append({
+                    "row": _row_no,
+                    "column": "ID",
+                    "reason": "ID must be 9 digits",
+                })
+
+            if _avg_col is None:
+                _missing.append({
+                    "row": _row_no,
+                    "column": _avg_required_name,
+                    "reason": "Required 52wk column is missing",
+                })
+            else:
+                _avg_raw = _row.get(_avg_col, "")
+                _avg_text = "" if _avg_raw is None else str(_avg_raw).replace(",", "").strip()
+                try:
+                    _avg_ok = bool(_avg_text) and not pd.isna(float(_avg_text))
+                except Exception:
+                    _avg_ok = False
+                if not _avg_ok:
+                    _missing.append({
+                        "row": _row_no,
+                        "column": _avg_col,
+                        "reason": "52wk value is required and must be numeric",
+                    })
         return _missing
 
     _missing_blanks = st.session_state.get(_submit_missing_key)
@@ -3891,11 +5426,16 @@ function(params){
                 st.session_state.pop(_submit_missing_key, None)
                 st.rerun()
             if _mb2.button("Submit anyway", key=f"{p}_submit_anyway", type="primary", use_container_width=True):
-                st.session_state[f"vw_submit_{p}"] = df_view.reset_index(drop=True)
+                _submit_full_internal = _submit_payload_df(keep_internal=True)
+                _required_missing = _new_item_required_missing(_submit_full_internal)
+                if _required_missing:
+                    st.error("New item rows must have ID and 52wk value before submit.")
+                    st.dataframe(pd.DataFrame(_required_missing), hide_index=True, height=180)
+                    return
+                _submit_to_report_packet(_submit_full_internal)
                 st.session_state.pop(_submit_missing_key, None)
                 st.session_state[_blank_hl_key] = False
-                st.success("Data submitted to Report page!")
-                st.rerun()
+                st.switch_page("pages/report.py")
 
         if hasattr(st, "dialog"):
             @st.dialog("Missing data found")
@@ -3904,18 +5444,46 @@ function(params){
             _missing_data_dialog()
         else:
             _render_missing_prompt()
-    if st.button("✅ SUBMIT RANGE", key=f"{p}_btn_sub", type="primary", use_container_width=True):
-        _scan_df = locals().get("_tdf_display", df_view).reset_index(drop=True)
-        _missing = _scan_blank_cells(_scan_df)
-        if _missing:
-            st.session_state[_submit_missing_key] = _missing
-            st.session_state[_blank_hl_key] = True
-            st.rerun()
-        else:
-            st.session_state.pop(_submit_missing_key, None)
-            st.session_state[_blank_hl_key] = False
-            st.session_state[f"vw_submit_{p}"] = df_view.reset_index(drop=True)
-            st.success("Data submitted to Report page!")
+    _can_export_sspog_layout = (
+        p in ("ns", "ss")
+        and bool(_dyn_pog_cols)
+        and callable(locals().get("_sspog_layout_xlsx_bytes"))
+    )
+    if _can_export_sspog_layout:
+        _submit_col, _export_col = st.columns([1.45, 1.0])
+    else:
+        _submit_col = st.container()
+        _export_col = None
+
+    with _submit_col:
+        if st.button("SUBMIT TO REPORT", key=f"{p}_btn_sub", type="primary", use_container_width=True):
+            _submit_full_internal = _submit_payload_df(keep_internal=True)
+            _required_missing = _new_item_required_missing(_submit_full_internal)
+            if _required_missing:
+                st.error("New item rows must have ID and 52wk value before submit.")
+                st.dataframe(pd.DataFrame(_required_missing), hide_index=True, height=180)
+                st.stop()
+            _scan_df = _submit_full_internal.head(50)
+            _missing = _scan_blank_cells(_scan_df)
+            if _missing:
+                st.session_state[_submit_missing_key] = _missing
+                st.session_state[_blank_hl_key] = True
+                st.rerun()
+            else:
+                st.session_state.pop(_submit_missing_key, None)
+                st.session_state[_blank_hl_key] = False
+                _submit_to_report_packet(_submit_full_internal)
+                st.switch_page("pages/report.py")
+    if _export_col is not None:
+        with _export_col:
+            st.download_button(
+                "SAVE AS .XLSX",
+                data=_sspog_layout_xlsx_bytes(),
+                file_name=f"rangesheet_sspog_layout_{_sel_dg_code or 'ALL'}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"{p}_layout_export_xlsx_submit",
+                use_container_width=True,
+            )
     if st.session_state.get(f"vw_submit_{p}") is not None:
         st.caption(f"✅ {len(st.session_state[f'vw_submit_{p}']):,} rows submitted to Report")
 
@@ -3995,6 +5563,12 @@ with _tab["Range Sheet_SSPOG"]:
         _ALL = "— All (preview) —"
         _code_opts = [_ALL] + _ns_codes
         _name_opts = [_ALL] + _ns_names
+        _saved_ns_code = st.session_state.get("ns_selected_dg_code")
+        _saved_ns_name = st.session_state.get("ns_selected_dg_name")
+        if st.session_state.get("ns_sel_dg_code") not in _code_opts and _saved_ns_code in _code_opts:
+            st.session_state["ns_sel_dg_code"] = _saved_ns_code
+        if st.session_state.get("ns_sel_dg_name") not in _name_opts and _saved_ns_name in _name_opts:
+            st.session_state["ns_sel_dg_name"] = _saved_ns_name
         if st.session_state.get("ns_sel_dg_code") not in _code_opts:
             st.session_state["ns_sel_dg_code"] = _ALL
         if st.session_state.get("ns_sel_dg_name") not in _name_opts:
@@ -4003,6 +5577,8 @@ with _tab["Range Sheet_SSPOG"]:
         def _ns_clear_dg_filter():
             st.session_state["ns_sel_dg_code"] = _ALL
             st.session_state["ns_sel_dg_name"] = _ALL
+            st.session_state["ns_selected_dg_code"] = _ALL
+            st.session_state["ns_selected_dg_name"] = _ALL
             for _k in ["ns_hdet_df", "_ns_hdet_src", "ns_lf_dg_sig",
                        "_ns_loaded_dg_code", "_ns_loaded_dg_name"]:
                 st.session_state.pop(_k, None)
@@ -4013,6 +5589,8 @@ with _tab["Range Sheet_SSPOG"]:
                 st.session_state["ns_sel_dg_name"] = _ALL
             else:
                 st.session_state["ns_sel_dg_name"] = _ns_code_to_name.get(_code, _ALL) or _ALL
+            st.session_state["ns_selected_dg_code"] = st.session_state.get("ns_sel_dg_code", _ALL)
+            st.session_state["ns_selected_dg_name"] = st.session_state.get("ns_sel_dg_name", _ALL)
 
         def _ns_sync_from_name():
             _name = st.session_state.get("ns_sel_dg_name", _ALL)
@@ -4020,6 +5598,8 @@ with _tab["Range Sheet_SSPOG"]:
                 st.session_state["ns_sel_dg_code"] = _ALL
             else:
                 st.session_state["ns_sel_dg_code"] = _ns_name_to_code.get(_name, _ALL) or _ALL
+            st.session_state["ns_selected_dg_code"] = st.session_state.get("ns_sel_dg_code", _ALL)
+            st.session_state["ns_selected_dg_name"] = st.session_state.get("ns_sel_dg_name", _ALL)
 
         _dg_c1, _dg_x1, _dg_c2, _dg_x2 = st.columns([2, 0.16, 2, 0.16])
         with _dg_c1:
@@ -4051,6 +5631,8 @@ with _tab["Range Sheet_SSPOG"]:
         elif _ns_sel_name != _ALL:
             _ns_dg_query = _ns_name_to_code.get(_ns_sel_name, _ns_sel_name)
             _ns_sel_code = _ns_dg_query
+        st.session_state["ns_selected_dg_code"] = _ns_sel_code
+        st.session_state["ns_selected_dg_name"] = _ns_sel_name
 
         if _ns_dg_query:
             _sig = f"{_ns_hdet_path}|{_ns_dg_query}"
@@ -4062,7 +5644,6 @@ with _tab["Range Sheet_SSPOG"]:
                 st.session_state["ns_lf_dg_sig"] = _sig
                 st.session_state["_ns_loaded_dg_code"] = _ns_dg_query
                 st.session_state["_ns_loaded_dg_name"] = _ns_code_to_name.get(_ns_dg_query, "")
-                st.rerun()
         else:
             for _k in ["ns_hdet_df", "_ns_hdet_src", "ns_lf_dg_sig",
                        "_ns_loaded_dg_code", "_ns_loaded_dg_name"]:
@@ -4591,7 +6172,7 @@ if False:
                 st.button("SELECT", key="btn_select_dg", use_container_width=True,
                           type="primary")
             with _btn_b:
-                st.button("SUBMIT RANGE", key="btn_submit_range",
+                st.button("SUBMIT TO REPORT", key="btn_submit_range",
                           use_container_width=True)
 
 
@@ -4681,9 +6262,7 @@ if False:
             _sale_ai = float((_prices * _asis_s).sum()) if len(_prices) else 0.0
             _sale_tb = float((_prices * _tobe_s).sum()) if len(_prices) else 0.0
 
-            # Margin Impact AS IS from EDLP Price × stores
-            _edlp_p = pd.to_numeric(_arch_base.loc[_idx, _edlp_col], errors="coerce").fillna(0) if (_edlp_col and len(_idx) > 0) else pd.Series([], dtype=float)
-            _marg_ai = float((_edlp_p * _asis_s).sum()) if len(_edlp_p) else 0.0
+            _marg_ai = 0.0
 
             _arch_rows.append({
                 "type": _t, "as_is": _ai, "to_be": _tb,
@@ -4766,28 +6345,8 @@ if False:
     </div>
 </div>""", unsafe_allow_html=True)
 
-    # ── Color Note card ───────────────────────────────────────────────────────
     with _leg_c:
-        st.markdown("""
-<div style="background:#fff;border-radius:14px;border:1px solid #E8E3DC;padding:16px;">
-    <div style="font-size:10px;font-weight:700;color:#888;text-transform:uppercase;
-                letter-spacing:.08em;margin-bottom:12px;">Color Note</div>
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-        <div style="width:22px;height:14px;background:#FFFDE7;border:1px solid #E0D9D2;
-                    border-radius:3px;flex-shrink:0;"></div>
-        <span style="font-size:11px;color:#555;">Display fill</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-        <div style="width:22px;height:14px;background:#FCE4EC;border:1px solid #E0D9D2;
-                    border-radius:3px;flex-shrink:0;"></div>
-        <span style="font-size:11px;color:#555;">Merchandiser fill</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;">
-        <div style="width:22px;height:14px;background:#F5F5F5;border:1px solid #E0D9D2;
-                    border-radius:3px;flex-shrink:0;"></div>
-        <span style="font-size:11px;color:#555;">Formula</span>
-    </div>
-</div>""", unsafe_allow_html=True)
+        st.empty()
 
     st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
 
