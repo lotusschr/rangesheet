@@ -328,10 +328,12 @@ def _load_a5_subset(amp: str, mtime: float, dyn_pog_cols_key: tuple):
     return _a5, _meta, _warn
 
 def _cast_text_cols(df: pd.DataFrame, text_cols: list) -> pd.DataFrame:
-    """Cast specified columns to str so TextColumn editors don't crash on int data."""
+    """Cast specified columns to str so TextColumn editors don't crash on int data.
+    The final astype(object) also fixes EMPTY frames, where an int column would
+    otherwise keep its integer dtype and crash st.data_editor's TextColumn."""
     for c in text_cols:
         if c in df.columns:
-            df[c] = df[c].where(df[c].isna(), df[c].astype(str))
+            df[c] = df[c].where(df[c].isna(), df[c].astype(str)).astype("object")
     return df
 
 # Columns that should default to 0 (not blank) when not present in the source file.
@@ -5671,26 +5673,46 @@ with _tab["StoreApply_SSPOG"]:
     _render_sheet_content(_sspog_df, "sa")
 with _tab["5.1 ItembyStore"]:
     _IB_COLS = [
-        "store_no", "store_name", "ID", "ProductDescription",
-        "POG_STATUS", "Display Group", "Display group desc",
-        "ForecastSales", "TH_Tot_Sales_Value_52WK", "TH_Tot_Sales_Volume_52WK",
-        "DaysSupply", "MaxDOS",
+        "Department", "Class", "Subclass", "Barcode", "TPNA", "ID",
+        "No. of unit in case", "No. of unit in inner", "Tray total number",
+        "Express Picking type", "HDET picking type", "EDLP Price by Format",
+        "Item Name",
+        "AS-IS planograms applied", "TO-BE planograms applied",
+        "AS-IS Stores Applied", "TO-BE stores applied",
+        "Avg Units 52wk/ Forecast new item sales", "Supplier Pack Size",
+        "Actual - JDA Store Apply", "JDA vs Actual",
+        "Range Type", "Status", "Check Range To-be Waterfall",
     ]
-    _IB_TEXT_COLS = ["store_no", "store_name", "ID", "ProductDescription",
-                     "POG_STATUS", "Display Group", "Display group desc"]
+    # Columns NOT auto-matched from the source: Range Type is copied from the
+    # source's Status column; Class and Actual - JDA Store Apply stay empty by design.
+    _IB_STATUS_COL = "Range Type"
+    _IB_EMPTY_COLS = ("Class", "Actual - JDA Store Apply")
+    # Numeric columns — coerced with to_numeric so NumberColumn never crashes.
+    _IB_NUM_COLS = [
+        "No. of unit in case", "No. of unit in inner", "Tray total number",
+        "EDLP Price by Format",
+        "AS-IS planograms applied", "TO-BE planograms applied",
+        "AS-IS Stores Applied", "TO-BE stores applied",
+        "Avg Units 52wk/ Forecast new item sales", "Supplier Pack Size",
+        "JDA vs Actual",
+    ]
+    _IB_TEXT_COLS = [c for c in _IB_COLS if c not in _IB_NUM_COLS]
+    _IB_NUM_FMT = {
+        "EDLP Price by Format": "%.2f",
+        "Avg Units 52wk/ Forecast new item sales": "%.2f",
+        "JDA vs Actual": "%.2f",
+    }
+    _IB_WIDE_COLS = {"Item Name": "large",
+                     "Avg Units 52wk/ Forecast new item sales": "medium",
+                     "Actual - JDA Store Apply": "medium",
+                     "Check Range To-be Waterfall": "medium",
+                     "Department": "medium", "Subclass": "medium"}
     _IB_COL_CFG = {
-        "store_no":                 st.column_config.TextColumn("store_no",                 width="small"),
-        "store_name":               st.column_config.TextColumn("store_name",               width="medium"),
-        "ID":                       st.column_config.TextColumn("ID",                       width="small"),
-        "ProductDescription":       st.column_config.TextColumn("ProductDescription",       width="large"),
-        "POG_STATUS":               st.column_config.TextColumn("POG_STATUS",               width="small"),
-        "Display Group":            st.column_config.TextColumn("Display Group",            width="small"),
-        "Display group desc":       st.column_config.TextColumn("Display group desc",       width="medium"),
-        "ForecastSales":            st.column_config.NumberColumn("ForecastSales",          width="small", format="%.2f"),
-        "TH_Tot_Sales_Value_52WK":  st.column_config.NumberColumn("TH_Tot_Sales_Value_52WK",  width="small", format="%.2f"),
-        "TH_Tot_Sales_Volume_52WK": st.column_config.NumberColumn("TH_Tot_Sales_Volume_52WK", width="small", format="%.0f"),
-        "DaysSupply":               st.column_config.NumberColumn("DaysSupply",             width="small", format="%.0f"),
-        "MaxDOS":                   st.column_config.NumberColumn("MaxDOS",                 width="small", format="%.0f"),
+        c: (st.column_config.NumberColumn(c, width="small",
+                                          format=_IB_NUM_FMT.get(c, "%.0f"))
+            if c in _IB_NUM_COLS else
+            st.column_config.TextColumn(c, width=_IB_WIDE_COLS.get(c, "small")))
+        for c in _IB_COLS
     }
 
     # ── Find HDET file (large .txt pinned by admin) ───────────────────────────
@@ -5701,18 +5723,30 @@ with _tab["5.1 ItembyStore"]:
             _hdet_path = _hp
             break
 
-    def _build_ib(hdet_df: pd.DataFrame) -> pd.DataFrame:
-        """Map hdet_df columns → _IB_COLS. For columns absent in HDET, backfill
-        from the main rangesheet data (merged). Leave null if both are missing."""
-        _hmap = {col: next((c for c in hdet_df.columns if _nca(c) == _nca(col)), None)
+    def _build_ib(src_df: pd.DataFrame) -> pd.DataFrame:
+        """Map src_df columns → _IB_COLS. For columns absent in the source,
+        backfill from the main rangesheet data (merged); null if both missing.
+        Special columns: Range Type is copied row-by-row from the source's
+        Status column; Class / Actual - JDA Store Apply are always left empty."""
+        _special = {_IB_STATUS_COL, *_IB_EMPTY_COLS}
+        _hmap = {col: (None if col in _special else
+                       next((c for c in src_df.columns if _nca(c) == _nca(col)), None))
                  for col in _IB_COLS}
-        _mmap = {col: next((c for c in merged.columns if _nca(c) == _nca(col)), None)
+        _mmap = {col: (None if col in _special else
+                       next((c for c in merged.columns if _nca(c) == _nca(col)), None))
                  for col in _IB_COLS}
-        _hn = len(hdet_df)
+        _st_col = ("_ib_range_type" if "_ib_range_type" in src_df.columns
+                   else next((c for c in src_df.columns if _nc(c) == "status"), None))
+        _hn = len(src_df)
         _out = {}
         for col in _IB_COLS:
-            if _hmap[col] is not None:
-                _out[col] = hdet_df[_hmap[col]].reset_index(drop=True)
+            if col == _IB_STATUS_COL:
+                _out[col] = (src_df[_st_col].astype(str).str.strip().reset_index(drop=True)
+                             if _st_col else pd.Series([""] * _hn))
+            elif col in _IB_EMPTY_COLS:
+                _out[col] = pd.Series([""] * _hn)
+            elif _hmap[col] is not None:
+                _out[col] = src_df[_hmap[col]].reset_index(drop=True)
             elif _mmap[col] is not None:
                 _mv = merged[_mmap[col]].reset_index(drop=True)
                 if len(_mv) >= _hn:
@@ -5722,21 +5756,233 @@ with _tab["5.1 ItembyStore"]:
                         [_mv, pd.Series([None] * (_hn - len(_mv)))], ignore_index=True)
             else:
                 _out[col] = pd.Series([None] * _hn)
-        return _cast_text_cols(pd.DataFrame(_out), _IB_TEXT_COLS)
+        _df = pd.DataFrame(_out)
+        for _c in _IB_NUM_COLS:
+            if _c in _df.columns:
+                _df[_c] = pd.to_numeric(_df[_c], errors="coerce")
+        return _cast_text_cols(_df, _IB_TEXT_COLS)
 
-    # ── Auto-load on first access only (never auto-clear; keep last version) ──
-    _hdet_mtime = (f"{os.path.getmtime(_hdet_path):.0f}" if _hdet_path else None)
-    if "ib_data" not in st.session_state:
-        if _hdet_path:
-            with st.spinner("Loading Item by Store data from HDET…"):
-                _auto_df = read_large_file_head(_hdet_path, n_rows=500)
-            st.session_state.ib_data = _build_ib(_auto_df)
-            st.session_state["_ib_hdet_mtime"] = _hdet_mtime
-            st.session_state["_ib_source"] = f"HDET preview (500 rows)"
+    def _ib_nonsspog_changes() -> pd.DataFrame:
+        """Rows of Range Sheet_Non-SSPOG whose Status marks a change
+        (DELETE SOME / DELETE ALL / NEW SOME / NEWNEW / any other non-blank,
+        non-MAINTAIN value). Two status sources are combined:
+        1. a literal Status column in the source data (if the file has one);
+        2. statuses the user edited on the Non-SSPOG tab, which the app stores
+           in st.session_state["ns2_status_overrides"] keyed by
+           (DG Code, ID, Item Name) — matched back to source rows by ID.
+        Rows with blank or MAINTAIN status (= no change) are excluded. The
+        resulting change value is returned in a helper column _ib_range_type,
+        which _build_ib copies into Range Type."""
+        _src = _nonsspog_df
+        _n = len(_src)
+        _blank = ("", "nan", "none", "<na>")
+        # 1) literal Status column
+        _st_col = next((c for c in _src.columns if _nc(c) == "status"), None)
+        if _st_col is not None:
+            # fillna BEFORE astype(str): astype keeps NaN as NaN, which would
+            # slip through the blank-filter and wrongly count as a change.
+            _stat = _src[_st_col].fillna("").astype(str).str.strip()
+            _stat = _stat.where(~_stat.str.lower().isin(_blank), "")
         else:
-            st.session_state.ib_data = _cast_text_cols(
-                _fill_from_db(_IB_COLS, merged), _IB_TEXT_COLS)
-            st.session_state["_ib_source"] = "Rangesheet data"
+            _stat = pd.Series([""] * _n, index=_src.index)
+        # 2) overlay statuses edited on the Non-SSPOG tab (override wins).
+        #    Override keys are (DG Code, ID, Item Name) tuples, but the sticky
+        #    columns present can vary — resolve the ID by matching any tuple
+        #    element against the source's real IDs.
+        _id_col = next((c for c in _src.columns if _nca(c) == _nca("ID")), None)
+        _ov = st.session_state.get("ns2_status_overrides", {}) or {}
+        if _id_col is not None and _ov:
+            _id_ser = _src[_id_col].astype(str).str.strip()
+            _ids = set(_id_ser)
+            _by_id = {}
+            for _rk, _stv in _ov.items():
+                _sv = str(_stv or "").strip()
+                if not _sv:
+                    continue
+                _parts = ([str(x).strip() for x in _rk]
+                          if isinstance(_rk, (tuple, list)) else [str(_rk).strip()])
+                _idv = next((_p for _p in _parts if _p in _ids), None)
+                if _idv:
+                    _by_id[_idv] = _sv
+            if _by_id:
+                _stat = _id_ser.map(_by_id).fillna(_stat)
+        # change = non-blank and not MAINTAIN (MAINTAIN is the no-change default)
+        _mask = _stat.ne("") & ~_stat.str.upper().isin(("MAINTAIN",))
+        _out = _src[_mask].copy()
+        _out["_ib_range_type"] = _stat[_mask]
+        return _out
+
+    def _ib_all_saved_edits() -> tuple:
+        """(status_map, actions_map), both keyed by rk tuple (DG Code, ID,
+        Item Name), read from EVERY saved range-sheet edit state on disk (the
+        same files the tabs save to on each edit). Per DG, the newest file
+        wins wholesale, so a status cleared back to MAINTAIN (popped from the
+        newest save) also disappears here. status_map keeps only real changes;
+        actions_map holds {planogram name: Delete/New} used for the
+        Check Range To-be Waterfall count."""
+        try:
+            _files = sorted(
+                (os.path.join(_RS_NEW_ROWS_DIR, _f)
+                 for _f in os.listdir(_RS_NEW_ROWS_DIR)
+                 if _f.startswith("edit_state_") and _f.endswith(".json")),
+                key=os.path.getmtime,
+            )
+        except Exception:
+            _files = []
+        _per_dg = {}
+        for _fp in _files:          # ascending mtime → later files overwrite
+            try:
+                with open(_fp, "r", encoding="utf-8") as _fh:
+                    _d = _json.load(_fh)
+            except Exception:
+                continue
+            _in_file = {}
+            for _e in (_d.get("status_overrides") or []):
+                _k = _e.get("key", [])
+                if not isinstance(_k, list) or not _k:
+                    continue
+                _rk = tuple(str(_x) for _x in _k)
+                _dg = _rk[0] if len(_rk) >= 3 else ""
+                _in_file.setdefault(_dg, {"st": {}, "act": {}})["st"][_rk] = (
+                    str(_e.get("value", "")))
+            # pog_edits first, pog_actions on top — same precedence as the grid
+            for _key in ("pog_edits", "pog_actions"):
+                for _e in (_d.get(_key) or []):
+                    _k = _e.get("key", [])
+                    _v = _e.get("value", {})
+                    if not isinstance(_k, list) or not _k or not isinstance(_v, dict):
+                        continue
+                    _rk = tuple(str(_x) for _x in _k)
+                    _dg = _rk[0] if len(_rk) >= 3 else ""
+                    _slot = _in_file.setdefault(_dg, {"st": {}, "act": {}})["act"]
+                    _slot.setdefault(_rk, {}).update(
+                        {str(_pc): str(_a) for _pc, _a in _v.items()})
+            for _dg, _m in _in_file.items():
+                _per_dg[_dg] = _m
+        _status, _actions = {}, {}
+        for _m in _per_dg.values():
+            _status.update(_m["st"])
+            _actions.update(_m["act"])
+        _status = {_k: _v.strip() for _k, _v in _status.items()
+                   if str(_v).strip() and str(_v).strip().upper() != "MAINTAIN"}
+        return _status, _actions
+
+    def _ib_collect_changes(_changes_map: dict, _actions_map: dict) -> pd.DataFrame:
+        """All rows whose Status marks a change, across the range-sheet tabs:
+        1. Non-SSPOG rows with a literal / session-edited Status;
+        2. saved Status changes from the HDET range-sheet tab — each row's
+           data is resolved by loading that DG's slice (parquet-cached) and
+           matching the ID; one row per changed item.
+        Each row carries its change value in _ib_range_type, and its
+        Check Range To-be Waterfall is computed exactly like the grid does:
+        distinct planograms the item appears in, −1 per Delete on a present
+        planogram, +1 per New on an absent one, 0 for DELETE ALL."""
+        _frames = []
+        _seen_ids = set()
+        _ns2 = _ib_nonsspog_changes()
+        if len(_ns2):
+            _frames.append(_ns2)
+            _id_c = next((c for c in _ns2.columns if _nca(c) == _nca("ID")), None)
+            if _id_c is not None:
+                _seen_ids.update(_ns2[_id_c].fillna("").astype(str).str.strip())
+        _by_dg = {}
+        for _rk, _sv in _changes_map.items():
+            _dg = _rk[0] if len(_rk) >= 3 else ""
+            _idv = str(_rk[1] if len(_rk) >= 2 else _rk[0]).strip()
+            _nm = _rk[2] if len(_rk) >= 3 else ""
+            if not _idv or _idv in _seen_ids:
+                continue
+            _by_dg.setdefault(_dg, {})[_idv] = (_sv, _nm, _rk)
+        for _dg, _idmap in _by_dg.items():
+            _rows = None
+            if _hdet_path and _dg:
+                try:
+                    _slice = load_large_file_by_dg(_hdet_path, _dg)
+                except Exception:
+                    _slice = None
+                if _slice is not None and not _slice.empty:
+                    _sid = next((c for c in _slice.columns
+                                 if _nca(c) == _nca("ID")), None)
+                    if _sid is not None:
+                        _ids_s = _slice[_sid].fillna("").astype(str).str.strip()
+                        _rows = (_slice[_ids_s.isin(set(_idmap))]
+                                 .drop_duplicates(subset=[_sid]).copy())
+                        if not _rows.empty:
+                            _row_ids = _rows[_sid].fillna("").astype(str).str.strip()
+                            _rows["_ib_range_type"] = _row_ids.map(
+                                {_k: _v[0] for _k, _v in _idmap.items()})
+                            # ── Check Range To-be Waterfall ──────────────────
+                            _pogc = next(
+                                (c for c in _slice.columns
+                                 if _nca(c) in ("planogramname", "pogname",
+                                                "name", "planogram")), None)
+                            if _pogc is not None:
+                                _pn = _slice[_pogc].fillna("").astype(str).str.strip()
+                                _ok = _pn.ne("") & ~_pn.str.lower().isin(("nan", "none"))
+                                _pogs_by_id = {}
+                                for _iv2, _pv2 in zip(_ids_s[_ok], _pn[_ok]):
+                                    _pogs_by_id.setdefault(_iv2, set()).add(_pv2)
+                                _wf = []
+                                for _iv2 in _row_ids:
+                                    _sv2, _, _rk2 = _idmap[_iv2]
+                                    if _sv2.strip().upper() == "DELETE ALL":
+                                        _wf.append(0)
+                                        continue
+                                    _base = _pogs_by_id.get(_iv2, set())
+                                    _cnt = len(_base)
+                                    for _pc2, _a2 in (_actions_map.get(_rk2) or {}).items():
+                                        _al = str(_a2).strip().lower()
+                                        if _al == "delete" and _pc2 in _base:
+                                            _cnt -= 1
+                                        elif _al == "new" and _pc2 not in _base:
+                                            _cnt += 1
+                                    _wf.append(max(0, _cnt))
+                                _rows["Check Range To-be Waterfall"] = _wf
+            if _rows is None or _rows.empty:
+                # HDET missing / ID not found → minimal row so the change shows
+                _rows = pd.DataFrame({
+                    "ID": list(_idmap.keys()),
+                    "Item Name": [_v[1] for _v in _idmap.values()],
+                    "Department": _dg,
+                    "_ib_range_type": [_v[0] for _v in _idmap.values()],
+                })
+            _frames.append(_rows)
+        if not _frames:
+            return _nonsspog_df.iloc[0:0]
+        return pd.concat(_frames, ignore_index=True, sort=False)
+
+    def _ib_load_default():
+        _st_map, _act_map = _ib_all_saved_edits()
+        # Show only the DG currently loaded on the main Range Sheet tab;
+        # with no DG picked there, show changes from every DG.
+        _main_dg = str(st.session_state.get("_ns_loaded_dg_code") or "").strip()
+        if _main_dg:
+            _st_map = {_k: _v for _k, _v in _st_map.items()
+                       if len(_k) >= 3
+                       and str(_k[0]).strip().upper() == _main_dg.upper()}
+        _chg = _ib_collect_changes(_st_map, _act_map)
+        st.session_state.ib_data = _build_ib(_chg)
+        st.session_state["_ib_source"] = (
+            f"Range sheet Status changes · DG={_main_dg} ({len(_chg):,} rows)"
+            if _main_dg else
+            f"Range sheet Status changes · all DGs ({len(_chg):,} rows)")
+
+    # ── Auto-generate from the range sheets; refresh when the pinned data OR
+    #    any saved/edited Status changes (both range-sheet tabs) ─────────────
+    _hdet_mtime = (f"{os.path.getmtime(_hdet_path):.0f}" if _hdet_path else None)
+    _ib_sig_status, _ib_sig_actions = _ib_all_saved_edits()
+    _ib_gen_sig = (
+        _db_sig,
+        str(st.session_state.get("_ns_loaded_dg_code") or "").strip().upper(),
+        tuple(sorted((str(_k), str(_v)) for _k, _v in _ib_sig_status.items())),
+        tuple(sorted((str(_k), str(sorted((_v or {}).items())))
+                     for _k, _v in _ib_sig_actions.items())),
+        tuple(sorted((str(_k), str(_v)) for _k, _v in
+                     (st.session_state.get("ns2_status_overrides", {}) or {}).items())),
+    )
+    if "ib_data" not in st.session_state or st.session_state.get("_ib_db_sig") != _ib_gen_sig:
+        _ib_load_default()
+        st.session_state["_ib_db_sig"] = _ib_gen_sig
 
     # ── HDET controls (DG filter + reset) ────────────────────────────────────
     if _hdet_path:
@@ -5792,9 +6038,7 @@ with _tab["5.1 ItembyStore"]:
             st.rerun()
     with _ib_c2:
         if st.button("↺ Reset", key="ib_clear", use_container_width=True):
-            st.session_state.ib_data = _cast_text_cols(
-                _fill_from_db(_IB_COLS, merged), _IB_TEXT_COLS)
-            st.session_state["_ib_source"] = "Rangesheet data"
+            _ib_load_default()
             st.session_state.pop("vw_submit_51", None)
             st.rerun()
     with _ib_c3:
