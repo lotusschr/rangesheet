@@ -6163,21 +6163,35 @@ with _tab["5.3 Upload_product_library"]:
         st.caption(f"✅ {len(st.session_state['vw_submit_53']):,} rows submitted to Report")
 with _tab["5.4 Upload to Citrix"]:
     _CITRIX_COLS = [
-        "POGName", "store_no", "store_name",
-        "POG_WIDTH", "POG_HEIGHT", "POG_DEPTH",
-        "SQM", "FP_status", "Capacity",
+        "DisplayGroupCode", "DG Description", "Event LiveDate", "Event Type",
+        "ItemNo", "Product Name", "StoreNo", "New", "Delete",
+        "Forecast Sale Unit_Hyper", "Forecast Sale Unit_Super",
+        "Forecast Sale Unit_Mini",
     ]
-    _CX_TEXT_COLS = ["POGName", "store_no", "store_name", "FP_status"]
+    # Numeric (editable) columns; everything else is text.
+    _CX_NUM_COLS = ["Forecast Sale Unit_Hyper", "Forecast Sale Unit_Super",
+                    "Forecast Sale Unit_Mini"]
+    _CX_TEXT_COLS = [c for c in _CITRIX_COLS if c not in _CX_NUM_COLS]
+    # Matching aliases (normalized): map each header to the equivalent
+    # column names found in the HDET slice / merged rangesheet data.
+    _CX_ALIASES = {
+        _nca("DisplayGroupCode"): ["displaygroup", "dgcode", "dg"],
+        _nca("DG Description"):   ["displaygroupdesc", "dgdes", "dgdescription", "dgname"],
+        _nca("ItemNo"):           ["id", "itemid"],
+        _nca("Product Name"):     ["itemname", "productdescription"],
+        _nca("StoreNo"):          ["storeno", "pgstorenumber", "storenumber"],
+    }
+    # Filled from the A5 event metadata (same values the range sheet shows).
+    _CX_META_COLS = {
+        "Event LiveDate": "event_live_date",
+        "Event Type":     "event_desc",
+    }
     _CITRIX_COL_CFG = {
-        "POGName":    st.column_config.TextColumn("POGName",    width="medium"),
-        "store_no":   st.column_config.TextColumn("store_no",   width="small"),
-        "store_name": st.column_config.TextColumn("store_name", width="medium"),
-        "POG_WIDTH":  st.column_config.NumberColumn("POG_WIDTH",  width="small", format="%.2f"),
-        "POG_HEIGHT": st.column_config.NumberColumn("POG_HEIGHT", width="small", format="%.2f"),
-        "POG_DEPTH":  st.column_config.NumberColumn("POG_DEPTH",  width="small", format="%.2f"),
-        "SQM":        st.column_config.NumberColumn("SQM",        width="small", format="%.2f"),
-        "FP_status":  st.column_config.TextColumn("FP_status",  width="small"),
-        "Capacity":   st.column_config.NumberColumn("Capacity",   width="small", format="%.0f"),
+        c: (st.column_config.NumberColumn(c, width="small", format="%.2f")
+            if c in _CX_NUM_COLS else
+            st.column_config.TextColumn(
+                c, width="medium" if c in ("Product Name", "DG Description") else "small"))
+        for c in _CITRIX_COLS
     }
 
     # ── Find HDET file ────────────────────────────────────────────────────────
@@ -6188,17 +6202,28 @@ with _tab["5.4 Upload to Citrix"]:
             _cx_hdet_path = _cxp
             break
 
+    def _cx_find(col, columns):
+        """Match col in columns by normalized name, then by its aliases."""
+        for _cand in [_nca(col)] + _CX_ALIASES.get(_nca(col), []):
+            _hit = next((c for c in columns if _nca(c) == _cand), None)
+            if _hit is not None:
+                return _hit
+        return None
+
     def _build_cx(hdet_df: pd.DataFrame) -> pd.DataFrame:
-        """Fill _CITRIX_COLS: Capacity (and any other matching cols) come from
-        HDET; remaining cols fall back to merged. Null if neither has them."""
-        _hmap = {col: next((c for c in hdet_df.columns if _nca(c) == _nca(col)), None)
-                 for col in _CITRIX_COLS}
-        _mmap = {col: next((c for c in merged.columns if _nca(c) == _nca(col)), None)
-                 for col in _CITRIX_COLS}
+        """Fill _CITRIX_COLS: matching/aliased cols come from HDET; Event
+        columns come from the A5 metadata; remaining cols fall back to
+        merged. Null if no source has them."""
+        _meta_cx = st.session_state.get("rangesheet_meta", {}) or {}
+        _hmap = {col: _cx_find(col, hdet_df.columns) for col in _CITRIX_COLS}
+        _mmap = {col: _cx_find(col, merged.columns) for col in _CITRIX_COLS}
         _hn = len(hdet_df)
         _out = {}
         for col in _CITRIX_COLS:
-            if _hmap[col] is not None:
+            if col in _CX_META_COLS:
+                _mv2 = str(_meta_cx.get(_CX_META_COLS[col], "") or "").strip()
+                _out[col] = pd.Series([_mv2 if _mv2 not in ("—",) else ""] * _hn)
+            elif _hmap[col] is not None:
                 _out[col] = hdet_df[_hmap[col]].reset_index(drop=True)
             elif _mmap[col] is not None:
                 _mv = merged[_mmap[col]].reset_index(drop=True)
@@ -6209,19 +6234,123 @@ with _tab["5.4 Upload to Citrix"]:
                         [_mv, pd.Series([None] * (_hn - len(_mv)))], ignore_index=True)
             else:
                 _out[col] = pd.Series([None] * _hn)
-        return _cast_text_cols(pd.DataFrame(_out), _CX_TEXT_COLS)
+        _df = pd.DataFrame(_out)
+        for _c in _CX_NUM_COLS:
+            if _c in _df.columns:
+                _df[_c] = pd.to_numeric(_df[_c], errors="coerce")
+        # StoreNo arrives numeric from HDET (5001.0) — show clean integers.
+        # Per-value so string IDs elsewhere keep their leading zeros.
+        def _cx_clean_store(_v):
+            if _v is None or (isinstance(_v, float) and pd.isna(_v)):
+                return ""
+            if isinstance(_v, float):
+                return str(int(_v)) if _v.is_integer() else str(_v)
+            _s = str(_v).strip()
+            if _s.endswith(".0") and _s[:-2].isdigit():
+                return _s[:-2]
+            return _s
+        if "StoreNo" in _df.columns:
+            _df["StoreNo"] = _df["StoreNo"].map(_cx_clean_store)
+        return _cast_text_cols(_df, _CX_TEXT_COLS)
 
-    # ── Auto-load on first access; never auto-clear ───────────────────────────
-    if "vw_citrix_data" not in st.session_state:
-        if _cx_hdet_path:
-            with st.spinner("Loading 5.4 data from HDET…"):
-                _cx_auto = read_large_file_head(_cx_hdet_path, n_rows=500)
-            st.session_state.vw_citrix_data = _build_cx(_cx_auto)
-            st.session_state["_cx_source"] = "HDET preview (500 rows)"
-        else:
-            st.session_state.vw_citrix_data = _cast_text_cols(
-                _fill_from_db(_CITRIX_COLS, merged), _CX_TEXT_COLS)
-            st.session_state["_cx_source"] = "Rangesheet data"
+    def _cx_collect_changes(_st_map: dict, _act_map: dict) -> pd.DataFrame:
+        """One row per changed item × changed planogram cell, from the Status
+        changes saved on the range sheet (same source as tab 5.1):
+        DisplayGroupCode/ItemNo/Product Name from the saved row key,
+        DG Description from the DG index, Event Type = Minor,
+        StoreNo = last 4 digits of the planogram whose cell was changed,
+        New = Y for NEWNEW / NEW SOME, otherwise Delete = Y.
+        DELETE ALL emits one row per planogram the item appears in."""
+        _idx = st.session_state.get("ns_dg_index")
+        if _idx is None and _cx_hdet_path:
+            try:
+                _idx = get_dg_index(_cx_hdet_path)
+                st.session_state["ns_dg_index"] = _idx
+            except Exception:
+                _idx = {}
+        _c2n = (_idx or {}).get("code_to_name", {})
+
+        def _last4(_pog):
+            _nums = _re.findall(r"\d+", str(_pog))
+            return _nums[-1][-4:] if _nums else ""
+
+        _rows = []
+        _slice_cache = {}
+        for _rk, _sv in sorted(_st_map.items()):
+            _dg = _rk[0] if len(_rk) >= 3 else ""
+            _idv = str(_rk[1] if len(_rk) >= 2 else _rk[0]).strip()
+            _nm = _rk[2] if len(_rk) >= 3 else ""
+            _su = str(_sv).strip().upper()
+            _new_y = "Y" if _su in ("NEWNEW", "NEW SOME") else ""
+            _del_y = "" if _new_y else "Y"
+            _pogs = [_pc for _pc, _a in (_act_map.get(_rk) or {}).items()
+                     if str(_a).strip().lower() in ("delete", "new")]
+            if not _pogs and _su == "DELETE ALL" and _cx_hdet_path and _dg:
+                # DELETE ALL clears every planogram the item appears in
+                if _dg not in _slice_cache:
+                    try:
+                        _slice_cache[_dg] = load_large_file_by_dg(_cx_hdet_path, _dg)
+                    except Exception:
+                        _slice_cache[_dg] = None
+                _sl = _slice_cache[_dg]
+                if _sl is not None and not _sl.empty:
+                    _sidc = next((c for c in _sl.columns
+                                  if _nca(c) == _nca("ID")), None)
+                    _pogc = next((c for c in _sl.columns
+                                  if _nca(c) in ("planogramname", "pogname",
+                                                 "name", "planogram")), None)
+                    if _sidc and _pogc:
+                        _m = _sl[_sidc].fillna("").astype(str).str.strip() == _idv
+                        _pogs = sorted(
+                            _pg for _pg in _sl.loc[_m, _pogc].fillna("")
+                            .astype(str).str.strip().unique()
+                            if _pg and _pg.lower() not in ("nan", "none"))
+            for _pg in (_pogs or [""]):
+                _rows.append({
+                    "DisplayGroupCode": _dg,
+                    "DG Description": _c2n.get(_dg, ""),
+                    "Event LiveDate": "",
+                    "Event Type": "Minor",
+                    "ItemNo": _idv,
+                    "Product Name": _nm,
+                    "StoreNo": _last4(_pg) if _pg else "",
+                    "New": _new_y,
+                    "Delete": _del_y,
+                })
+        _df = pd.DataFrame(_rows, columns=_CITRIX_COLS)
+        for _c in _CX_NUM_COLS:
+            _df[_c] = pd.to_numeric(_df[_c], errors="coerce")
+        return _cast_text_cols(_df, _CX_TEXT_COLS)
+
+    def _cx_load_default():
+        _st_map, _act_map = _ib_all_saved_edits()
+        # Show only the DG currently loaded on the main Range Sheet tab;
+        # with no DG picked there, show changes from every DG.
+        _main_dg = str(st.session_state.get("_ns_loaded_dg_code") or "").strip()
+        if _main_dg:
+            _st_map = {_k: _v for _k, _v in _st_map.items()
+                       if len(_k) >= 3
+                       and str(_k[0]).strip().upper() == _main_dg.upper()}
+        _chg = _cx_collect_changes(_st_map, _act_map)
+        st.session_state.vw_citrix_data = _chg
+        st.session_state["_cx_source"] = (
+            f"Range sheet Status changes · DG={_main_dg} ({len(_chg):,} rows)"
+            if _main_dg else
+            f"Range sheet Status changes · all DGs ({len(_chg):,} rows)")
+
+    # ── Auto-generate from the saved Status changes; refresh when the column
+    #    set, the main tab's DG, OR any saved status/action changes ───────────
+    _cx_st_sig, _cx_act_sig = _ib_all_saved_edits()
+    _cx_gen_sig = (
+        "|".join(_CITRIX_COLS),
+        str(st.session_state.get("_ns_loaded_dg_code") or "").strip().upper(),
+        tuple(sorted((str(_k), str(_v)) for _k, _v in _cx_st_sig.items())),
+        tuple(sorted((str(_k), str(sorted((_v or {}).items())))
+                     for _k, _v in _cx_act_sig.items())),
+    )
+    if "vw_citrix_data" not in st.session_state or st.session_state.get("_cx_gen_sig") != _cx_gen_sig:
+        _cx_load_default()
+        st.session_state["_cx_gen_sig"] = _cx_gen_sig
 
     # ── HDET controls ─────────────────────────────────────────────────────────
     if _cx_hdet_path:
@@ -6231,7 +6360,7 @@ with _tab["5.4 Upload to Citrix"]:
             f"<div style='font-size:11px;color:#2BBFA4;margin-bottom:6px;'>"
             f"Source: <strong>{_cx_hfname}</strong>"
             + (f" · {_cx_src}" if _cx_src else "")
-            + " · <em>Capacity</em> column pulled from HDET · enter DG to load filtered slice.</div>",
+            + " · enter DG to load filtered slice.</div>",
             unsafe_allow_html=True,
         )
         _cxh1, _cxh2, _cxh3, _ = st.columns([1.8, 1.4, 1.6, 3.2])
@@ -6278,9 +6407,7 @@ with _tab["5.4 Upload to Citrix"]:
             st.rerun()
     with _cx_c2:
         if st.button("↺ Reset", key="cx_clear", use_container_width=True):
-            st.session_state.vw_citrix_data = _cast_text_cols(
-                _fill_from_db(_CITRIX_COLS, merged), _CX_TEXT_COLS)
-            st.session_state["_cx_source"] = "Rangesheet data"
+            _cx_load_default()
             st.session_state.pop("vw_submit_54", None)
             st.rerun()
     with _cx_c3:
