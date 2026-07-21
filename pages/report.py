@@ -55,7 +55,7 @@ render_topbar("Report")
 
 merged = st.session_state.merged_df
 
-rt0, rt1 = st.tabs(["Execution Report", "Output from Rangesheet"])
+(rt0,) = st.tabs(["Execution Report"])
 
 _REPORT_PACKET_DIR = os.path.join(BASE_DIR, "rangesheet_data", ".autosave", "rangesheetreview")
 
@@ -994,7 +994,7 @@ with rt0:
     st.markdown(_report_html, unsafe_allow_html=True)
 
 
-with rt1:
+if False:  # "Output from Rangesheet" tab removed from UI
     st.markdown("""
 <div style="margin-bottom:24px;">
     <div style="font-size:18px;font-weight:700;color:#1A1A1A;margin-bottom:4px;">

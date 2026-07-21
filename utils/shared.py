@@ -51,7 +51,69 @@ def partner_logo_svg() -> str:
 </svg>
 """.strip()
 
+# A user-supplied logo image dropped in <repo>/assets/ (any file whose name
+# contains "logo") overrides the built-in SVG everywhere. The real image type is
+# detected from the file CONTENT, so a wrong/misleading extension still works.
+LOGO_ASSET_DIR = os.path.join(ROOT_DIR, "assets")
+_LOGO_IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".svg")
+
+def _sniff_image_mime(raw: bytes):
+    """Return the image MIME type from magic bytes / content, or None if the
+    bytes are not a recognized image. Extension-independent."""
+    if not raw:
+        return None
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if raw[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if raw[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "image/webp"
+    if len(raw) >= 12 and raw[4:8] == b"ftyp" and raw[8:12] in (b"avif", b"avis"):
+        return "image/avif"
+    # SVG / XML text (may start with a BOM, XML decl, comment, or <svg>)
+    _head = raw[:512].lstrip().lower()
+    if _head.startswith(b"\xef\xbb\xbf"):
+        _head = _head[3:].lstrip()
+    if _head.startswith(b"<?xml") or _head.startswith(b"<svg") or b"<svg" in raw[:1024].lower():
+        return "image/svg+xml"
+    return None
+
+def partner_logo_file_data_uri():
+    """Data URI for a user-supplied logo file in assets/ (any filename that
+    contains 'logo'), or None if none is a valid image. Real raster art
+    (png/jpg/webp/avif/gif) wins over svg; ties broken by largest file."""
+    try:
+        if not os.path.isdir(LOGO_ASSET_DIR):
+            return None
+        _cands = []
+        for _fn in os.listdir(LOGO_ASSET_DIR):
+            _low = _fn.lower()
+            if "logo" not in _low or not _low.endswith(_LOGO_IMG_EXTS):
+                continue
+            _p = os.path.join(LOGO_ASSET_DIR, _fn)
+            try:
+                with open(_p, "rb") as _fh:
+                    _raw = _fh.read()
+            except Exception:
+                continue
+            _mime = _sniff_image_mime(_raw)
+            if _mime:
+                _cands.append((_mime, len(_raw), _raw))
+        if not _cands:
+            return None
+        # Prefer real raster over svg, then the largest (highest-detail) file.
+        _cands.sort(key=lambda c: (c[0] == "image/svg+xml", -c[1]))
+        _mime, _sz, _raw = _cands[0]
+        return f"data:{_mime};base64," + base64.b64encode(_raw).decode("ascii")
+    except Exception:
+        return None
+
 def partner_logo_data_uri() -> str:
+    _file = partner_logo_file_data_uri()
+    if _file:
+        return _file
     return "data:image/svg+xml;base64," + base64.b64encode(partner_logo_svg().encode("utf-8")).decode("ascii")
 
 def partner_logo_png_bytes(width: int = 160, height: int = 48) -> bytes:
@@ -1314,7 +1376,7 @@ def render_sidebar(active: str = "landpage"):
                 font-size:22px;flex-shrink:0;">📄</div>
     <div>
         <div style="color:#fff;font-weight:700;font-size:16px;line-height:1.3;">RangeSheet</div>
-        <div style="color:rgba(255,255,255,0.4);font-size:11px;margin-top:1px;">Management Platform</div>
+        <div style="color:rgba(255,255,255,0.4);font-size:11px;margin-top:1px;">Management Intelligence</div>
     </div>
 </div>
 <div style="height:1px;background:rgba(255,255,255,0.08);margin:0 14px 10px;"></div>
@@ -1337,20 +1399,30 @@ def render_sidebar(active: str = "landpage"):
                              use_container_width=True):
                     st.switch_page(f"pages/{page_id}.py")
 
-        st.markdown("""
-<div style="height:1px;background:rgba(255,255,255,0.08);margin:10px 14px 8px;"></div>
-<div class="sidebar-lotus-logo-v2" aria-label="Lotus's logo">
-  <svg viewBox="0 0 160 48" role="img" xmlns="http://www.w3.org/2000/svg">
-    <title>Lotus's</title>
-    <text x="0" y="37" fill="#72D4CD" font-family="Arial, Helvetica, sans-serif"
-          font-size="36" font-weight="800" letter-spacing="-1.4">Lotus</text>
-    <path d="M113 4 C120 3 124 9 122 16 C120 22 115 27 113 36 C110 27 105 22 104 16 C103 9 107 5 113 4Z"
-          fill="#F6D975"/>
-    <text x="124" y="37" fill="#F6D975" font-family="Arial, Helvetica, sans-serif"
-          font-size="36" font-weight="800" letter-spacing="-1.4">s</text>
-  </svg>
-</div>
-""", unsafe_allow_html=True)
+        _sidebar_logo_file = partner_logo_file_data_uri()
+        if _sidebar_logo_file:
+            _sidebar_logo_inner = (
+                f'<img src="{_sidebar_logo_file}" alt="Lotus\'s logo" '
+                f'style="max-width:100%;height:auto;display:block;">'
+            )
+        else:
+            _sidebar_logo_inner = (
+                '<svg viewBox="0 0 160 48" role="img" xmlns="http://www.w3.org/2000/svg">'
+                '<title>Lotus\'s</title>'
+                '<text x="0" y="37" fill="#72D4CD" font-family="Arial, Helvetica, sans-serif" '
+                'font-size="36" font-weight="800" letter-spacing="-1.4">Lotus</text>'
+                '<path d="M113 4 C120 3 124 9 122 16 C120 22 115 27 113 36 C110 27 105 22 104 16 C103 9 107 5 113 4Z" '
+                'fill="#F6D975"/>'
+                '<text x="124" y="37" fill="#F6D975" font-family="Arial, Helvetica, sans-serif" '
+                'font-size="36" font-weight="800" letter-spacing="-1.4">s</text>'
+                '</svg>'
+            )
+        st.markdown(
+            '<div style="height:1px;background:rgba(255,255,255,0.08);margin:10px 14px 8px;"></div>'
+            '<div class="sidebar-lotus-logo-v2" aria-label="Lotus\'s logo">'
+            + _sidebar_logo_inner +
+            '</div>',
+            unsafe_allow_html=True)
 
 # ── Logout confirmation dialog ─────────────────────────────────────────────────
 @st.dialog("Confirm")
