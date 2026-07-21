@@ -942,11 +942,10 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     f'<tr><td style="padding:5px 10px;font-size:11px;font-style:italic;{_B}">% Impact</td>'
                     f'<td style="{_B}"></td>'
                     f'<td style="text-align:center;color:#00AA00;font-weight:700;font-size:11px;{_B}">0.0%</td></tr>')
-                st.markdown(f"""<div style="background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
-                  <div style="overflow-x:auto;"><table style="width:auto;border-collapse:collapse;font-size:11px;table-layout:fixed;">
+                st.markdown(f"""<div style="display:inline-block;width:max-content;max-width:100%;background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
+                  <div style="overflow-x:auto;"><table style="width:260px;border-collapse:collapse;font-size:11px;table-layout:fixed;">
                     <colgroup>
                       <col style="width:140px;"><col style="width:58px;"><col style="width:58px;">
-                      <col style="width:46px;"><col style="width:46px;"><col style="width:42px;"><col style="width:60px;">
                     </colgroup>
                     <thead>
                       <tr><th colspan="3" style="{_TH}text-align:left;min-width:130px;">Range architecture</th></tr>
@@ -984,8 +983,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     f'<td style="{_B}"></td><td style="{_B}"></td>'
                     f'<td style="text-align:center;color:#00AA00;font-weight:700;font-size:11px;{_B}{_BR}">{_pct_sale}</td>'
                     f'<td style="{_B}"></td></tr>')
-                st.markdown(f"""<div style="background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
-                  <div style="overflow-x:auto;"><table style="width:auto;border-collapse:collapse;font-size:11px;table-layout:fixed;">
+                st.markdown(f"""<div style="display:inline-block;width:max-content;max-width:100%;background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
+                  <div style="overflow-x:auto;"><table style="width:510px;border-collapse:collapse;font-size:11px;table-layout:fixed;">
                     <colgroup>
                       <col style="width:140px;"><col style="width:58px;"><col style="width:58px;">
                       <col style="width:46px;"><col style="width:46px;"><col style="width:42px;"><col style="width:60px;">
@@ -7622,15 +7621,10 @@ with _tab["5.1 ItembyStore"]:
                 [st.session_state.ib_data, _empty], ignore_index=True)
             st.rerun()
     with _ib_c2:
-<<<<<<< Updated upstream
-        if st.button("↺ Reset", key="ib_clear", use_container_width=True):
-            _ib_load_default()
-=======
         if st.button("↺ Reset", key="ib_clear", use_container_width=True, disabled=not _CAN_EDIT):
             st.session_state.ib_data = _cast_text_cols(
                 _fill_from_db(_IB_COLS, merged), _IB_TEXT_COLS)
             st.session_state["_ib_source"] = "Rangesheet data"
->>>>>>> Stashed changes
             st.session_state.pop("vw_submit_51", None)
             st.rerun()
     with _ib_c3:
@@ -8006,15 +8000,10 @@ with _tab["5.4 Upload to Citrix"]:
             )
             st.rerun()
     with _cx_c2:
-<<<<<<< Updated upstream
-        if st.button("↺ Reset", key="cx_clear", use_container_width=True):
-            _cx_load_default()
-=======
         if st.button("↺ Reset", key="cx_clear", use_container_width=True, disabled=not _CAN_EDIT):
             st.session_state.vw_citrix_data = _cast_text_cols(
                 _fill_from_db(_CITRIX_COLS, merged), _CX_TEXT_COLS)
             st.session_state["_cx_source"] = "Rangesheet data"
->>>>>>> Stashed changes
             st.session_state.pop("vw_submit_54", None)
             st.rerun()
     with _cx_c3:
@@ -8296,9 +8285,9 @@ if False:
 
         _TH = "padding:7px 8px;text-align:center;font-size:10px;font-weight:700;border:1px solid #B8B8B8;background:#D9D9D9;color:#333;"
         st.markdown(f"""
-<div style="background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
+<div style="display:inline-block;width:max-content;max-width:100%;background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
     <div style="overflow-x:auto;">
-        <table style="width:auto;border-collapse:collapse;font-size:11px;table-layout:fixed;">
+        <table style="width:510px;border-collapse:collapse;font-size:11px;table-layout:fixed;">
             <colgroup>
                 <col style="width:140px;"><col style="width:58px;"><col style="width:58px;">
                 <col style="width:46px;"><col style="width:46px;"><col style="width:42px;"><col style="width:60px;">
