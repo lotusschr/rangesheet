@@ -6,6 +6,7 @@ import streamlit as st
 import pandas as pd
 import zipfile
 import io
+import base64
 import html as _html
 import re as _re
 from datetime import datetime
@@ -14,6 +15,38 @@ from utils.shared import (
     find_col, df_to_xlsx_bytes, df_to_csv_bytes, add_audit,
     BASE_DIR,
 )
+
+def _report_partner_logo_svg() -> str:
+    return """
+<svg viewBox="0 0 160 48" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>Lotus's</title>
+  <g fill="none" fill-rule="evenodd">
+    <text x="0" y="37" fill="#72D4CD" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="800" letter-spacing="-1.4">Lotus</text>
+    <path d="M113 4 C120 3 124 9 122 16 C120 22 115 27 113 36 C110 27 105 22 104 16 C103 9 107 5 113 4Z" fill="#F6D975"/>
+    <text x="124" y="37" fill="#F6D975" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="800" letter-spacing="-1.4">s</text>
+  </g>
+</svg>
+""".strip()
+
+def _report_partner_logo_data_uri() -> str:
+    return "data:image/svg+xml;base64," + base64.b64encode(_report_partner_logo_svg().encode("utf-8")).decode("ascii")
+
+def _report_partner_logo_png_bytes(width: int = 160, height: int = 48) -> bytes:
+    from PIL import Image, ImageDraw, ImageFont
+    scale = width / 160
+    img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+    try:
+        f_lotus = ImageFont.truetype("arialbd.ttf", max(10, int(36 * scale)))
+    except Exception:
+        f_lotus = ImageFont.load_default()
+    yellow, teal = (246, 217, 117, 255), (114, 212, 205, 255)
+    draw.text((0, 4 * scale), "Lotus", fill=teal, font=f_lotus)
+    draw.polygon([(113 * scale, 4 * scale), (120 * scale, 3 * scale), (124 * scale, 9 * scale), (122 * scale, 16 * scale), (115 * scale, 27 * scale), (113 * scale, 36 * scale), (104 * scale, 16 * scale), (107 * scale, 5 * scale)], fill=yellow)
+    draw.text((124 * scale, 4 * scale), "s", fill=yellow, font=f_lotus)
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
 
 inject_css()
 init_session_state()
@@ -466,6 +499,7 @@ def _rows_html(headers, rows):
 
 def _render_a4_report(report: dict) -> str:
     sc = report["status_counts"]
+    logo_uri = _report_partner_logo_data_uri()
     top_pogs = sorted(report["planogram_impact"].items(), key=lambda kv: abs(kv[1]["net"]) + kv[1]["new"] + kv[1]["delete"], reverse=True)[:10]
     top_clusters = sorted(report["cluster_impact"].items(), key=lambda kv: abs(kv[1]["net"]) + kv[1]["new"] + kv[1]["delete"], reverse=True)[:10]
     def _sales_risk_reason(c: dict) -> str:
@@ -542,6 +576,7 @@ def _render_a4_report(report: dict) -> str:
     if item_rows:
         risk_page_html = f"""
 <div class="a4-page">
+<img class="a4-logo" src="{logo_uri}" alt="Lotus's">
 <div class="a4-page-no">Page 2</div>
 <div class="a4-kicker">Product Movement</div>
 <div class="a4-title">{_h(report['label'])}</div>
@@ -552,7 +587,7 @@ def _render_a4_report(report: dict) -> str:
     return f"""
 <style>
 .a4-shell{{display:block;margin-top:12px}}
-.a4-page{{width:794px;min-height:1123px;background:#fff;color:#1A1A1A;border:1px solid #DDD;box-shadow:0 10px 28px rgba(0,0,0,.10);padding:34px 38px;box-sizing:border-box;font-family:Arial,sans-serif;margin:0 0 24px 0;page-break-after:always}}
+.a4-page{{position:relative;width:794px;min-height:1123px;background:#fff;color:#1A1A1A;border:1px solid #DDD;box-shadow:0 10px 28px rgba(0,0,0,.10);padding:34px 38px;box-sizing:border-box;font-family:Arial,sans-serif;margin:0 0 24px 0;page-break-after:always}}
 .a4-page:last-child{{page-break-after:auto}}
 .a4-kicker{{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#2BBFA4;font-weight:800}}
 .a4-title{{font-size:25px;font-weight:800;margin:6px 0 2px}}
@@ -570,11 +605,13 @@ def _render_a4_report(report: dict) -> str:
 .a4-table td{{padding:5px 6px;border:1px solid #E1E4E6;vertical-align:top}}
 .muted{{color:#999;font-style:italic}}
 .badge{{display:inline-block;padding:5px 8px;border-radius:999px;background:#EAF8F4;color:#178D7A;font-weight:700;font-size:11px}}
-.a4-page-no{{float:right;color:#999;font-size:11px}}
+.a4-logo{{position:absolute;right:38px;top:18px;width:78px;height:auto}}
+.a4-page-no{{position:absolute;right:38px;top:54px;color:#999;font-size:11px}}
 @media print{{.a4-page{{box-shadow:none;border:none;width:210mm;min-height:297mm;margin:0;page-break-after:always}}}}
 </style>
 <div class="a4-shell">
 <div class="a4-page">
+<img class="a4-logo" src="{logo_uri}" alt="Lotus's">
 <div class="a4-page-no">Page 1</div>
 <div class="a4-kicker">Range Change Management Report</div>
 <div class="a4-title">{_h(report['label'])}</div>
@@ -597,6 +634,7 @@ def _render_a4_report(report: dict) -> str:
 def _render_portfolio_summary(reports: list[dict], full_df: pd.DataFrame | None = None) -> str:
     if not reports:
         return ""
+    logo_uri = _report_partner_logo_data_uri()
     submitted_as_is = sum(int(r.get("total_sku", 0) or 0) for r in reports)
     total_as_is = _total_sku_all_dg(full_df)
     if total_as_is <= 0:
@@ -620,7 +658,7 @@ def _render_portfolio_summary(reports: list[dict], full_df: pd.DataFrame | None 
     return f"""
 <style>
 .a4-shell{{display:block;margin-top:12px}}
-.a4-page{{width:794px;min-height:1123px;background:#fff;color:#1A1A1A;border:1px solid #DDD;box-shadow:0 10px 28px rgba(0,0,0,.10);padding:34px 38px;box-sizing:border-box;font-family:Arial,sans-serif;margin:0 0 24px 0;page-break-after:always}}
+.a4-page{{position:relative;width:794px;min-height:1123px;background:#fff;color:#1A1A1A;border:1px solid #DDD;box-shadow:0 10px 28px rgba(0,0,0,.10);padding:34px 38px;box-sizing:border-box;font-family:Arial,sans-serif;margin:0 0 24px 0;page-break-after:always}}
 .a4-kicker{{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#2BBFA4;font-weight:800}}
 .a4-title{{font-size:25px;font-weight:800;margin:6px 0 2px}}
 .a4-sub{{font-size:12px;color:#777;margin-bottom:20px}}
@@ -632,11 +670,13 @@ def _render_portfolio_summary(reports: list[dict], full_df: pd.DataFrame | None 
 .a4-table{{width:100%;border-collapse:collapse;font-size:11px;margin-top:8px}}
 .a4-table th{{background:#F0F2F2;text-align:left;padding:8px;border:1px solid #D8DDE0}}
 .a4-table td{{padding:7px 8px;border:1px solid #E1E4E6;vertical-align:top}}
-.a4-page-no{{float:right;color:#999;font-size:11px}}
+.a4-logo{{position:absolute;right:38px;top:18px;width:78px;height:auto}}
+.a4-page-no{{position:absolute;right:38px;top:54px;color:#999;font-size:11px}}
 @media print{{.a4-page{{box-shadow:none;border:none;width:210mm;min-height:297mm;margin:0;page-break-after:always}}}}
 </style>
 <div class="a4-shell">
 <div class="a4-page">
+<img class="a4-logo" src="{logo_uri}" alt="Lotus's">
 <div class="a4-page-no">Portfolio Summary</div>
 <div class="a4-kicker">Range Change Portfolio</div>
 <div class="a4-title">Submitted DG Summary</div>
@@ -688,9 +728,15 @@ def _reports_to_pdf_bytes(reports: list[dict], full_df: pd.DataFrame | None = No
         font_b = font_h = font_s = font
 
     pages = []
+    try:
+        logo_img = Image.open(io.BytesIO(_report_partner_logo_png_bytes(118, 36))).convert("RGBA")
+    except Exception:
+        logo_img = None
 
     def new_page():
         img = Image.new("RGB", (page_w, page_h), "white")
+        if logo_img is not None:
+            img.paste(logo_img, (page_w - margin - logo_img.width, 28), logo_img)
         return img, ImageDraw.Draw(img), margin
 
     def put(draw, y, text, use_font=None, fill=(25, 25, 25), max_width=None):

@@ -2,6 +2,10 @@
 Run: streamlit run APP.py
 """
 import streamlit as st
+import importlib
+import utils.shared as shared
+
+shared = importlib.reload(shared)
 
 st.set_page_config(
     page_title="RangeSheet",
@@ -9,6 +13,15 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+shared.inject_css()
+_render_login_page = getattr(shared, "render_login_page", None)
+if _render_login_page is None:
+    st.error("Login module is still loading. Please refresh the page once.")
+    st.stop()
+if not _render_login_page():
+    st.stop()
+shared.init_session_state()
 
 pg = st.navigation(
     [

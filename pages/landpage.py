@@ -8,12 +8,15 @@ from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
     APP_CONFIG, read_uploaded_file, auto_merge, save_merged_snapshot,
     clear_merged_snapshot, save_file, add_audit, current_user, is_admin,
+    can_manage_files,
     load_admin_manifest, save_admin_manifest, remove_admin_file,
     bump_shared_db, load_admin_file_df,
 )
 
 inject_css()
 init_session_state()
+if not can_manage_files():
+    st.switch_page("pages/rangesheetreview.py")
 
 if "uploader_key"     not in st.session_state: st.session_state.uploader_key     = 0
 if "dup_pending"      not in st.session_state: st.session_state.dup_pending       = []

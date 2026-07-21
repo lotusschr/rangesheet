@@ -1,11 +1,13 @@
 """Shared utilities, CSS, auth, data processing — RangeSheet."""
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import re as _re
 import os
 import io
 import json
+import base64
 from datetime import datetime
 from difflib import SequenceMatcher
 
@@ -33,6 +35,62 @@ STATUS_COLORS = {
     "DELETE ALL":      {"bg": "#FFEBEE", "c": "#B71C1C"},
     "NEW DELETE SOME": {"bg": "#FFF3E0", "c": "#E65100"},
 }
+
+def partner_logo_svg() -> str:
+    return """
+<svg viewBox="0 0 160 48" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>Lotus's</title>
+  <g fill="none" fill-rule="evenodd">
+    <text x="0" y="37" fill="#72D4CD" font-family="Arial, Helvetica, sans-serif"
+          font-size="36" font-weight="800" letter-spacing="-1.4">Lotus</text>
+    <path d="M113 4 C120 3 124 9 122 16 C120 22 115 27 113 36 C110 27 105 22 104 16 C103 9 107 5 113 4Z"
+          fill="#F6D975"/>
+    <text x="124" y="37" fill="#F6D975" font-family="Arial, Helvetica, sans-serif"
+          font-size="36" font-weight="800" letter-spacing="-1.4">s</text>
+  </g>
+</svg>
+""".strip()
+
+def partner_logo_data_uri() -> str:
+    return "data:image/svg+xml;base64," + base64.b64encode(partner_logo_svg().encode("utf-8")).decode("ascii")
+
+def partner_logo_png_bytes(width: int = 160, height: int = 48) -> bytes:
+    from PIL import Image, ImageDraw, ImageFont
+
+    scale = width / 160
+    img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+    try:
+        f_lotus = ImageFont.truetype("arialbd.ttf", max(10, int(36 * scale)))
+    except Exception:
+        f_lotus = ImageFont.load_default()
+    yellow = (246, 217, 117, 255)
+    teal = (114, 212, 205, 255)
+    draw.text((0, 4 * scale), "Lotus", fill=teal, font=f_lotus)
+    drop = [
+        (113 * scale, 4 * scale), (120 * scale, 3 * scale), (124 * scale, 9 * scale),
+        (122 * scale, 16 * scale), (115 * scale, 27 * scale), (113 * scale, 36 * scale),
+        (104 * scale, 16 * scale), (107 * scale, 5 * scale),
+    ]
+    draw.polygon(drop, fill=yellow)
+    draw.text((124 * scale, 4 * scale), "s", fill=yellow, font=f_lotus)
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
+
+def add_partner_logo_to_worksheet(ws, anchor_cell: str | None = None, width: int = 82, height: int = 25) -> None:
+    try:
+        from openpyxl.drawing.image import Image as XLImage
+        from openpyxl.utils import get_column_letter
+        logo = XLImage(io.BytesIO(partner_logo_png_bytes(width, height)))
+        logo.width = width
+        logo.height = height
+        if not anchor_cell:
+            anchor_col = max(1, min(max(ws.max_column - 1, 1), 12))
+            anchor_cell = f"{get_column_letter(anchor_col)}1"
+        ws.add_image(logo, anchor_cell)
+    except Exception:
+        pass
 
 NAV_ITEMS = [
     ("landpage",  "🗂️", "My Files"),
@@ -150,6 +208,30 @@ def create_review_df(df, mapping):
     return review_df
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
+DEMO_USERS = {
+    "admin": {
+        "password": "admin123",
+        "employee_id": "TH100001",
+        "name": "Lucas Martin",
+        "role": "admin",
+        "title": "System Administrator",
+    },
+    "editor": {
+        "password": "editor123",
+        "employee_id": "TH100002",
+        "name": "Daniel Cheng",
+        "role": "editor",
+        "title": "Range Editor",
+    },
+    "viewer": {
+        "password": "viewer123",
+        "employee_id": "TH100003",
+        "name": "Jame Wilson",
+        "role": "viewer",
+        "title": "Business Viewer",
+    },
+}
+
 def current_user() -> dict:
     return st.session_state.get("auth_user", {
         "employee_id": "TH111111", "name": "Developer",
@@ -159,8 +241,640 @@ def current_user() -> dict:
 def is_admin() -> bool:
     return current_user().get("role") == "admin"
 
+def user_role() -> str:
+    return str(current_user().get("role") or "viewer").lower()
+
+def is_editor() -> bool:
+    return user_role() == "editor"
+
+def is_viewer() -> bool:
+    return user_role() == "viewer"
+
+def can_edit() -> bool:
+    return user_role() in ("admin", "editor")
+
+def can_manage_files() -> bool:
+    return is_admin()
+
+def can_view_audit() -> bool:
+    return is_admin()
+
+def can_submit_report() -> bool:
+    return can_edit()
+
+def access_denied(message: str = "You do not have permission to access this page.") -> None:
+    st.warning(message)
+    st.stop()
+
+def _nav_visible(page_id: str) -> bool:
+    if page_id == "audit":
+        return can_view_audit()
+    if page_id == "landpage":
+        return can_manage_files()
+    return True
+
+def ensure_page_access(page_id: str) -> None:
+    if not _nav_visible(page_id):
+        access_denied("This page is restricted for your role.")
+
 def logout():
+    try:
+        if st.session_state.get("auth_user"):
+            add_audit("Logout", f"{current_user().get('name', '')} signed out")
+    except Exception:
+        pass
     st.session_state.auth_user = None
+
+def authenticate(username: str, password: str) -> tuple[bool, str]:
+    uname = str(username or "").strip().lower()
+    pwd = str(password or "")
+    user = DEMO_USERS.get(uname)
+    if not user or user.get("password") != pwd:
+        return False, "Invalid username or password."
+    st.session_state.auth_user = {
+        "username": uname,
+        "employee_id": user["employee_id"],
+        "name": user["name"],
+        "role": user["role"],
+        "title": user["title"],
+        "login_time": datetime.now().strftime("%H:%M"),
+    }
+    add_audit("Login", f"{user['name']} signed in as {user['role'].upper()}")
+    return True, ""
+
+def render_login_page() -> bool:
+    if st.session_state.get("auth_user"):
+        return True
+
+    st.markdown("""
+<style>
+div[data-testid="stMainBlockContainer"] {
+    padding: 0 !important;
+    background:#fff !important;
+}
+.login-bg-right {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 50vw;
+    height: 100vh;
+    background: #10B98F;
+    z-index: 0;
+    overflow: hidden;
+}
+.login-bg-right:before {
+    content:"";
+    position:absolute;
+    right:-145px;
+    bottom:-145px;
+    width:370px;
+    height:370px;
+    border:1.5px solid rgba(255,255,255,.35);
+    border-radius:50%;
+}
+.login-bg-right:after {
+    content:"";
+    position:absolute;
+    right:-95px;
+    bottom:-95px;
+    width:300px;
+    height:300px;
+    border:1.5px solid rgba(255,255,255,.48);
+    border-radius:50%;
+}
+div[data-testid="stHorizontalBlock"]:has(.login-left-panel) {
+    width: 100vw !important;
+    min-height: 100vh !important;
+    margin: 0 !important;
+    background: #fff !important;
+    border-radius: 0 !important;
+    overflow: hidden !important;
+    box-shadow: none !important;
+    gap: 0 !important;
+}
+div[data-testid="stHorizontalBlock"]:has(.login-left-panel) > div {
+    padding: 0 !important;
+}
+div[data-testid="column"]:has(.login-left-panel) {
+    background: #fff !important;
+    min-height: 100vh !important;
+}
+div[data-testid="column"]:has(.login-right-anchor) {
+    background: #10B98F !important;
+    min-height: 100vh !important;
+    padding: 0 !important;
+    position: relative !important;
+    display:flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+}
+div[data-testid="column"]:has(.login-right-anchor)::after {
+    content: "";
+    position: absolute;
+    right: -95px;
+    bottom: -95px;
+    width: 300px;
+    height: 300px;
+    border: 1.5px solid rgba(255,255,255,.48);
+    border-radius: 50%;
+}
+div[data-testid="column"]:has(.login-right-anchor)::before {
+    content: "";
+    position: absolute;
+    right: -145px;
+    bottom: -145px;
+    width: 370px;
+    height: 370px;
+    border: 1.5px solid rgba(255,255,255,.38);
+    border-radius: 50%;
+}
+.login-left-panel {
+    height: 100vh;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.login-logo { position:absolute; top:34px; left:42px; width:122px; }
+.login-visual {
+    width: 420px;
+    height: 330px;
+    position: relative;
+}
+.login-visual .stat-card {
+    position:absolute; left:38px; top:38px; width:230px; height:150px;
+    background:#E5F8F4; border:4px solid #B5ECE1; border-radius:18px;
+    box-shadow:0 18px 40px rgba(19,184,143,.18);
+}
+.login-visual .stat-card:before {
+    content:"SKU Movement"; position:absolute; left:22px; top:18px;
+    color:#108B70; font-size:16px; font-weight:800;
+}
+.login-visual .bar { position:absolute; bottom:24px; width:24px; background:#13B88F; border-radius:7px 7px 0 0; }
+.login-visual .b1 { left:34px; height:42px; }
+.login-visual .b2 { left:76px; height:72px; }
+.login-visual .b3 { left:118px; height:54px; }
+.login-visual .b4 { left:160px; height:88px; }
+.login-visual .item-card {
+    position:absolute; right:26px; top:108px; width:170px; height:126px;
+    background:#fff; border:4px solid #D5F4ED; border-radius:18px;
+    box-shadow:0 18px 40px rgba(15,23,42,.10);
+}
+.login-visual .item-card:before {
+    content:"Item Review"; position:absolute; left:18px; top:16px;
+    color:#13B88F; font-size:15px; font-weight:800;
+}
+.login-visual .item-line { position:absolute; left:18px; right:18px; height:10px; background:#E5F8F4; border-radius:99px; }
+.login-visual .l1 { top:52px; } .login-visual .l2 { top:76px; } .login-visual .l3 { top:100px; width:88px; }
+.login-visual .delta {
+    position:absolute; left:92px; bottom:38px; width:118px; height:76px;
+    background:#13B88F; border-radius:18px; color:#fff; display:flex;
+    align-items:center; justify-content:center; font-size:30px; font-weight:900;
+}
+.login-visual .delta:after { content:"+ / -"; }
+.login-right-anchor h1 {
+    color: #2B2F33 !important;
+    font-size: 24px !important;
+    font-weight: 800 !important;
+    margin: 0 0 10px !important;
+}
+.login-right-anchor p {
+    color: #6B7280 !important;
+    font-size: 13px !important;
+    margin: 0 0 18px !important;
+}
+div[data-testid="column"]:has(.login-right-anchor) div[data-testid="stForm"] {
+    background:#fff !important;
+    padding: 30px 28px 24px !important;
+    border-radius: 8px !important;
+    box-shadow: 0 18px 40px rgba(0,0,0,.16) !important;
+    position: relative !important;
+    z-index: 2 !important;
+    width: min(330px, 78vw) !important;
+}
+div[data-testid="column"]:has(.login-right-anchor) [data-testid="stTextInput"] label {
+    display:none !important;
+}
+div[data-testid="column"]:has(.login-right-anchor) [data-testid="stTextInput"] input {
+    border-radius:999px !important;
+    min-height:40px !important;
+    border:1px solid #D9DEE4 !important;
+    padding-left:18px !important;
+    background:#fff !important;
+    font-size:12px !important;
+}
+div[data-testid="column"]:has(.login-right-anchor) [data-testid="stFormSubmitButton"] button {
+    border-radius:999px !important;
+    min-height:40px !important;
+    border:0 !important;
+    background:#0FAE84 !important;
+    color:#fff !important;
+    font-weight:800 !important;
+}
+.login-forgot {
+    color:#6B7280;
+    font-size:11px;
+    margin-top:10px;
+    margin-left:4px;
+    position:relative;
+    z-index:3;
+}
+@media (max-width: 860px) {
+    div[data-testid="stHorizontalBlock"]:has(.login-left-panel) { margin-top:20px !important; }
+    div[data-testid="column"]:has(.login-right-anchor) { padding: 36px 28px !important; }
+}
+section[data-testid="stSidebar"] { display:none !important; }
+div[data-testid="stSidebarCollapsedControl"] { display:none !important; }
+div[data-testid="stAppViewContainer"] > section,
+div[data-testid="stAppViewContainer"] > div {
+    margin-left:0 !important;
+}
+div[data-testid="stMainBlockContainer"] {
+    height:100vh !important;
+    overflow:hidden !important;
+}
+div[data-testid="stHorizontalBlock"] {
+    width:100vw !important;
+    height:100vh !important;
+    min-height:100vh !important;
+    margin:0 !important;
+    gap:0 !important;
+    background:transparent !important;
+    position:relative !important;
+    z-index:1 !important;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+    padding:0 !important;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child {
+    min-height:100vh !important;
+    background:#fff !important;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child {
+    min-height:100vh !important;
+    background:transparent !important;
+    display:flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+    position:relative !important;
+    overflow:hidden !important;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child::before {
+    content:none !important;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child::after {
+    content:none !important;
+}
+div[data-testid="stForm"] {
+    width:min(330px, 78vw) !important;
+    background:#fff !important;
+    padding:30px 28px 24px !important;
+    border-radius:8px !important;
+    box-shadow:0 18px 40px rgba(0,0,0,.16) !important;
+    position:relative !important;
+    z-index:3 !important;
+    margin:0 auto !important;
+}
+div[data-testid="stForm"] [data-testid="stTextInput"] label,
+div[data-testid="stForm"] [data-testid="stTextInput"] label p {
+    display:none !important;
+}
+div[data-testid="stForm"] [data-testid="stTextInput"] input {
+    border-radius:999px !important;
+    min-height:40px !important;
+    border:1px solid #D9DEE4 !important;
+    padding-left:18px !important;
+    background:#fff !important;
+    font-size:12px !important;
+}
+div[data-testid="stForm"] [data-testid="stFormSubmitButton"] button {
+    border-radius:999px !important;
+    min-height:40px !important;
+    border:0 !important;
+    background:#0FAE84 !important;
+    color:#fff !important;
+    font-weight:800 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+    st.markdown('<div class="login-bg-right" aria-hidden="true"></div>', unsafe_allow_html=True)
+
+    left, right = st.columns(2, gap="small")
+    with left:
+        st.markdown(f"""
+<div class="login-left-panel">
+  <img class="login-logo" src="{partner_logo_data_uri()}" alt="Lotus logo">
+  <div class="login-visual" aria-hidden="true">
+    <div class="stat-card">
+      <div class="bar b1"></div><div class="bar b2"></div><div class="bar b3"></div><div class="bar b4"></div>
+    </div>
+    <div class="item-card">
+      <div class="item-line l1"></div><div class="item-line l2"></div><div class="item-line l3"></div>
+    </div>
+    <div class="delta"></div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    with right:
+        st.markdown('<div class="login-right-anchor"></div>', unsafe_allow_html=True)
+
+        with st.form("login_form", clear_on_submit=False):
+            st.markdown("""
+<div class="login-right-anchor">
+  <h1>Hello!</h1>
+  <p>Sign in to get started</p>
+</div>
+""", unsafe_allow_html=True)
+            username = st.text_input("Username", placeholder="Username")
+            password = st.text_input("Password", type="password", placeholder="Password")
+            submitted = st.form_submit_button("Login", use_container_width=True)
+            st.markdown('<div class="login-forgot">Forgot Password</div>', unsafe_allow_html=True)
+            if submitted:
+                ok, msg = authenticate(username, password)
+                if ok:
+                    st.rerun()
+                else:
+                    st.error(msg)
+    return False
+
+def render_login_page() -> bool:
+    if st.session_state.get("auth_user"):
+        return True
+
+    st.markdown("""
+<style>
+section[data-testid="stSidebar"],
+div[data-testid="stSidebarCollapsedControl"] {
+    display:none !important;
+}
+div[data-testid="stAppViewContainer"] {
+    margin-left:0 !important;
+}
+div[data-testid="stMainBlockContainer"] {
+    padding:0 !important;
+    height:100vh !important;
+    overflow:hidden !important;
+    background:#fff !important;
+}
+.login-split-right {
+    position:fixed;
+    top:0;
+    right:0;
+    width:50vw;
+    height:100vh;
+    background:#10B98F;
+    z-index:0;
+    overflow:hidden;
+}
+.login-split-right:before {
+    content:"";
+    position:absolute;
+    right:-145px;
+    bottom:-145px;
+    width:370px;
+    height:370px;
+    border:1.5px solid rgba(255,255,255,.35);
+    border-radius:50%;
+}
+.login-split-right:after {
+    content:"";
+    position:absolute;
+    right:-95px;
+    bottom:-95px;
+    width:300px;
+    height:300px;
+    border:1.5px solid rgba(255,255,255,.48);
+    border-radius:50%;
+}
+.login-left-stage {
+    position:fixed;
+    top:0;
+    left:0;
+    width:50vw;
+    height:100vh;
+    background:#fff;
+    z-index:1;
+}
+.login-left-logo {
+    position:absolute;
+    top:52px;
+    left:64px;
+    width:132px;
+}
+.login-visual {
+    position:absolute;
+    left:50%;
+    top:50%;
+    transform:translate(-50%, -50%);
+    width:420px;
+    height:330px;
+}
+.login-visual .stat-card {
+    position:absolute;
+    left:38px;
+    top:38px;
+    width:230px;
+    height:150px;
+    background:#E5F8F4;
+    border:4px solid #B5ECE1;
+    border-radius:18px;
+    box-shadow:0 18px 40px rgba(19,184,143,.18);
+}
+.login-visual .stat-card:before {
+    content:"SKU Movement";
+    position:absolute;
+    left:22px;
+    top:18px;
+    color:#108B70;
+    font-size:16px;
+    font-weight:800;
+}
+.login-visual .bar {
+    position:absolute;
+    bottom:24px;
+    width:24px;
+    background:#13B88F;
+    border-radius:7px 7px 0 0;
+}
+.login-visual .b1 { left:34px; height:42px; }
+.login-visual .b2 { left:76px; height:72px; }
+.login-visual .b3 { left:118px; height:54px; }
+.login-visual .b4 { left:160px; height:88px; }
+.login-visual .item-card {
+    position:absolute;
+    right:26px;
+    top:108px;
+    width:170px;
+    height:126px;
+    background:#fff;
+    border:4px solid #D5F4ED;
+    border-radius:18px;
+    box-shadow:0 18px 40px rgba(15,23,42,.10);
+}
+.login-visual .item-card:before {
+    content:"Item Review";
+    position:absolute;
+    left:18px;
+    top:16px;
+    color:#13B88F;
+    font-size:15px;
+    font-weight:800;
+}
+.login-visual .item-line {
+    position:absolute;
+    left:18px;
+    right:18px;
+    height:10px;
+    background:#E5F8F4;
+    border-radius:99px;
+}
+.login-visual .l1 { top:52px; }
+.login-visual .l2 { top:76px; }
+.login-visual .l3 { top:100px; width:88px; }
+.login-visual .delta {
+    position:absolute;
+    left:92px;
+    bottom:38px;
+    width:118px;
+    height:76px;
+    background:#13B88F;
+    border-radius:18px;
+    color:#fff;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:30px;
+    font-weight:900;
+}
+.login-visual .delta:after { content:"+ / -"; }
+div[data-testid="stForm"] {
+    position:fixed !important;
+    left:75vw !important;
+    top:50vh !important;
+    transform:translate(-50%, -50%) !important;
+    width:430px !important;
+    max-width:430px !important;
+    height:auto !important;
+    min-height:0 !important;
+    box-sizing:border-box !important;
+    background:#fff !important;
+    padding:42px 38px 34px !important;
+    border-radius:10px !important;
+    box-shadow:0 22px 48px rgba(0,0,0,.18) !important;
+    z-index:5 !important;
+}
+div[data-testid="stForm"] > div {
+    height:auto !important;
+    min-height:0 !important;
+}
+div[data-testid="stForm"] [data-testid="stVerticalBlock"] {
+    gap:16px !important;
+}
+.login-card-title h1 {
+    color:#2B2F33 !important;
+    font-size:32px !important;
+    font-weight:800 !important;
+    margin:0 0 14px !important;
+}
+.login-card-title p {
+    color:#6B7280 !important;
+    font-size:15px !important;
+    margin:0 0 28px !important;
+}
+div[data-testid="stForm"] [data-testid="stTextInput"] label,
+div[data-testid="stForm"] [data-testid="stTextInput"] label p {
+    display:none !important;
+}
+div[data-testid="stForm"] [data-testid="stTextInput"] input {
+    border-radius:999px !important;
+    min-height:50px !important;
+    border:1px solid #D9DEE4 !important;
+    padding-left:22px !important;
+    background:#fff !important;
+    font-size:14px !important;
+}
+div[data-testid="stForm"] [data-testid="stFormSubmitButton"] button {
+    border-radius:999px !important;
+    min-height:50px !important;
+    border:0 !important;
+    background:#0FAE84 !important;
+    color:#fff !important;
+    font-size:14px !important;
+    font-weight:800 !important;
+}
+.login-forgot {
+    color:#6B7280;
+    font-size:12px;
+    margin-top:16px;
+}
+@media (max-width: 900px) {
+    .login-split-right { width:100vw; }
+    .login-left-stage { display:none; }
+    div[data-testid="stForm"] {
+        left:50vw !important;
+        width:min(430px, 86vw) !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+    st.markdown(f"""
+<div class="login-left-stage">
+  <img class="login-left-logo" src="{partner_logo_data_uri()}" alt="Lotus logo">
+  <div class="login-visual" aria-hidden="true">
+    <div class="stat-card">
+      <div class="bar b1"></div><div class="bar b2"></div><div class="bar b3"></div><div class="bar b4"></div>
+    </div>
+    <div class="item-card">
+      <div class="item-line l1"></div><div class="item-line l2"></div><div class="item-line l3"></div>
+    </div>
+    <div class="delta"></div>
+  </div>
+</div>
+<div class="login-split-right" aria-hidden="true"></div>
+""", unsafe_allow_html=True)
+
+    with st.form("login_form", clear_on_submit=False):
+        st.markdown("""
+<div class="login-card-title">
+  <h1>Hello!</h1>
+  <p>Sign in to get started</p>
+</div>
+""", unsafe_allow_html=True)
+        username = st.text_input("Username", placeholder="Username", key="login_username")
+        password = st.text_input("Password", type="password", placeholder="Password", key="login_password")
+        components.html("""
+<script>
+(function(){
+  const doc = window.parent.document;
+  const inputs = Array.from(doc.querySelectorAll('input'));
+  const username = inputs.find(i => (i.placeholder || '').toLowerCase() === 'username');
+  const password = inputs.find(i => (i.placeholder || '').toLowerCase() === 'password');
+  if (username) {
+    username.setAttribute('name', 'rangesheet_login_username');
+    username.setAttribute('id', 'rangesheet_login_username');
+    username.setAttribute('autocomplete', 'section-rangesheet-login username');
+    username.setAttribute('autocapitalize', 'none');
+    username.setAttribute('spellcheck', 'false');
+  }
+  if (password) {
+    password.setAttribute('name', 'rangesheet_login_password');
+    password.setAttribute('id', 'rangesheet_login_password');
+    password.setAttribute('autocomplete', 'section-rangesheet-login current-password');
+    password.setAttribute('spellcheck', 'false');
+  }
+})();
+</script>
+""", height=0)
+        submitted = st.form_submit_button("Login", use_container_width=True)
+        st.markdown('<div class="login-forgot">Forgot Password</div>', unsafe_allow_html=True)
+        if submitted:
+            ok, msg = authenticate(username, password)
+            if ok:
+                st.rerun()
+            else:
+                st.error(msg)
+    return False
 
 def add_audit(action: str, detail: str = ""):
     u = current_user()
@@ -385,6 +1099,24 @@ section[data-testid="stSidebar"] > div {
     border: 1px solid #E0D9D2 !important;
 }
 
+/* Keep interactive tables readable while Streamlit is rerunning after edits. */
+.stale-element,
+[data-stale="true"],
+[data-testid="stElementContainer"].stale-element,
+[data-testid="stElementContainer"][data-stale="true"],
+[data-testid="stVerticalBlock"].stale-element,
+[data-testid="stVerticalBlock"][data-stale="true"] {
+    opacity: 1 !important;
+    filter: none !important;
+}
+[data-testid="stElementContainer"] iframe,
+[data-testid="stIFrame"] iframe,
+iframe[title*="st_aggrid"],
+iframe[srcdoc] {
+    opacity: 1 !important;
+    filter: none !important;
+}
+
 [data-testid="stTextInput"] input {
     border-radius: 10px !important;
     border-color: #E0D9D2 !important;
@@ -451,6 +1183,20 @@ div[role="radiogroup"] > label > div:last-child p { text-transform: uppercase !i
 [data-testid="stWidgetLabel"] label { text-transform: uppercase !important; }
 [data-testid="stMetricLabel"] { text-transform: uppercase !important; }
 [data-testid="stSidebar"] .stMarkdown p { text-transform: uppercase !important; }
+.sidebar-lotus-logo-v2 {
+    position: fixed;
+    left: 34px;
+    bottom: 28px;
+    width: 132px;
+    z-index: 9999;
+    pointer-events: none;
+    opacity: .98;
+}
+.sidebar-lotus-logo-v2 svg {
+    width: 100%;
+    height: auto;
+    display: block;
+}
 
 #MainMenu, footer { visibility: hidden; }
 header { visibility: hidden; }
@@ -478,6 +1224,22 @@ header button { visibility: visible !important; }
 .dlg-no-btn button:hover {
     background: #C62828 !important;
     border-color: #B71C1C !important;
+}
+div[data-testid="column"]:has(.logout-btn-marker) div[data-testid="stButton"] button,
+.st-key-_tb_logout button,
+.logout-btn-wrap button {
+    background: #E53935 !important;
+    border: 1.5px solid #C62828 !important;
+    color: #fff !important;
+    font-weight: 800 !important;
+    text-transform: none !important;
+}
+div[data-testid="column"]:has(.logout-btn-marker) div[data-testid="stButton"] button:hover,
+.st-key-_tb_logout button:hover,
+.logout-btn-wrap button:hover {
+    background: #C62828 !important;
+    border-color: #B71C1C !important;
+    color: #fff !important;
 }
 .dup-add-btn button {
     background: #fff !important;
@@ -559,6 +1321,8 @@ def render_sidebar(active: str = "landpage"):
 """, unsafe_allow_html=True)
 
         for page_id, icon, label in NAV_ITEMS:
+            if not _nav_visible(page_id):
+                continue
             if page_id == active:
                 st.markdown(
                     f'<div style="background:#2BBFA4;border-radius:10px;'
@@ -575,6 +1339,17 @@ def render_sidebar(active: str = "landpage"):
 
         st.markdown("""
 <div style="height:1px;background:rgba(255,255,255,0.08);margin:10px 14px 8px;"></div>
+<div class="sidebar-lotus-logo-v2" aria-label="Lotus's logo">
+  <svg viewBox="0 0 160 48" role="img" xmlns="http://www.w3.org/2000/svg">
+    <title>Lotus's</title>
+    <text x="0" y="37" fill="#72D4CD" font-family="Arial, Helvetica, sans-serif"
+          font-size="36" font-weight="800" letter-spacing="-1.4">Lotus</text>
+    <path d="M113 4 C120 3 124 9 122 16 C120 22 115 27 113 36 C110 27 105 22 104 16 C103 9 107 5 113 4Z"
+          fill="#F6D975"/>
+    <text x="124" y="37" fill="#F6D975" font-family="Arial, Helvetica, sans-serif"
+          font-size="36" font-weight="800" letter-spacing="-1.4">s</text>
+  </svg>
+</div>
 """, unsafe_allow_html=True)
 
 # ── Logout confirmation dialog ─────────────────────────────────────────────────
@@ -629,10 +1404,25 @@ def render_topbar(page_name: str):
     </div>
 </div>""", unsafe_allow_html=True)
         with _icon_c:
-            st.markdown('<div class="logout-btn-wrap" style="padding-top:8px;display:flex;justify-content:center;">',
+            st.markdown('<span class="logout-btn-marker"></span><div class="logout-btn-wrap" style="padding-top:8px;display:flex;justify-content:center;">',
                         unsafe_allow_html=True)
             if st.button("Sign Out", key="_tb_logout", help="Sign out"):
                 _logout_dialog()
+            components.html("""
+<script>
+(function(){
+  const doc = window.parent.document;
+  const btns = Array.from(doc.querySelectorAll('button'));
+  const btn = btns.find(b => (b.innerText || '').trim() === 'Sign Out');
+  if (!btn) return;
+  btn.style.setProperty('background', '#E53935', 'important');
+  btn.style.setProperty('border', '1.5px solid #C62828', 'important');
+  btn.style.setProperty('color', '#FFFFFF', 'important');
+  btn.style.setProperty('font-weight', '800', 'important');
+  btn.style.setProperty('box-shadow', 'none', 'important');
+})();
+</script>
+""", height=0)
             st.markdown('</div>', unsafe_allow_html=True)
     st.markdown("<hr style='border-color:#D8D2C8;margin:-6px 0 24px;'>", unsafe_allow_html=True)
 
@@ -1774,6 +2564,7 @@ def load_large_file_by_dg(path: str, dg_value: str, use_cache: bool = True) -> p
     pq_path = _hdet_parquet_path(path)
     if os.path.exists(pq_path) and os.path.getmtime(pq_path) >= file_mtime:
         try:
+            import pyarrow as _pa
             import pyarrow.parquet as _pq
             import pyarrow.compute as _pc
             _schema  = _pq.read_schema(pq_path)
@@ -1798,10 +2589,22 @@ def load_large_file_by_dg(path: str, dg_value: str, use_cache: bool = True) -> p
                     except Exception:
                         pass
                 if result.empty:
-                    _tbl   = _pq.read_table(pq_path, use_threads=True, memory_map=True)
-                    _upper = _pc.utf8_upper(_pc.utf8_strip(_tbl[dg_col].cast("string")))
-                    _mask  = _pc.equal(_upper, dg_value_upper)
-                    result = _tbl.filter(_mask).to_pandas()
+                    _pf = _pq.ParquetFile(pq_path, memory_map=True)
+                    _matched_tables = []
+                    for _rg_i in range(_pf.num_row_groups):
+                        _dg_tbl = _pf.read_row_group(_rg_i, columns=[dg_col], use_threads=True)
+                        _upper = _pc.utf8_upper(_pc.utf8_strip(_dg_tbl[dg_col].cast("string")))
+                        _mask = _pc.equal(_upper, dg_value_upper)
+                        try:
+                            _has_match = bool(_pc.any(_mask).as_py())
+                        except Exception:
+                            _has_match = False
+                        if not _has_match:
+                            continue
+                        _row_tbl = _pf.read_row_group(_rg_i, use_threads=True)
+                        _matched_tables.append(_row_tbl.filter(_mask))
+                    if _matched_tables:
+                        result = _pa.concat_tables(_matched_tables).to_pandas()
         except Exception:
             result = pd.DataFrame()
 
@@ -1862,10 +2665,15 @@ def df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
         buf.seek(0)
         wb = load_workbook(buf)
         ws = wb.active
+        ws.insert_rows(1, 3)
+        add_partner_logo_to_worksheet(ws, width=82, height=25)
+        ws.row_dimensions[1].height = 22
+        ws.row_dimensions[2].height = 22
+        ws.row_dimensions[3].height = 8
         green_fill  = PatternFill(fill_type="solid", fgColor="2BBFA4")
         white_font  = Font(color="FFFFFF", bold=True)
         mid_align   = Alignment(horizontal="center", vertical="center")
-        for cell in ws[1]:
+        for cell in ws[4]:
             cell.fill      = green_fill
             cell.font      = white_font
             cell.alignment = mid_align

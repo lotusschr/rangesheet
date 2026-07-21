@@ -1,4 +1,4 @@
-"""Rangesheet review page — sheet tabs, Range Architecture card, data table."""
+﻿"""Rangesheet review page — sheet tabs, Range Architecture card, data table."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -20,13 +20,43 @@ from utils.shared import (
     get_shared_db,
     load_large_file_by_dg, get_dg_options, get_dg_index, ensure_hdet_parquet,
     is_large_file, BASE_DIR, load_admin_manifest, read_large_file_head,
-    apply_column_mapping, DG_COLUMN_CANDIDATES,
+    apply_column_mapping, DG_COLUMN_CANDIDATES, can_edit,
 )
+
+def _rs_partner_logo_png_bytes(width: int = 160, height: int = 48) -> bytes:
+    from PIL import Image, ImageDraw, ImageFont
+    scale = width / 160
+    img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+    try:
+        f_lotus = ImageFont.truetype("arialbd.ttf", max(10, int(36 * scale)))
+    except Exception:
+        f_lotus = ImageFont.load_default()
+    yellow, teal = (246, 217, 117, 255), (114, 212, 205, 255)
+    draw.text((0, 4 * scale), "Lotus", fill=teal, font=f_lotus)
+    draw.polygon([(113 * scale, 4 * scale), (120 * scale, 3 * scale), (124 * scale, 9 * scale), (122 * scale, 16 * scale), (115 * scale, 27 * scale), (113 * scale, 36 * scale), (104 * scale, 16 * scale), (107 * scale, 5 * scale)], fill=yellow)
+    draw.text((124 * scale, 4 * scale), "s", fill=yellow, font=f_lotus)
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
+
+def _rs_add_partner_logo_to_worksheet(ws, anchor_cell: str = "L1", width: int = 82, height: int = 25) -> None:
+    try:
+        from openpyxl.drawing.image import Image as XLImage
+        logo = XLImage(io.BytesIO(_rs_partner_logo_png_bytes(width, height)))
+        logo.width = width
+        logo.height = height
+        ws.add_image(logo, anchor_cell)
+    except Exception:
+        pass
 
 inject_css()
 init_session_state()
 render_sidebar("rangesheetreview")
 render_topbar("Rangesheet Review")
+_CAN_EDIT = can_edit()
+if not _CAN_EDIT:
+    st.info("Viewer mode: you can review data and reports, but editing, submit actions, and chatbot edit commands are disabled.")
 
 selected_files = st.session_state.get("selected_files", [])
 _user_upload = st.session_state.get("upload_df")
@@ -115,6 +145,13 @@ def _rs_save_table_base(scope: str, data: dict) -> None:
     tmp = f"{path}.tmp"
     pd.to_pickle(data or {}, tmp)
     os.replace(tmp, path)
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def _rs_load_dg_slice_cached(path: str, dg_value: str, file_mtime: float, file_size: int) -> pd.DataFrame:
+    """Cache the filtered DG slice in memory across reruns/page switches."""
+    _ = (file_mtime, file_size)  # cache invalidation keys
+    return load_large_file_by_dg(path, dg_value)
 
 
 def _rs_pack_keyed_dict(d: dict) -> list[dict]:
@@ -906,7 +943,11 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     f'<td style="{_B}"></td>'
                     f'<td style="text-align:center;color:#00AA00;font-weight:700;font-size:11px;{_B}">0.0%</td></tr>')
                 st.markdown(f"""<div style="background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
-                  <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">
+                  <div style="overflow-x:auto;"><table style="width:auto;border-collapse:collapse;font-size:11px;table-layout:fixed;">
+                    <colgroup>
+                      <col style="width:140px;"><col style="width:58px;"><col style="width:58px;">
+                      <col style="width:46px;"><col style="width:46px;"><col style="width:42px;"><col style="width:60px;">
+                    </colgroup>
                     <thead>
                       <tr><th colspan="3" style="{_TH}text-align:left;min-width:130px;">Range architecture</th></tr>
                       <tr>
@@ -944,18 +985,22 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     f'<td style="text-align:center;color:#00AA00;font-weight:700;font-size:11px;{_B}{_BR}">{_pct_sale}</td>'
                     f'<td style="{_B}"></td></tr>')
                 st.markdown(f"""<div style="background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
-                  <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">
+                  <div style="overflow-x:auto;"><table style="width:auto;border-collapse:collapse;font-size:11px;table-layout:fixed;">
+                    <colgroup>
+                      <col style="width:140px;"><col style="width:58px;"><col style="width:58px;">
+                      <col style="width:46px;"><col style="width:46px;"><col style="width:42px;"><col style="width:60px;">
+                    </colgroup>
                     <thead><tr>
                       <th colspan="3" style="{_TH}text-align:left;min-width:130px;">Range architecture</th>
-                      <th colspan="3" style="{_TH}">Sale Impact ( ex.vat) / Week<br>calcualte from Mer Price</th>
+                    <th colspan="3" style="{_TH}min-width:130px;max-width:150px;">Sale Impact ( ex.vat) / Week<br>calcualte from Mer Price</th>
                       <th colspan="1" style="{_TH}">Margin Impact ( ex.vat) / Week<br>calcualte from EDLP Price</th>
                     </tr><tr>
                       <th style="{_TH}text-align:left;">TYPE</th>
-                      <th style="{_TH}min-width:52px;">AS IS</th>
-                      <th style="{_TH}min-width:52px;border-right:2px solid #999;">TO BE</th>
-                      <th style="{_TH}min-width:60px;">AS IS</th>
-                      <th style="{_TH}min-width:60px;">TO BE</th>
-                      <th style="{_TH}min-width:52px;border-right:2px solid #999;">DIFF</th>
+                      <th style="{_TH}width:58px;">AS IS</th>
+                      <th style="{_TH}width:58px;border-right:2px solid #999;">TO BE</th>
+                    <th style="{_TH}min-width:46px;">AS IS</th>
+                    <th style="{_TH}min-width:46px;">TO BE</th>
+                    <th style="{_TH}min-width:42px;border-right:2px solid #999;">DIFF</th>
                       <th style="{_TH}min-width:60px;">AS IS</th>
                     </tr></thead><tbody>{tbody}</tbody></table></div>
                   <div style="text-align:right;padding:3px 8px;font-size:9px;color:#888;
@@ -987,7 +1032,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             _n_rows = st.number_input("Rows", min_value=10, max_value=100000, value=500, step=100,
                                       help="Max rows to display", key=f"{p}_nrows")
         with _cadd:
-            if st.button("Add new item", key=f"{p}_add_new_item", use_container_width=True):
+            if st.button("Add new item", key=f"{p}_add_new_item", use_container_width=True,
+                         disabled=not _CAN_EDIT):
                 st.session_state[_new_rows_pending_key] = int(st.session_state.get(_new_rows_pending_key, 0)) + 10
         with _c4:
             _edit_on = st.toggle("⚙️ Edit Columns", key=f"{p}_edit_cols")
@@ -1041,7 +1087,12 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             _dk  = f"{p}_dg_search_df"
             if st.session_state.get(_sk) != _sig:
                 with st.spinner(f"Searching entire HDET for DG '{_q}'…"):
-                    _result = load_large_file_by_dg(large_file_path, _q)
+                    try:
+                        _mtime = os.path.getmtime(large_file_path)
+                        _size = os.path.getsize(large_file_path)
+                    except OSError:
+                        _mtime, _size = 0.0, 0
+                    _result = _rs_load_dg_slice_cached(large_file_path, _q, _mtime, _size)
                 st.session_state[_sk] = _sig
                 st.session_state[_dk] = _result
             df_view = st.session_state[_dk].copy(deep=False)
@@ -2147,7 +2198,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             return c
                     return None
 
-                def _low_sales_rank_rows(limit: int = 5):
+                def _low_sales_rank_rows(limit: int | None = None):
                     vol_col = _find_tdf_col([
                         "TH_Tot_Sales_Volume_52WK",
                         "TH Tot Sales Volume 52WK",
@@ -2167,9 +2218,12 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         _metric = _vol if _vol is not None else _fc
                         if _metric is not None:
                             rows.append((_metric, _idx))
-                    return [idx for _, idx in sorted(rows, key=lambda x: x[0])[:limit]]
+                    rows = sorted(rows, key=lambda x: x[0])
+                    if limit is None:
+                        limit = max(1, int(math.ceil(len(rows) * 0.10))) if rows else 0
+                    return [idx for _, idx in rows[:limit]]
 
-                _low_sales_row_set = set(_low_sales_rank_rows(5))
+                _low_sales_row_set = set(_low_sales_rank_rows(None))
 
                 def _is_low_sales_item(row_i: int) -> bool:
                     return row_i in _low_sales_row_set
@@ -2529,6 +2583,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     ws.cell(2, 1, f"DG Code: {_sel_dg_code or 'ALL'}")
                     ws.cell(2, 2, f"DG Name: {_export_dg_name or 'ALL'}")
                     ws.cell(2, 4, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+                    _rs_add_partner_logo_to_worksheet(ws, anchor_cell="L2", width=82, height=25)
 
                     arch_headers = [
                         "TYPE", "AS IS", "TO BE",
@@ -2734,8 +2789,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 def _chat_norm(q: str) -> str:
                     s = str(q or "").lower().strip()
                     repl = {
-                        "planogramme": "planogram",
-                        "planogrammes": "planogram",
+                        "planogram": "planogram",
+                        "planograms": "planogram",
                         "planograms": "planogram",
                         "pog": "planogram",
                         "แพลนโนแกรม": "planogram",
@@ -2754,9 +2809,9 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
 
                 _CHAT_INTENT_LIBRARY = {
                     "planogram_most_products": {
-                        "label": "Planogramme ไหนที่มีสินค้ามากที่สุด",
+                        "label": "Planogram ไหนที่มีสินค้ามากที่สุด",
                         "samples": [
-                            "planogramme ไหนที่มีสินค้ามากที่สุด",
+                            "planogram ไหนที่มีสินค้ามากที่สุด",
                             "planogram ไหนมีสินค้ามากสุด",
                             "แพลนไหนสินค้ามากที่สุด",
                             "which planogram has the most products",
@@ -2764,9 +2819,9 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         ],
                     },
                     "planogram_fewest_products": {
-                        "label": "Planogramme ไหนที่มีสินค้าน้อยที่สุด",
+                        "label": "Planogram ไหนที่มีสินค้าน้อยที่สุด",
                         "samples": [
-                            "planogramme ไหนที่มีสินค้าน้อยที่สุด",
+                            "planogram ไหนที่มีสินค้าน้อยที่สุด",
                             "planogram ไหนมีสินค้าน้อยสุด",
                             "แพลนไหนสินค้าน้อยที่สุด",
                             "which planogram has the fewest products",
@@ -2784,41 +2839,41 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         ],
                     },
                     "planogram_highest_total": {
-                        "label": "Planogramme ไหนมียอดขายรวมมากที่สุด",
+                        "label": "Planogram ไหนมียอดขายรวมมากที่สุด",
                         "samples": [
-                            "planogramme ไหนมียอดขายรวมมากที่สุด",
+                            "planogram ไหนมียอดขายรวมมากที่สุด",
                             "แพลนไหนยอดขายรวมสูงสุด",
                             "highest total sales planogram",
                         ],
                     },
                     "planogram_lowest_total": {
-                        "label": "Planogramme ไหนมียอดขายรวมน้อยที่สุด",
+                        "label": "Planogram ไหนมียอดขายรวมน้อยที่สุด",
                         "samples": [
-                            "planogramme ไหนมียอดขายรวมน้อยที่สุด",
+                            "planogram ไหนมียอดขายรวมน้อยที่สุด",
                             "แพลนไหนยอดขายรวมต่ำสุด",
                             "lowest total sales planogram",
                         ],
                     },
                     "item_most_planograms": {
-                        "label": "สินค้าไหนอยู่ใน planogramme มากที่สุด",
+                        "label": "สินค้าไหนอยู่ใน planogram มากที่สุด",
                         "samples": [
-                            "สินค้าไหนอยู่ใน planogramme มากที่สุด",
+                            "สินค้าไหนอยู่ใน planogram มากที่สุด",
                             "item in most planograms",
                             "สินค้าอยู่ในแพลนมากสุด",
                         ],
                     },
                     "item_fewest_planograms": {
-                        "label": "สินค้าไหนอยู่ใน planogramme น้อยที่สุด",
+                        "label": "สินค้าไหนอยู่ใน planogram น้อยที่สุด",
                         "samples": [
-                            "สินค้าไหนอยู่ใน planogramme น้อยที่สุด",
+                            "สินค้าไหนอยู่ใน planogram น้อยที่สุด",
                             "item in fewest planograms",
                             "สินค้าอยู่ในแพลนน้อยสุด",
                         ],
                     },
                     "planogram_most_blanks": {
-                        "label": "Planogramme ไหนมีช่องว่างมากที่สุด",
+                        "label": "Planogram ไหนมีช่องว่างมากที่สุด",
                         "samples": [
-                            "planogramme ไหนมีช่องว่างมากที่สุด",
+                            "planogram ไหนมีช่องว่างมากที่สุด",
                             "แพลนไหน blank มากสุด",
                             "planogram with most blanks",
                             "missing most planogram",
@@ -2833,15 +2888,197 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         ],
                     },
                     "summary": {
-                        "label": "สรุป DG นี้มีสินค้ากี่ตัวและ planogramme กี่ตัว",
+                        "label": "สรุป DG นี้มีสินค้ากี่ตัวและ planogram กี่ตัว",
                         "samples": [
                             "สรุป DG นี้",
-                            "มีสินค้ากี่ตัวและ planogramme กี่ตัว",
+                            "มีสินค้ากี่ตัวและ planogram กี่ตัว",
                             "dg summary",
                             "count sku and planogram",
                         ],
                     },
                 }
+
+                _CHAT_INTENT_LIBRARY.update({
+                    "item_planograms_detail": {
+                        "label": "item นี้อยู่ใน planogram ไหนบ้าง",
+                        "samples": ["item นี้อยู่ใน planogram ไหนบ้าง", "สินค้านี้อยู่ในแพลนไหน", "where is this item listed"],
+                    },
+                    "item_changes_detail": {
+                        "label": "item นี้ถูกเปลี่ยนอะไรไปบ้าง",
+                        "samples": ["item นี้ถูกเปลี่ยนอะไรไปบ้าง", "สินค้านี้เปลี่ยนอะไร", "item changes detail"],
+                    },
+                    "item_sales_detail": {
+                        "label": "item นี้ยอดขายเป็นอย่างไร",
+                        "samples": ["item นี้ยอดขายเป็นอย่างไร", "สินค้านี้ยอดขายเท่าไหร่", "item sales"],
+                    },
+                    "item_best_seller_check": {
+                        "label": "item นี้เป็น best seller ไหม",
+                        "samples": ["item นี้เป็น best seller ไหม", "สินค้านี้ขายดีไหม", "is this item best seller"],
+                    },
+                    "item_lowest_seller_check": {
+                        "label": "item นี้เป็น lowest seller ไหม",
+                        "samples": [
+                            "item นี้เป็น lowest seller ไหม",
+                            "สินค้านี้ขายต่ำไหม",
+                            "สินค้านี้ขายต่ำสุดไหม",
+                            "item นี้เป็น tail 10 ไหม",
+                            "สินค้านี้ยอดขายน้อยไหม",
+                            "is this item lowest seller",
+                        ],
+                    },
+                    "item_clusters_detail": {
+                        "label": "item นี้อยู่ใน cluster ไหนบ้าง",
+                        "samples": ["item นี้อยู่ใน cluster ไหนบ้าง", "สินค้านี้อยู่คลัสเตอร์ไหน", "item clusters"],
+                    },
+                    "planogram_items_detail": {
+                        "label": "planogram นี้มีสินค้าอะไรบ้าง",
+                        "samples": ["planogram นี้มีสินค้าอะไรบ้าง", "แพลนนี้มีสินค้าอะไร", "items in this planogram"],
+                    },
+                    "planogram_changes_detail": {
+                        "label": "planogram นี้ถูกเปลี่ยนอะไรไปบ้าง",
+                        "samples": ["planogram นี้ถูกเปลี่ยนอะไรไปบ้าง", "แพลนนี้เปลี่ยนอะไร", "planogram changes"],
+                    },
+                    "planogram_tobe_change": {
+                        "label": "planogram นี้ TO-BE SKU เปลี่ยนเท่าไหร่",
+                        "samples": ["planogram นี้ TO-BE SKU เปลี่ยนเท่าไหร่", "แพลนนี้ sku เปลี่ยนเท่าไหร่", "planogram to be sku change"],
+                    },
+                    "planogram_deleted_best_check": {
+                        "label": "planogram นี้มี best seller ถูกลบไหม",
+                        "samples": ["planogram นี้มี best seller ถูกลบไหม", "แพลนนี้ลบ best seller ไหม"],
+                    },
+                    "planogram_added_lowest_check": {
+                        "label": "planogram นี้มี lowest seller ถูกเพิ่มไหม",
+                        "samples": ["planogram นี้มี lowest seller ถูกเพิ่มไหม", "แพลนนี้เพิ่ม lowest seller ไหม"],
+                    },
+                    "cluster_planograms_detail": {
+                        "label": "cluster นี้มี planogram อะไรบ้าง",
+                        "samples": ["cluster นี้มี planogram อะไรบ้าง", "คลัสเตอร์นี้มีแพลนอะไร", "cluster planograms"],
+                    },
+                    "cluster_changes_detail": {
+                        "label": "cluster นี้ถูกเปลี่ยนอะไรไปบ้าง",
+                        "samples": ["cluster นี้ถูกเปลี่ยนอะไรไปบ้าง", "คลัสเตอร์นี้เปลี่ยนอะไร", "cluster changes"],
+                    },
+                    "cluster_risk_detail": {
+                        "label": "cluster นี้มี risk อะไรไหม",
+                        "samples": ["cluster นี้มี risk อะไรไหม", "คลัสเตอร์นี้เสี่ยงไหม", "cluster risk"],
+                    },
+                    "cluster_tobe_change": {
+                        "label": "cluster นี้ TO-BE SKU เปลี่ยนเท่าไหร่",
+                        "samples": ["cluster นี้ TO-BE SKU เปลี่ยนเท่าไหร่", "cluster sku change"],
+                    },
+                    "pre_submit_check": {
+                        "label": "ตรวจข้อมูลก่อน submit",
+                        "samples": ["ตรวจข้อมูลก่อน submit", "pre submit check", "blocking submit"],
+                    },
+                    "new_item_incomplete_check": {
+                        "label": "มี new item ที่กรอกข้อมูลไม่ครบไหม",
+                        "samples": ["มี new item ที่กรอกข้อมูลไม่ครบไหม", "new item incomplete"],
+                    },
+                    "new_item_missing_id": {
+                        "label": "มี item ใหม่ที่ไม่มี ID ไหม",
+                        "samples": ["มี item ใหม่ที่ไม่มี ID ไหม", "new item missing id"],
+                    },
+                    "new_item_missing_52wk": {
+                        "label": "มี item ใหม่ที่ไม่มี 52wk ไหม",
+                        "samples": ["มี item ใหม่ที่ไม่มี 52wk ไหม", "new item missing 52wk"],
+                    },
+                    "pending_confirm_check": {
+                        "label": "มี action ที่ยังรอ confirm ไหม",
+                        "samples": ["มี action ที่ยังรอ confirm ไหม", "pending confirm"],
+                    },
+                    "submit_fix_summary": {
+                        "label": "สรุปสิ่งที่ต้องแก้ก่อน submit",
+                        "samples": ["สรุปสิ่งที่ต้องแก้ก่อน submit", "blocking submit summary"],
+                    },
+                    "clear_item_changes": {
+                        "label": "clear การแก้ไขของ item นี้",
+                        "samples": ["clear การแก้ไขของ item นี้", "ล้างการแก้ไข item นี้", "clear item changes"],
+                    },
+                    "clear_planogram_changes": {
+                        "label": "clear การแก้ไขของ planogram นี้",
+                        "samples": ["clear การแก้ไขของ planogram นี้", "ล้างการแก้ไข planogram นี้", "clear planogram changes"],
+                    },
+                    "delete_lowest5_from_planogram": {
+                        "label": "ลบสินค้าที่ขายต่ำสุด 5 ตัวออกจาก planogram",
+                        "samples": ["ลบสินค้าที่ขายต่ำสุด 5 ตัวออกจาก planogram 5012", "delete lowest 5 from planogram"],
+                    },
+                    "add_recent_item_planogram": {
+                        "label": "เพิ่ม item ที่ตอบล่าสุดเข้า planogram",
+                        "samples": ["เพิ่ม item ที่ตอบล่าสุดเข้า planogram 5012", "add recent item to planogram"],
+                    },
+                    "delete_recent_item_planogram": {
+                        "label": "ลบ item ที่ตอบล่าสุดออกจาก planogram",
+                        "samples": ["ลบ item ที่ตอบล่าสุดออกจาก planogram 5012", "delete recent item from planogram"],
+                    },
+                    "cluster_most_impacted": {
+                        "label": "cluster ไหนได้รับผลกระทบมากที่สุด",
+                        "samples": ["cluster ไหนได้รับผลกระทบมากที่สุด", "cluster impact most", "คลัสเตอร์ไหนกระทบมากสุด"],
+                    },
+                    "deleted_best_sellers": {
+                        "label": "มีการลบ best seller ไหม",
+                        "samples": ["มีการลบ best seller ไหม", "ลบ top 10 best seller", "deleted best seller"],
+                    },
+                    "added_lowest_sellers": {
+                        "label": "มีการเพิ่ม lowest seller ไหม",
+                        "samples": ["มีการเพิ่ม lowest seller ไหม", "เพิ่ม tail 10 lowest seller", "added lowest seller"],
+                    },
+                    "riskiest_items": {
+                        "label": "รายการไหนเสี่ยงที่สุด",
+                        "samples": ["รายการไหนเสี่ยงที่สุด", "action ไหนควร review", "risk before submit", "review ก่อน submit"],
+                    },
+                    "deleted_best_seller_count": {
+                        "label": "ลบสินค้า Top 10% best seller ออกไปกี่ตัว",
+                        "samples": ["ลบสินค้า top 10 ออกไปกี่ตัว", "count deleted best seller", "top 10 best seller delete count"],
+                    },
+                    "added_lowest_seller_count": {
+                        "label": "เพิ่มสินค้า Top 10% lowest seller เข้าไปกี่ตัว",
+                        "samples": ["เพิ่มสินค้า tail 10 เข้าไปกี่ตัว", "count added lowest seller", "top 10 lowest seller add count"],
+                    },
+                    "restore_maintain": {
+                        "label": "เปลี่ยน item นี้กลับเป็น maintain",
+                        "samples": ["เปลี่ยน item นี้กลับเป็น maintain", "กลับเป็น maintain", "restore maintain"],
+                    },
+                    "undo_last": {
+                        "label": "undo การแก้ล่าสุด",
+                        "samples": ["undo การแก้ล่าสุด", "ย้อนกลับการแก้ล่าสุด", "undo last change"],
+                    },
+                    "planogram_most_deleted": {
+                        "label": "planogram ไหนถูกลบเยอะที่สุด",
+                        "samples": [
+                            "planogram ไหนถูกลบเยอะที่สุด",
+                            "planogram most deleted",
+                            "ลบเยอะสุด",
+                            "planogram ไหนมี dropdown delete เยอะที่สุด",
+                            "planogram ไหนมี delete มากที่สุด",
+                        ],
+                    },
+                    "planogram_most_added": {
+                        "label": "planogram ไหนถูกเพิ่มเยอะที่สุด",
+                        "samples": [
+                            "planogram ไหนถูกเพิ่มเยอะที่สุด",
+                            "planogram most added",
+                            "เพิ่มเยอะสุด",
+                            "planogram ไหนมี dropdown new เยอะที่สุด",
+                            "planogram ไหนมี new มากที่สุด",
+                        ],
+                    },
+                    "best_sales_items": {
+                        "label": "สินค้าไหนขายดีที่สุด",
+                        "samples": ["สินค้าไหนขายดีที่สุด", "สินค้ายอดขายสูงสุด", "best selling item", "highest sales product"],
+                    },
+                    "new_item_risk": {
+                        "label": "สินค้าใหม่ที่เพิ่มมาน่ากังวลไหม",
+                        "samples": ["สินค้าใหม่ที่เพิ่มมาน่ากังวลไหม", "new item risk", "new lowest seller"],
+                    },
+                    "impact_analysis": {
+                        "label": "ช่วยวิเคราะห์ impact",
+                        "samples": ["ช่วยวิเคราะห์ impact", "วิเคราะห์ผลกระทบ", "impact analysis", "recommendation", "มีอะไรผิดปกติไหม"],
+                    },
+                    "submit_risk": {
+                        "label": "ถ้า submit ตอนนี้มี risk อะไร",
+                        "samples": ["ถ้า submit ตอนนี้มี risk อะไร", "risk ตอน submit", "พร้อม submit ไหม"],
+                    },
+                })
 
                 def _chat_tokens(s: str) -> set[str]:
                     return set(_re.findall(r"[a-z0-9\u0E00-\u0E7F]+", _chat_norm(s)))
@@ -2860,7 +3097,61 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         best = max(best, (ratio * 0.55) + (overlap * 0.45))
                     return best
 
+                def _direct_planogram_count_intent(q: str) -> str:
+                    s = _chat_norm(q)
+                    ascii_s = _nca(s)
+                    compact = _chat_cmp(q)
+                    has_plan = ("planogram" in s) or ("planogram" in ascii_s)
+                    has_max = (
+                        any(k in s for k in ("\u0e21\u0e32\u0e01\u0e17\u0e35\u0e48\u0e2a\u0e38\u0e14", "\u0e2a\u0e39\u0e07\u0e2a\u0e38\u0e14", "\u0e40\u0e22\u0e2d\u0e30\u0e2a\u0e38\u0e14", "most", "highest", "max"))
+                        or any(k in compact for k in (_chat_cmp("\u0e21\u0e32\u0e01\u0e17\u0e35\u0e48\u0e2a\u0e38\u0e14"), _chat_cmp("\u0e21\u0e32\u0e01\u0e2a\u0e38\u0e14"), _chat_cmp("\u0e40\u0e22\u0e2d\u0e30\u0e2a\u0e38\u0e14")))
+                    )
+                    has_min = (
+                        any(k in s for k in ("\u0e19\u0e49\u0e2d\u0e22\u0e17\u0e35\u0e48\u0e2a\u0e38\u0e14", "\u0e15\u0e48\u0e33\u0e2a\u0e38\u0e14", "least", "lowest", "min"))
+                        or any(k in compact for k in (_chat_cmp("\u0e19\u0e49\u0e2d\u0e22\u0e17\u0e35\u0e48\u0e2a\u0e38\u0e14"), _chat_cmp("\u0e19\u0e49\u0e2d\u0e22\u0e2a\u0e38\u0e14"), _chat_cmp("\u0e15\u0e48\u0e33\u0e2a\u0e38\u0e14")))
+                    )
+                    asks_count = (
+                        any(k in s for k in ("\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32", "has product", "has sku", "products", "product count", "sku count", "most sku", "least sku"))
+                        or _chat_cmp("\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32") in compact
+                    )
+                    asks_sales_total = any(k in s for k in ("\u0e22\u0e2d\u0e14\u0e02\u0e32\u0e22", "\u0e23\u0e27\u0e21", "sales", "total", "sum"))
+                    asks_item_distribution = any(k in s for k in ("\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32\u0e44\u0e2b\u0e19\u0e2d\u0e22\u0e39\u0e48", "\u0e2d\u0e22\u0e39\u0e48\u0e43\u0e19 planogram", "item in"))
+                    if has_plan and asks_count and not asks_sales_total and not asks_item_distribution:
+                        if has_min:
+                            return "planogram_fewest_products"
+                        if has_max:
+                            return "planogram_most_products"
+                    return ""
+
+                def _direct_item_planogram_count_intent(q: str) -> str:
+                    s = _chat_norm(q)
+                    ascii_s = _nca(s)
+                    compact = _chat_cmp(q)
+                    has_plan = ("planogram" in s) or ("planogram" in ascii_s)
+                    has_max = (
+                        any(k in s for k in ("\u0e21\u0e32\u0e01\u0e17\u0e35\u0e48\u0e2a\u0e38\u0e14", "\u0e2a\u0e39\u0e07\u0e2a\u0e38\u0e14", "\u0e40\u0e22\u0e2d\u0e30\u0e2a\u0e38\u0e14", "most", "highest", "max"))
+                        or any(k in compact for k in (_chat_cmp("\u0e21\u0e32\u0e01\u0e17\u0e35\u0e48\u0e2a\u0e38\u0e14"), _chat_cmp("\u0e21\u0e32\u0e01\u0e2a\u0e38\u0e14"), _chat_cmp("\u0e40\u0e22\u0e2d\u0e30\u0e2a\u0e38\u0e14")))
+                    )
+                    has_min = (
+                        any(k in s for k in ("\u0e19\u0e49\u0e2d\u0e22\u0e17\u0e35\u0e48\u0e2a\u0e38\u0e14", "\u0e15\u0e48\u0e33\u0e2a\u0e38\u0e14", "least", "lowest", "min"))
+                        or any(k in compact for k in (_chat_cmp("\u0e19\u0e49\u0e2d\u0e22\u0e17\u0e35\u0e48\u0e2a\u0e38\u0e14"), _chat_cmp("\u0e19\u0e49\u0e2d\u0e22\u0e2a\u0e38\u0e14"), _chat_cmp("\u0e15\u0e48\u0e33\u0e2a\u0e38\u0e14")))
+                    )
+                    asks_item = any(k in s for k in ("\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32\u0e44\u0e2b\u0e19", "item", "product", "sku"))
+                    asks_distribution = any(k in s for k in ("\u0e2d\u0e22\u0e39\u0e48\u0e43\u0e19", " in ", "listed", "included"))
+                    if has_plan and asks_item and asks_distribution:
+                        if has_min:
+                            return "item_fewest_planograms"
+                        if has_max:
+                            return "item_most_planograms"
+                    return ""
+
                 def _best_chat_intent(q: str):
+                    direct_item_plan_count = _direct_item_planogram_count_intent(q)
+                    if direct_item_plan_count:
+                        return direct_item_plan_count, 1.0
+                    direct = _direct_planogram_count_intent(q)
+                    if direct:
+                        return direct, 1.0
                     ranked = sorted(
                         ((intent, _score_chat_intent(q, intent)) for intent in _CHAT_INTENT_LIBRARY),
                         key=lambda x: x[1],
@@ -2928,7 +3219,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 def _chat_question_parts(q: str) -> list[str]:
                     raw = str(q or "")
                     parts = [raw]
-                    for marker in ("planogramme", "planogram", "pog", "แพลน", "ออกจาก"):
+                    for marker in ("planogram", "planogram", "pog", "แพลน", "ออกจาก"):
                         if marker in raw.lower():
                             pieces = _re.split(marker, raw, flags=_re.IGNORECASE)
                             parts.extend(pieces)
@@ -3000,6 +3291,20 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     cols = _chat_planograms_from_targets(q)
                     if cols:
                         return cols
+                    q_tokens_raw = [
+                        _chat_cmp(x)
+                        for x in _re.findall(r"[A-Za-z0-9_]+", str(q))
+                        if len(_chat_cmp(x)) >= 4
+                    ]
+                    short_matches = []
+                    for pc in _dyn_pog_cols:
+                        if pc not in _tdf.columns:
+                            continue
+                        pc_cmp = _chat_cmp(pc)
+                        if any(tok and tok in pc_cmp for tok in q_tokens_raw):
+                            short_matches.append(pc)
+                    if short_matches:
+                        return sorted(short_matches, key=lambda c: len(str(c)))[0:1]
                     pog_col, pog_score = _best_chat_planogram(q)
                     return [pog_col] if pog_col and pog_score >= 0.28 else []
 
@@ -3007,10 +3312,17 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     pending = []
                     changed = []
                     valid_pog_cols = [c for c in pog_cols if c in _tdf.columns]
+                    undo_rows = {}
                     for row_i in row_indices:
                         if row_i not in _tdf.index:
                             continue
                         rk = _make_rk(row_i)
+                        if rk not in undo_rows:
+                            undo_rows[rk] = {
+                                "pog_actions": dict(_pog_actions.get(rk, {}) or {}),
+                                "pog_edits": dict(_pog_edits.get(rk, {}) or {}),
+                                "status": _status_overrides.get(rk),
+                            }
                         item_txt = _fmt_item(_tdf.loc[row_i])
                         row_changed = False
                         nums_by_col = {}
@@ -3044,45 +3356,133 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             row_changed = True
                         if row_changed:
                             _status_overrides[rk] = _derive_status(rk)
+                    if changed:
+                        st.session_state[f"{p}_rs_chat_last_undo"] = {"rows": undo_rows}
+                        _chat_invalidate_calc_cache()
+                        _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
                     if pending:
                         existing = st.session_state.get(_pending_del_key)
                         existing_items = existing if isinstance(existing, list) else ([existing] if existing else [])
                         st.session_state[_pending_del_key] = existing_items + pending
                     return changed, pending
 
-                def _chat_apply_new_rows(row_indices: list[int], pog_cols: list[str]):
+                def _chat_apply_delete_all_rows(row_indices: list[int]):
+                    undo_rows = {}
                     changed = []
-                    valid_pog_cols = [c for c in pog_cols if c in _tdf.columns]
                     for row_i in row_indices:
                         if row_i not in _tdf.index:
                             continue
                         rk = _make_rk(row_i)
+                        undo_rows[rk] = {
+                            "pog_actions": dict(_pog_actions.get(rk, {}) or {}),
+                            "pog_edits": dict(_pog_edits.get(rk, {}) or {}),
+                            "status": _status_overrides.get(rk),
+                        }
+                        old_status = str(_status_overrides.get(rk, "")).strip().upper()
+                        had_action = bool(_pog_actions.get(rk) or _pog_edits.get(rk))
+                        _pog_actions.pop(rk, None)
+                        _pog_edits.pop(rk, None)
+                        _status_overrides[rk] = "DELETE ALL"
+                        if old_status != "DELETE ALL" or had_action:
+                            changed.append(_fmt_item(_tdf.loc[row_i]))
+                    if changed:
+                        st.session_state[f"{p}_rs_chat_last_undo"] = {"rows": undo_rows}
+                        _chat_invalidate_calc_cache()
+                        _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
+                    return changed
+
+                def _chat_apply_new_rows(row_indices: list[int], pog_cols: list[str]):
+                    changed = []
+                    valid_pog_cols = [c for c in pog_cols if c in _tdf.columns]
+                    undo_rows = {}
+                    for row_i in row_indices:
+                        if row_i not in _tdf.index:
+                            continue
+                        rk = _make_rk(row_i)
+                        if rk not in undo_rows:
+                            undo_rows[rk] = {
+                                "pog_actions": dict(_pog_actions.get(rk, {}) or {}),
+                                "pog_edits": dict(_pog_edits.get(rk, {}) or {}),
+                                "status": _status_overrides.get(rk),
+                            }
                         item_txt = _fmt_item(_tdf.loc[row_i])
                         row_changed = False
                         for pog_col in valid_pog_cols:
+                            if _num_for_rank(_tdf.at[row_i, pog_col]) is not None:
+                                continue
+                            if _pog_actions.get(rk, {}).get(pog_col) == "New" or _pog_edits.get(rk, {}).get(pog_col) == "New":
+                                continue
                             _pog_actions.setdefault(rk, {})[pog_col] = "New"
                             _pog_edits.setdefault(rk, {})[pog_col] = "New"
                             changed.append((item_txt, pog_col))
                             row_changed = True
                         if row_changed:
                             _status_overrides[rk] = _derive_status(rk)
+                    if changed:
+                        st.session_state[f"{p}_rs_chat_last_undo"] = {"rows": undo_rows}
+                        _chat_invalidate_calc_cache()
+                        _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
                     return changed
+
+                _chat_item_search_rows_cache = None
+                _chat_ranked_sales_cache = {}
+                _chat_actions_cache = None
+                _chat_planogram_count_cache = {}
+                _chat_vol_col = _find_col(_tdf, [
+                    "TH_Tot_Sales_Volume_52WK",
+                    "TH Tot Sales Volume 52WK",
+                ])
+                _chat_fc_col = _find_col(_tdf, ["ForecastSales", "Forecast Sales"])
+                _chat_mapped_col = _find_col(_tdf, ["Avg Units 52wk/ Forecast new item sales"])
+                if not _chat_vol_col:
+                    _chat_vol_col = _chat_mapped_col
+                if not _chat_fc_col:
+                    _chat_fc_col = _chat_mapped_col
+
+                def _chat_invalidate_calc_cache():
+                    nonlocal _chat_actions_cache
+                    _chat_actions_cache = None
+                    _chat_planogram_count_cache.clear()
+
+                def _chat_item_search_rows():
+                    nonlocal _chat_item_search_rows_cache
+                    if _chat_item_search_rows_cache is not None:
+                        return _chat_item_search_rows_cache
+                    rows = []
+                    for idx, row in _tdf.iterrows():
+                        item_id = str(row.get("ID", "") or "")
+                        item_name = str(row.get("Item Name", "") or "")
+                        item_label = f"{item_id} {item_name}".strip()
+                        id_digits = _re.sub(r"\D+", "", item_id).lstrip("0")
+                        rows.append({
+                            "idx": idx,
+                            "id_cmp": _chat_cmp(item_id),
+                            "id_digits": id_digits,
+                            "name_cmp": _chat_cmp(item_name),
+                            "label_cmp": _chat_cmp(item_label),
+                            "tokens": _chat_tokens(item_label),
+                        })
+                    _chat_item_search_rows_cache = rows
+                    return rows
 
                 def _best_chat_item_row(q: str):
                     q_cmp = _chat_cmp(q)
                     q_tokens = _chat_tokens(q)
                     best_i, best_score = None, 0.0
-                    for idx, row in _tdf.iterrows():
-                        item_id = str(row.get("ID", "") or "")
-                        item_name = str(row.get("Item Name", "") or "")
-                        item_label = f"{item_id} {item_name}".strip()
-                        id_cmp = _chat_cmp(item_id)
-                        name_cmp = _chat_cmp(item_name)
-                        label_cmp = _chat_cmp(item_label)
-                        label_tokens = _chat_tokens(item_label)
+                    for row in _chat_item_search_rows():
+                        idx = row["idx"]
+                        id_cmp = row["id_cmp"]
+                        id_digits = row.get("id_digits", "")
+                        name_cmp = row["name_cmp"]
+                        label_cmp = row["label_cmp"]
+                        label_tokens = row["tokens"]
                         score = 0.0
                         if id_cmp and len(id_cmp) >= 3 and id_cmp in q_cmp:
                             score = 1.15
+                        if id_digits and len(id_digits) >= 3:
+                            q_digits = _re.sub(r"\D+", "", str(q)).lstrip("0")
+                            if q_digits and (id_digits in q_digits or q_digits in id_digits):
+                                score = max(score, 1.18)
                         if name_cmp and len(name_cmp) >= 4 and name_cmp in q_cmp:
                             score = max(score, 1.05)
                         if label_cmp and label_cmp in q_cmp:
@@ -3107,7 +3507,18 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             False,
                         )
                     if _chat_all_word(q):
-                        pog_cols = [c for c in _dyn_pog_cols if c in _tdf.columns]
+                        changed_items = _chat_apply_delete_all_rows([row_i])
+                        item_txt = _fmt_item(_tdf.loc[row_i])
+                        _status_overrides[_make_rk(row_i)] = "DELETE ALL"
+                        _chat_invalidate_calc_cache()
+                        _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
+                        if changed_items:
+                            return (
+                                f"เปลี่ยน {item_txt} เป็น DELETE ALL แล้ว "
+                                "(ทุก planogram ที่มีตัวเลขจะถือเป็น Delete และใช้ logic เดียวกับ dropdown Status)",
+                                True,
+                            )
+                        return f"{item_txt} เป็น DELETE ALL อยู่แล้ว", False
                     if not pog_cols:
                         item_txt = _fmt_item(_tdf.loc[row_i])
                         st.session_state[f"{p}_rs_chat_recent_delete"] = {
@@ -3115,8 +3526,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             "items": [{"row_i": row_i, "item": item_txt}],
                         }
                         return (
-                            "ต้องการให้ลบ item นี้ออกจาก planogramme ไหน? "
-                            "พิมพ์ชื่อ planogramme / target เช่น 5012 หรือพิมพ์ 'ทั้งหมด' เพื่อลบทั้งแถว",
+                            "ต้องการให้ลบ item นี้ออกจาก planogram ไหน? "
+                            "พิมพ์ชื่อ planogram / target เช่น 5012 หรือพิมพ์ 'ทั้งหมด' เพื่อลบทั้งแถว",
                             False,
                         )
                     rk = _make_rk(row_i)
@@ -3135,7 +3546,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             + changed_txt,
                             False,
                         )
-                    scope = "ทุก planogramme" if _chat_all_word(q) else ", ".join(pog_cols)
+                    scope = "ทุก planogram" if _chat_all_word(q) else ", ".join(pog_cols)
                     return f"เปลี่ยน {item_txt} ใน {scope} เป็น Delete แล้ว Status จะเปลี่ยนตาม row", True
 
                 def _chat_add_item_to_planogram(q: str):
@@ -3159,7 +3570,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             "items": [item_txt],
                         }
                         return (
-                            "หา planogramme ที่ต้องการเพิ่มไม่เจอ ลองพิมพ์ชื่อ planogramme / target ให้ชัดขึ้น "
+                            "หา planogram ที่ต้องการเพิ่มไม่เจอ ลองพิมพ์ชื่อ planogram / target ให้ชัดขึ้น "
                             "หรือพิมพ์ 'ทั้งหมด' เพื่อเพิ่มทั้ง row ของ item นี้",
                             False,
                         )
@@ -3169,16 +3580,18 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             "pog_cols": pog_cols,
                             "items": [item_txt],
                         }
-                        scope = "ทุก planogramme" if _chat_all_word(q) else ", ".join(pog_cols)
+                        scope = "planogram ที่ว่างอยู่" if _chat_all_word(q) else ", ".join(pog_cols)
                         return (
                             f"{item_txt} is a Top 10% lowest seller. "
                             f"Are you sure you want to add this item to {scope}? "
                             "Reply 'ใช่' to confirm or 'ไม่' to cancel.",
                             False,
                         )
-                    _chat_apply_new_rows([row_i], pog_cols)
-                    scope = "ทุก planogramme" if _chat_all_word(q) else ", ".join(pog_cols)
-                    return f"เพิ่ม {item_txt} เข้า {scope} เป็น New แล้ว", True
+                    changed = _chat_apply_new_rows([row_i], pog_cols)
+                    scope = "planogram ที่ว่างอยู่" if _chat_all_word(q) else ", ".join(pog_cols)
+                    if not changed:
+                        return f"{item_txt} ไม่มี planogram ว่างใน scope นี้ให้เพิ่มเป็น New", False
+                    return f"เพิ่ม {item_txt} เข้า {scope} เป็น New แล้ว {len(changed):,} ช่อง Status จะเป็น NEW SOME", True
 
                 def _detect_chat_intent(q: str) -> str:
                     s = _chat_norm(q)
@@ -3186,6 +3599,159 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     has_plan = ("planogram" in s) or ("planogram" in ascii_s)
                     has_max = any(k in s for k in ("มากที่สุด", "สูงสุด", "เยอะสุด", "most", "highest", "max"))
                     has_min = any(k in s for k in ("น้อยที่สุด", "ต่ำสุด", "least", "lowest", "min"))
+                    compact = _chat_cmp(q)
+                    direct_item_plan_count = _direct_item_planogram_count_intent(q)
+                    if direct_item_plan_count:
+                        return direct_item_plan_count
+                    direct_plan_count = _direct_planogram_count_intent(q)
+                    if direct_plan_count:
+                        return direct_plan_count
+                    cluster_names = {
+                        _chat_cluster_for_pog(pc)
+                        for pc in _dyn_pog_cols
+                        if pc in _tdf.columns
+                    }
+                    mentions_cluster_name = any(
+                        _chat_cmp(cl) and _chat_cmp(cl) in compact
+                        for cl in cluster_names
+                    )
+                    mentions_planogram_name = any(
+                        _chat_cmp(pc) and _chat_cmp(pc) in compact
+                        for pc in _dyn_pog_cols
+                        if pc in _tdf.columns
+                    )
+                    if not mentions_planogram_name:
+                        q_tokens_raw = [
+                            _chat_cmp(x)
+                            for x in _re.findall(r"[A-Za-z0-9_]+", str(q))
+                            if len(_chat_cmp(x)) >= 4
+                        ]
+                        mentions_planogram_name = any(
+                            any(tok and tok in _chat_cmp(pc) for tok in q_tokens_raw)
+                            for pc in _dyn_pog_cols
+                            if pc in _tdf.columns
+                        )
+                    matched_item_row, matched_item_score = _best_chat_item_row(q)
+                    mentions_item_name = matched_item_row is not None and matched_item_score >= 0.30
+                    asks_list = any(k in s for k in ("อะไรบ้าง", "ไหนบ้าง", "list", "where", "มีอะไร"))
+                    asks_change = any(k in s for k in ("เปลี่ยน", "ถูกเปลี่ยน", "changes", "change"))
+                    asks_risk = any(k in s for k in ("risk", "เสี่ยง"))
+                    asks_tobe = any(k in s for k in ("to-be", "tobe", "sku change", "เปลี่ยนเท่าไหร่"))
+                    asks_sales = any(k in s for k in ("ยอดขาย", "sales", "ขายเป็นอย่างไร"))
+                    asks_best = "best seller" in s or any(k in s for k in ("ขายดี", "ยอดขายดี"))
+                    asks_lowest = (
+                        "lowest seller" in s
+                        or "tail 10" in s
+                        or any(k in s for k in ("ขายต่ำ", "ยอดขายต่ำ", "ขายน้อย", "ยอดขายน้อย", "ขายต่ำสุด", "ยอดขายต่ำสุด"))
+                    )
+                    if mentions_cluster_name:
+                        if asks_risk:
+                            return "cluster_risk_detail"
+                        if asks_tobe:
+                            return "cluster_tobe_change"
+                        if asks_change:
+                            return "cluster_changes_detail"
+                        if has_plan or asks_list:
+                            return "cluster_planograms_detail"
+                    if mentions_planogram_name:
+                        if asks_tobe:
+                            return "planogram_tobe_change"
+                        if asks_change:
+                            return "planogram_changes_detail"
+                        if asks_best and any(k in s for k in ("ลบ", "delete")):
+                            return "planogram_deleted_best_check"
+                        if asks_lowest and any(k in s for k in ("เพิ่ม", "add", "new")):
+                            return "planogram_added_lowest_check"
+                        if asks_list:
+                            return "planogram_items_detail"
+                    if "maintain" in s and any(k in s for k in ("กลับ", "restore", "เปลี่ยน")):
+                        return "restore_maintain"
+                    if mentions_item_name:
+                        if "cluster" in s:
+                            return "item_clusters_detail"
+                        if has_plan:
+                            return "item_planograms_detail"
+                        if asks_change:
+                            return "item_changes_detail"
+                        if asks_sales and not (asks_best or asks_lowest):
+                            return "item_sales_detail"
+                        if asks_best:
+                            return "item_best_seller_check"
+                        if asks_lowest:
+                            return "item_lowest_seller_check"
+                    if ("clear" in s or "ล้าง" in s) and "item" in s:
+                        return "clear_item_changes"
+                    if ("clear" in s or "ล้าง" in s) and has_plan:
+                        return "clear_planogram_changes"
+                    if _chat_cmp("ลบสินค้าที่ขายต่ำสุด 5 ตัว") in compact or ("delete lowest 5" in s):
+                        return "delete_lowest5_from_planogram"
+                    if _chat_cmp("เพิ่มitemที่ตอบล่าสุด") in compact or ("add recent item" in s):
+                        return "add_recent_item_planogram"
+                    if _chat_cmp("ลบitemที่ตอบล่าสุด") in compact or ("delete recent item" in s):
+                        return "delete_recent_item_planogram"
+                    if any(k in s for k in ("ตรวจข้อมูลก่อน submit", "pre submit", "blocking submit")):
+                        return "pre_submit_check"
+                    if any(k in s for k in ("กรอกข้อมูลไม่ครบ", "incomplete")):
+                        return "new_item_incomplete_check"
+                    if any(k in s for k in ("ไม่มี id", "missing id")):
+                        return "new_item_missing_id"
+                    if any(k in s for k in ("ไม่มี 52wk", "missing 52wk")):
+                        return "new_item_missing_52wk"
+                    if any(k in s for k in ("รอ confirm", "pending confirm")):
+                        return "pending_confirm_check"
+                    if any(k in s for k in ("สิ่งที่ต้องแก้", "blocking")):
+                        return "submit_fix_summary"
+                    if "cluster" in s and has_plan:
+                        return "cluster_planograms_detail"
+                    if "cluster" in s and any(k in s for k in ("เปลี่ยน", "changes", "ถูก")):
+                        return "cluster_changes_detail"
+                    if "cluster" in s and any(k in s for k in ("risk", "เสี่ยง")):
+                        return "cluster_risk_detail"
+                    if "cluster" in s and any(k in s for k in ("to-be", "tobe", "sku change", "เปลี่ยนเท่าไหร่")):
+                        return "cluster_tobe_change"
+                    if has_plan and any(k in s for k in ("มีสินค้าอะไร", "items in")):
+                        return "planogram_items_detail"
+                    if has_plan and any(k in s for k in ("เปลี่ยนอะไร", "changes", "ถูกเปลี่ยน")):
+                        return "planogram_changes_detail"
+                    if has_plan and any(k in s for k in ("to-be", "tobe", "sku เปลี่ยน", "เปลี่ยนเท่าไหร่")):
+                        return "planogram_tobe_change"
+                    if has_plan and "best seller" in s and any(k in s for k in ("ลบ", "delete")):
+                        return "planogram_deleted_best_check"
+                    if has_plan and "lowest seller" in s and any(k in s for k in ("เพิ่ม", "add", "new")):
+                        return "planogram_added_lowest_check"
+                    if "item" in s or "สินค้า" in s:
+                        if any(k in s for k in ("อยู่ใน cluster", "cluster ไหน")):
+                            return "item_clusters_detail"
+                        if any(k in s for k in ("อยู่ใน planogram", "อยู่ในแพลน", "planogram ไหน")):
+                            return "item_planograms_detail"
+                        if any(k in s for k in ("ถูกเปลี่ยน", "เปลี่ยนอะไร", "changes")):
+                            return "item_changes_detail"
+                        if any(k in s for k in ("ยอดขาย", "sales")) and not any(k in s for k in ("สูงสุด", "ต่ำสุด", "best", "lowest")):
+                            return "item_sales_detail"
+                        if "best seller" in s:
+                            return "item_best_seller_check"
+                        if "lowest seller" in s or "tail 10" in s or any(k in s for k in ("ขายต่ำ", "ยอดขายต่ำ", "ขายน้อย", "ยอดขายน้อย")):
+                            return "item_lowest_seller_check"
+                    if any(k in s for k in ("undo", "ย้อนกลับ")) or _chat_cmp("แก้ล่าสุด") in compact:
+                        return "undo_last"
+                    if "cluster" in s and any(k in s for k in ("impact", "กระทบ", "ได้รับผล", "มากที่สุด", "most")):
+                        return "cluster_most_impacted"
+                    if any(k in s for k in ("ผิดปกติ", "recommendation", "แนะนำ", "วิเคราะห์ impact", "impact analysis")):
+                        return "impact_analysis"
+                    if any(k in s for k in ("submit", "review ก่อน", "ควร review", "risk", "เสี่ยง")):
+                        return "submit_risk" if "submit" in s else "riskiest_items"
+                    if any(k in s for k in ("best seller", "top 10")) and any(k in s for k in ("ลบ", "delete")):
+                        return "deleted_best_seller_count" if any(k in s for k in ("กี่", "count", "เท่าไหร่")) else "deleted_best_sellers"
+                    if any(k in s for k in ("lowest seller", "tail 10", "lowest")) and any(k in s for k in ("เพิ่ม", "new", "add")):
+                        return "added_lowest_seller_count" if any(k in s for k in ("กี่", "count", "เท่าไหร่")) else "added_lowest_sellers"
+                    if has_plan and any(k in s for k in ("ถูกลบ", "delete")) and has_max:
+                        return "planogram_most_deleted"
+                    if has_plan and any(k in s for k in ("ถูกเพิ่ม", "เพิ่ม", "new", "add")) and has_max:
+                        return "planogram_most_added"
+                    if any(k in s for k in ("ขายดีที่สุด", "ขายดีสุด", "ยอดขายสูงสุด", "best selling", "highest sales")):
+                        return "best_sales_items"
+                    if any(k in s for k in ("สินค้าใหม่", "new item")) and any(k in s for k in ("กังวล", "risk", "lowest")):
+                        return "new_item_risk"
                     if any(k in s for k in ("สรุป", "summary", "กี่ sku", "กี่สินค้า", "กี่ planogram")):
                         return "summary"
                     if any(k in s for k in ("new", "delete", "delist", "maintain", "status", "สถานะ")) and not any(k in s for k in ("ควรลบ", "ขายต่ำ", "ยอดขายต่ำ")):
@@ -3214,7 +3780,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         return "ไม่มีตัวเลขใน planogram columns"
                     pog, val = counts.index[0], int(counts.iloc[0])
                     label = "มากที่สุด" if kind == "max" else "น้อยที่สุด"
-                    return f"Planogramme ที่มีสินค้า{label}: {pog} ({val:,} item)"
+                    return f"Planogram ที่มีสินค้า{label}: {pog} ({val:,} item)"
 
                 def _planogram_total_answer(kind: str) -> str:
                     m = _numeric_planogram_matrix(_tdf)
@@ -3225,7 +3791,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         return "ไม่มีตัวเลขใน planogram columns"
                     pog, val = totals.index[0], float(totals.iloc[0])
                     label = "มากที่สุด" if kind == "max" else "น้อยที่สุด"
-                    return f"Planogramme ที่มียอดขายรวม{label}: {pog} ({val:,.2f})"
+                    return f"Planogram ที่มียอดขายรวม{label}: {pog} ({val:,.2f})"
 
                 def _item_planogram_answer(kind: str) -> str:
                     m = _numeric_planogram_matrix(_tdf)
@@ -3239,8 +3805,70 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     target = counts.max() if kind == "max" else counts.min()
                     rows = counts[counts == target].index[:5]
                     label = "มากที่สุด" if kind == "max" else "น้อยที่สุด"
-                    items = [f"{_fmt_item(_tdf.loc[i])} ({int(target):,} planogramme)" for i in rows]
-                    return "สินค้าที่อยู่ใน planogramme" + label + ": " + "; ".join(items)
+                    lines = [
+                        f"- {_fmt_item(_tdf.loc[i])} = {int(target):,} planogram"
+                        for i in rows
+                    ]
+                    return f"สินค้าที่อยู่ใน planogram {label}:\n" + _chat_fmt_lines(lines, "- none")
+
+                def _chat_scoped_planogram_cols(q: str) -> tuple[list[str], str, str]:
+                    cols = _chat_planogram_columns(q)
+                    if cols:
+                        label = cols[0] if len(cols) == 1 else f"{len(cols):,} planogram"
+                        return cols, "planogram", label
+                    q_cmp = _chat_cmp(q)
+                    clusters = sorted({
+                        _chat_cluster_for_pog(pc)
+                        for pc in _dyn_pog_cols
+                        if pc in _tdf.columns
+                    })
+                    cluster_mentioned = "cluster" in _chat_norm(q) or any(
+                        _chat_cmp(cl) and _chat_cmp(cl) in q_cmp
+                        for cl in clusters
+                    )
+                    if not cluster_mentioned:
+                        return [], "", ""
+                    cl, msg = _chat_cluster_from_question(q)
+                    if msg or not cl:
+                        return [], "", ""
+                    cl_cols = [
+                        pc for pc in _dyn_pog_cols
+                        if pc in _tdf.columns and _chat_cluster_for_pog(pc) == cl
+                    ]
+                    return cl_cols, "cluster", cl
+
+                def _item_rank_in_scope_answer(q: str, kind: str) -> str | None:
+                    cols, scope_kind, scope_label = _chat_scoped_planogram_cols(q)
+                    if not cols:
+                        return None
+                    m = _numeric_planogram_matrix(_tdf)
+                    valid_cols = [c for c in cols if c in m.columns]
+                    if not valid_cols:
+                        return f"ไม่พบ planogram ที่ตรงกับคำถามในข้อมูลหลัง filter"
+                    sub = m[valid_cols]
+                    present_counts = sub.notna().sum(axis=1)
+                    if len(valid_cols) == 1:
+                        metric = sub[valid_cols[0]]
+                        metric_label = "value"
+                    else:
+                        metric = present_counts * 1000000000 + sub.sum(axis=1, skipna=True).fillna(0)
+                        metric_label = "planogram count"
+                    metric = metric[present_counts > 0].dropna()
+                    if metric.empty:
+                        return f"{scope_label} ไม่มี item ที่มีตัวเลขใน planogram หลัง filter"
+                    ranked = metric.sort_values(ascending=(kind == "min"))
+                    top_idx = list(ranked.index[:5])
+                    label = "มากที่สุด" if kind == "max" else "น้อยที่สุด"
+                    lines = []
+                    for row_i in top_idx:
+                        if len(valid_cols) == 1:
+                            val = _num_cell(_tdf.at[row_i, valid_cols[0]])
+                            suffix = f"{val:,.2f}" if val is not None else "numeric value"
+                        else:
+                            suffix = f"{int(present_counts.loc[row_i]):,}/{len(valid_cols):,} planogram"
+                        lines.append(f"- {_fmt_item(_tdf.loc[row_i])} ({suffix})")
+                    scope_txt = f"{scope_kind} {scope_label}"
+                    return f"สินค้าใน {scope_txt} ที่{label}:\n" + _chat_fmt_lines(lines, "- none", limit=10)
 
                 def _planogram_blanks_answer() -> str:
                     cols = [c for c in _dyn_pog_cols if c in _tdf.columns]
@@ -3248,7 +3876,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         return "ไม่พบ planogram columns สำหรับนับช่องว่าง"
                     blanks = {c: int(_tdf[c].map(_num_cell).isna().sum()) for c in cols}
                     ser = pd.Series(blanks).sort_values(ascending=False)
-                    return f"Planogramme ที่มีช่องว่างมากที่สุด: {ser.index[0]} ({int(ser.iloc[0]):,} ช่อง)"
+                    return f"Planogram ที่มีช่องว่างมากที่สุด: {ser.index[0]} ({int(ser.iloc[0]):,} ช่อง)"
 
                 def _action_counts_answer() -> str:
                     vals = []
@@ -3258,7 +3886,11 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         _tdf_display["Status"].astype(str).value_counts().to_dict()
                         if "Status" in _tdf_display.columns else {}
                     )
-                    action_counts = {a: vals.count(a) for a in ("New", "Delete", "Delist", "Keep")}
+                    action_counts = {
+                        "New": vals.count("New"),
+                        "Delete": vals.count("Delete"),
+                        "Maintain": vals.count("Keep") + vals.count("Maintain"),
+                    }
                     return (
                         "Action counts: "
                         + ", ".join(f"{k}={v:,}" for k, v in action_counts.items())
@@ -3267,7 +3899,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     )
 
                 def _summary_answer() -> str:
-                    return f"DG/filter ปัจจุบันมี {len(_tdf):,} SKU/item และ {len(_dyn_pog_cols):,} planogramme"
+                    return f"DG/filter ปัจจุบันมี {len(_tdf):,} SKU/item และ {len(_dyn_pog_cols):,} planogram"
 
                 def _lowest_sales_items_answer() -> str:
                     vol_col = _find_col(_tdf, [
@@ -3307,8 +3939,752 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     lines = [f"{idx}. {item} = {val:,.2f} ({src})" for idx, (val, src, item, _) in enumerate(rows, 1)]
                     return "สินค้าที่มียอดขายต่ำที่สุด 5 ตัวแรก:\n" + "\n".join(lines)
 
+                def _chat_sales_metric(row_i: int):
+                    row = _tdf.loc[row_i]
+                    vol = _num_cell(row.get(_chat_vol_col)) if _chat_vol_col else None
+                    fc = _num_cell(row.get(_chat_fc_col)) if _chat_fc_col else None
+                    if vol is not None:
+                        return float(vol), "Volume52WK" if _chat_vol_col != _chat_mapped_col else "Volume52WK/Forecast mapped"
+                    if fc is not None:
+                        return float(fc), "ForecastSales"
+                    return None, ""
+
+                def _chat_ranked_sales_rows(desc: bool, limit: int = 5):
+                    key = bool(desc)
+                    if key not in _chat_ranked_sales_cache:
+                        rows_all = []
+                        for row_i in _tdf.index:
+                            val, src = _chat_sales_metric(int(row_i))
+                            if val is not None:
+                                rows_all.append((val, src, int(row_i)))
+                        _chat_ranked_sales_cache[key] = sorted(rows_all, key=lambda x: x[0], reverse=desc)
+                    return _chat_ranked_sales_cache[key][:limit]
+
+                def _chat_all_actions():
+                    nonlocal _chat_actions_cache
+                    if _chat_actions_cache is not None:
+                        return _chat_actions_cache
+                    rows = []
+                    for row_i in _tdf.index:
+                        rk = _make_rk(int(row_i))
+                        acts = {}
+                        acts.update(_pog_edits.get(rk, {}) or {})
+                        acts.update(_pog_actions.get(rk, {}) or {})
+                        status = str(_status_overrides.get(rk, "")).strip().upper()
+                        if status == "DELETE ALL":
+                            acts = {pc: "Delete" for pc in _row_numeric_pog_cols(int(row_i))}
+                        for pc, act in acts.items():
+                            if pc in _tdf.columns and str(act) in ("Delete", "New"):
+                                rows.append((int(row_i), rk, pc, str(act)))
+                    _chat_actions_cache = rows
+                    return rows
+
+                def _chat_cluster_for_pog(pog: str) -> str:
+                    return (
+                        _pog_to_cl.get(pog)
+                        or _pog_to_cl.get(_nca(pog))
+                        or str(pog).split("_target_")[0]
+                        or "Unspecified"
+                    )
+
+                def _chat_action_summary():
+                    actions = _chat_all_actions()
+                    return {
+                        "actions": actions,
+                        "delete": [x for x in actions if x[3] == "Delete"],
+                        "new": [x for x in actions if x[3] == "New"],
+                    }
+
+                def _chat_delete_best_seller_rows():
+                    rows = []
+                    for row_i, rk, pc, act in _chat_action_summary()["delete"]:
+                        is_top, val, cutoff = _delete_is_top10(row_i, pc)
+                        if is_top:
+                            rows.append((row_i, pc, val, cutoff))
+                    return rows
+
+                def _chat_new_lowest_seller_rows():
+                    rows = []
+                    for row_i, rk, pc, act in _chat_action_summary()["new"]:
+                        if _is_low_sales_item(row_i):
+                            val, src = _chat_sales_metric(row_i)
+                            rows.append((row_i, pc, val, src))
+                    return rows
+
+                def _chat_planogram_action_answer(kind: str) -> str:
+                    acts = _chat_action_summary()["delete" if kind == "delete" else "new"]
+                    if not acts:
+                        return "ยังไม่มี action ตามประเภทนี้ใน planogram หลัง filter"
+                    counts = pd.Series([pc for _, _, pc, _ in acts]).value_counts()
+                    pog, val = counts.index[0], int(counts.iloc[0])
+                    word = "ถูกลบ" if kind == "delete" else "ถูกเพิ่ม"
+                    return f"Planogram ที่{word}เยอะที่สุด: {pog} ({val:,} ช่อง)"
+
+                def _chat_cluster_impact_answer() -> str:
+                    actions = _chat_all_actions()
+                    if not actions:
+                        return "ยังไม่มีการเปลี่ยนแปลง planogram ใน DG/filter นี้"
+                    counts = {}
+                    for _, _, pc, _ in actions:
+                        cl = _chat_cluster_for_pog(pc)
+                        counts[cl] = counts.get(cl, 0) + 1
+                    ser = pd.Series(counts).sort_values(ascending=False)
+                    return f"Cluster ที่ได้รับผลกระทบมากที่สุด: {ser.index[0]} ({int(ser.iloc[0]):,} action)"
+
+                def _chat_best_sales_items_answer() -> str:
+                    rows = _chat_ranked_sales_rows(True, 5)
+                    if not rows:
+                        return "ไม่พบยอดขาย/forecast สำหรับจัดอันดับสินค้า"
+                    st.session_state[f"{p}_rs_chat_recent_items"] = [
+                        {"row_i": row_i, "item": _fmt_item(_tdf.loc[row_i]), "metric": float(val), "source": src}
+                        for val, src, row_i in rows
+                    ]
+                    lines = [
+                        f"{i}. {_fmt_item(_tdf.loc[row_i])} = {val:,.2f} ({src})"
+                        for i, (val, src, row_i) in enumerate(rows, 1)
+                    ]
+                    return "สินค้าที่ขายดีที่สุด 5 ตัวแรก:\n" + "\n".join(lines)
+
+                def _chat_best_deleted_answer(count_only: bool = False) -> str:
+                    rows = _chat_delete_best_seller_rows()
+                    if count_only:
+                        return f"ลบสินค้า Top 10% best seller ออกไป {len(rows):,} ช่อง"
+                    if not rows:
+                        return "ยังไม่พบการลบสินค้า Top 10% best seller"
+                    lines = []
+                    for row_i, pc, val, cutoff in rows[:5]:
+                        lines.append(f"- {_fmt_item(_tdf.loc[row_i])} ออกจาก {pc} ({val:,.2f})")
+                    return "พบการลบ Top 10% best seller:\n" + "\n".join(lines)
+
+                def _chat_lowest_added_answer(count_only: bool = False) -> str:
+                    rows = _chat_new_lowest_seller_rows()
+                    if count_only:
+                        return f"เพิ่มสินค้า Top 10% lowest seller เข้าไป {len(rows):,} ช่อง"
+                    if not rows:
+                        return "ยังไม่พบการเพิ่มสินค้า Top 10% lowest seller"
+                    lines = []
+                    for row_i, pc, val, src in rows[:5]:
+                        metric_txt = f"{val:,.2f}" if val is not None else "no metric"
+                        lines.append(f"- {_fmt_item(_tdf.loc[row_i])} เข้า {pc} ({metric_txt} {src})")
+                    return "พบการเพิ่ม Top 10% lowest seller:\n" + "\n".join(lines)
+
+                def _chat_risk_review_answer() -> str:
+                    delete_risk = _chat_delete_best_seller_rows()
+                    add_risk = _chat_new_lowest_seller_rows()
+                    if not delete_risk and not add_risk:
+                        return "ยังไม่พบ risk หลักก่อน submit: ไม่มีการลบ Top 10% best seller และไม่มีการเพิ่ม Top 10% lowest seller"
+                    lines = ["จุดที่ควร review ก่อน submit:"]
+                    if delete_risk:
+                        lines.append(f"- ลบ Top 10% best seller {len(delete_risk):,} ช่อง")
+                    if add_risk:
+                        lines.append(f"- เพิ่ม Top 10% lowest seller {len(add_risk):,} ช่อง")
+                    sample = delete_risk[:2] + add_risk[:2]
+                    for row_i, pc, *_ in sample[:4]:
+                        lines.append(f"  • {_fmt_item(_tdf.loc[row_i])} / {pc}")
+                    return "\n".join(lines)
+
+                def _chat_impact_answer() -> str:
+                    summary = _chat_action_summary()
+                    del_count = len(summary["delete"])
+                    new_count = len(summary["new"])
+                    best_del = len(_chat_delete_best_seller_rows())
+                    low_new = len(_chat_new_lowest_seller_rows())
+                    net = new_count - del_count
+                    msg = [
+                        "Impact summary:",
+                        f"- Delete actions: {del_count:,}",
+                        f"- New actions: {new_count:,}",
+                        f"- Net planogram cell change: {net:+,}",
+                        f"- Risk flags: delete Top 10% best seller {best_del:,}, add Top 10% lowest seller {low_new:,}",
+                    ]
+                    if best_del or low_new:
+                        msg.append("Recommendation: review risk flags before submit because the movement may reduce planogram productivity.")
+                    else:
+                        msg.append("Recommendation: no major sales-risk flag found from current changes.")
+                    return "\n".join(msg)
+
+                def _chat_new_item_risk_answer() -> str:
+                    new_rows = _chat_new_lowest_seller_rows()
+                    if not new_rows:
+                        return "สินค้าใหม่ที่เพิ่มมายังไม่พบว่าอยู่ในกลุ่ม Top 10% lowest seller"
+                    return _chat_lowest_added_answer(False)
+
+                def _chat_restore_maintain(q: str):
+                    row_i, score = _best_chat_item_row(q)
+                    if row_i is None or score < 0.25:
+                        recent = st.session_state.get(f"{p}_rs_chat_recent_items", [])
+                        if recent:
+                            row_i = int(recent[0].get("row_i"))
+                        else:
+                            return "ต้องการเปลี่ยน item ไหนกลับเป็น MAINTAIN? กรุณาพิมพ์ ID หรือ Item Name"
+                    rk = _make_rk(row_i)
+                    old_acts = dict(_pog_actions.get(rk, {}) or {})
+                    old_edits = dict(_pog_edits.get(rk, {}) or {})
+                    old_status = _status_overrides.get(rk)
+                    st.session_state[f"{p}_rs_chat_last_undo"] = {
+                        "rk": rk,
+                        "pog_actions": old_acts,
+                        "pog_edits": old_edits,
+                        "status": old_status,
+                    }
+                    _pog_actions.pop(rk, None)
+                    _pog_edits.pop(rk, None)
+                    _status_overrides.pop(rk, None)
+                    _chat_invalidate_calc_cache()
+                    _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
+                    return f"เปลี่ยน {_fmt_item(_tdf.loc[row_i])} กลับเป็น MAINTAIN แล้ว"
+
+                def _chat_undo_last_answer() -> str:
+                    undo = st.session_state.get(f"{p}_rs_chat_last_undo")
+                    if not undo:
+                        return "ยังไม่มี action ล่าสุดจาก chatbot ให้ undo"
+                    rows_undo = undo.get("rows")
+                    if not rows_undo:
+                        rk = tuple(undo.get("rk", ()))
+                        rows_undo = {rk: undo} if rk else {}
+                    if not rows_undo:
+                        return "หา row สำหรับ undo ไม่เจอ"
+                    for rk, snap in rows_undo.items():
+                        rk = tuple(rk)
+                        if snap.get("pog_actions"):
+                            _pog_actions[rk] = dict(snap.get("pog_actions") or {})
+                        else:
+                            _pog_actions.pop(rk, None)
+                        if snap.get("pog_edits"):
+                            _pog_edits[rk] = dict(snap.get("pog_edits") or {})
+                        else:
+                            _pog_edits.pop(rk, None)
+                        if snap.get("status") is None:
+                            _status_overrides.pop(rk, None)
+                        else:
+                            _status_overrides[rk] = snap.get("status")
+                    st.session_state.pop(f"{p}_rs_chat_last_undo", None)
+                    _chat_invalidate_calc_cache()
+                    _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
+                    return "Undo การแก้ล่าสุดจาก chatbot แล้ว"
+
+                def _chat_recent_rows() -> list[int]:
+                    recent = st.session_state.get(f"{p}_rs_chat_recent_items", [])
+                    rows = []
+                    for x in recent if isinstance(recent, list) else []:
+                        try:
+                            row_i = int(x.get("row_i"))
+                        except Exception:
+                            continue
+                        if row_i in _tdf.index:
+                            rows.append(row_i)
+                    return rows
+
+                def _chat_item_row_from_question(q: str):
+                    row_i, score = _best_chat_item_row(q)
+                    if row_i is not None and score >= 0.25:
+                        st.session_state[f"{p}_rs_chat_recent_items"] = [
+                            {"row_i": int(row_i), "item": _fmt_item(_tdf.loc[int(row_i)])}
+                        ]
+                        return int(row_i), ""
+                    recent_rows = _chat_recent_rows()
+                    if recent_rows:
+                        return recent_rows[0], ""
+                    st.session_state[f"{p}_rs_chat_pending_entity"] = {
+                        "kind": "item",
+                        "q": q,
+                        "intent": _detect_chat_intent(q),
+                    }
+                    return None, "Please type item ID or item name more clearly."
+
+                def _chat_planogram_from_question(q: str):
+                    cols = _chat_planogram_columns(q)
+                    if cols:
+                        st.session_state[f"{p}_rs_chat_recent_planogram"] = cols[0]
+                        return cols[0], ""
+                    prev = st.session_state.get(f"{p}_rs_chat_recent_planogram")
+                    if prev in _tdf.columns:
+                        return prev, ""
+                    st.session_state[f"{p}_rs_chat_pending_entity"] = {
+                        "kind": "planogram",
+                        "q": q,
+                        "intent": _detect_chat_intent(q),
+                    }
+                    return None, "Please type a planogram / target more clearly, for example 5012."
+
+                def _chat_cluster_from_question(q: str):
+                    q_cmp = _chat_cmp(q)
+                    q_tokens = [
+                        _chat_cmp(x)
+                        for x in _re.findall(r"[A-Za-z0-9_]+", str(q))
+                        if len(_chat_cmp(x)) >= 3
+                    ]
+                    clusters = sorted({
+                        _chat_cluster_for_pog(pc)
+                        for pc in _dyn_pog_cols
+                        if pc in _tdf.columns
+                    })
+                    best_cl, best_score = "", 0.0
+                    for cl in clusters:
+                        cl_cmp = _chat_cmp(cl)
+                        if not cl_cmp:
+                            continue
+                        score = 1.0 if cl_cmp in q_cmp else difflib.SequenceMatcher(None, q_cmp, cl_cmp).ratio()
+                        if any(tok and tok in cl_cmp for tok in q_tokens):
+                            score = max(score, 0.86)
+                        if score > best_score:
+                            best_cl, best_score = cl, score
+                    if best_cl and best_score >= 0.25:
+                        st.session_state[f"{p}_rs_chat_recent_cluster"] = best_cl
+                        return best_cl, ""
+                    if len(clusters) == 1:
+                        st.session_state[f"{p}_rs_chat_recent_cluster"] = clusters[0]
+                        return clusters[0], ""
+                    prev = st.session_state.get(f"{p}_rs_chat_recent_cluster")
+                    if prev in clusters:
+                        return prev, ""
+                    st.session_state[f"{p}_rs_chat_pending_entity"] = {
+                        "kind": "cluster",
+                        "q": q,
+                        "intent": _detect_chat_intent(q),
+                    }
+                    return None, "Please type cluster name more clearly."
+
+                def _chat_present_after_actions(row_i: int, pc: str) -> bool:
+                    rk = _make_rk(row_i)
+                    act = (_pog_actions.get(rk, {}) or {}).get(pc) or (_pog_edits.get(rk, {}) or {}).get(pc)
+                    if act == "Delete":
+                        return False
+                    if act == "New":
+                        return True
+                    return _num_cell(_tdf.at[row_i, pc]) is not None
+
+                def _chat_planogram_counts_with_actions(pc: str):
+                    if pc in _chat_planogram_count_cache:
+                        return _chat_planogram_count_cache[pc]
+                    as_is = 0
+                    to_be = 0
+                    new_count = 0
+                    delete_count = 0
+                    for row_i in _tdf.index:
+                        original = _num_cell(_tdf.at[row_i, pc]) is not None if pc in _tdf.columns else False
+                        present = _chat_present_after_actions(int(row_i), pc) if pc in _tdf.columns else False
+                        as_is += int(original)
+                        to_be += int(present)
+                        if original and not present:
+                            delete_count += 1
+                        if present and not original:
+                            new_count += 1
+                    out = (as_is, to_be, new_count, delete_count)
+                    _chat_planogram_count_cache[pc] = out
+                    return out
+
+                def _chat_fmt_lines(lines: list[str], empty: str, limit: int = 20) -> str:
+                    if not lines:
+                        return empty
+                    shown = lines[:limit]
+                    more = len(lines) - len(shown)
+                    suffix = ""
+                    if more > 0:
+                        full_text = "\n".join(lines)
+                        suffix = f"\n[[RS_CHAT_MORE:{more}:{full_text}]]"
+                    return "\n".join(shown) + suffix
+
+                def _chat_item_planograms_answer(q: str) -> str:
+                    row_i, msg = _chat_item_row_from_question(q)
+                    if msg:
+                        return msg
+                    cols = [pc for pc in _dyn_pog_cols if pc in _tdf.columns and _chat_present_after_actions(row_i, pc)]
+                    item_txt = _fmt_item(_tdf.loc[row_i])
+                    return f"{item_txt} is in {len(cols):,} planogram(s):\n" + _chat_fmt_lines([f"- {c}" for c in cols], "- none")
+
+                def _chat_item_changes_answer(q: str) -> str:
+                    row_i, msg = _chat_item_row_from_question(q)
+                    if msg:
+                        return msg
+                    acts = [(pc, act) for r, _, pc, act in _chat_all_actions() if r == row_i]
+                    item_txt = _fmt_item(_tdf.loc[row_i])
+                    if not acts:
+                        return f"{item_txt} has no current planogram action."
+                    lines = [f"- {act}: {pc}" for pc, act in acts]
+                    return f"{item_txt} current changes:\n" + _chat_fmt_lines(lines, "- none")
+
+                def _chat_item_sales_answer(q: str) -> str:
+                    row_i, msg = _chat_item_row_from_question(q)
+                    if msg:
+                        return msg
+                    val, src = _chat_sales_metric(row_i)
+                    rank_rows = _chat_ranked_sales_rows(True, len(_tdf))
+                    rank = next((i for i, (_, _, r) in enumerate(rank_rows, 1) if r == row_i), None)
+                    rank_txt = f", rank {rank:,}/{len(rank_rows):,}" if rank else ""
+                    metric_txt = f"{val:,.2f} ({src})" if val is not None else "no sales metric found"
+                    top_n = max(1, int(math.ceil(len(rank_rows) * 0.10))) if rank_rows else 0
+                    best_txt = "Yes, Top 10% best seller" if row_i in {r for _, _, r in rank_rows[:top_n]} else "No"
+                    low_txt = "Yes, Top 10% lowest seller" if _is_low_sales_item(row_i) else "No"
+                    return f"{_fmt_item(_tdf.loc[row_i])}: {metric_txt}{rank_txt}\nBest seller: {best_txt}\nLowest seller: {low_txt}"
+
+                def _chat_item_best_check_answer(q: str) -> str:
+                    row_i, msg = _chat_item_row_from_question(q)
+                    if msg:
+                        return msg
+                    rows = _chat_ranked_sales_rows(True, len(_tdf))
+                    top_n = max(1, int(math.ceil(len(rows) * 0.10))) if rows else 0
+                    top_rows = {r for _, _, r in rows[:top_n]}
+                    val, src = _chat_sales_metric(row_i)
+                    return f"{_fmt_item(_tdf.loc[row_i])}: {'Yes' if row_i in top_rows else 'No'} - Top 10% best seller ({val:,.2f} {src})" if val is not None else f"{_fmt_item(_tdf.loc[row_i])}: no sales metric found"
+
+                def _chat_item_lowest_check_answer(q: str) -> str:
+                    row_i, msg = _chat_item_row_from_question(q)
+                    if msg:
+                        return msg
+                    val, src = _chat_sales_metric(row_i)
+                    return f"{_fmt_item(_tdf.loc[row_i])}: {'Yes' if _is_low_sales_item(row_i) else 'No'} - Top 10% lowest seller ({val:,.2f} {src})" if val is not None else f"{_fmt_item(_tdf.loc[row_i])}: no sales metric found"
+
+                def _chat_item_clusters_answer(q: str) -> str:
+                    row_i, msg = _chat_item_row_from_question(q)
+                    if msg:
+                        return msg
+                    clusters = sorted({
+                        _chat_cluster_for_pog(pc)
+                        for pc in _dyn_pog_cols
+                        if pc in _tdf.columns and _chat_present_after_actions(row_i, pc)
+                    })
+                    return f"{_fmt_item(_tdf.loc[row_i])} is in {len(clusters):,} cluster(s):\n" + _chat_fmt_lines([f"- {c}" for c in clusters], "- none")
+
+                def _chat_planogram_items_answer(q: str) -> str:
+                    pc, msg = _chat_planogram_from_question(q)
+                    if msg:
+                        return msg
+                    rows = [int(r) for r in _tdf.index if _chat_present_after_actions(int(r), pc)]
+                    st.session_state[f"{p}_rs_chat_recent_items"] = [
+                        {"row_i": r, "item": _fmt_item(_tdf.loc[r])}
+                        for r in rows[:10]
+                    ]
+                    lines = [f"- {_fmt_item(_tdf.loc[r])}" for r in rows]
+                    return f"{pc} has {len(rows):,} TO-BE item(s):\n" + _chat_fmt_lines(lines, "- none")
+
+                def _chat_planogram_changes_answer(q: str) -> str:
+                    pc, msg = _chat_planogram_from_question(q)
+                    if msg:
+                        return msg
+                    acts = [(r, act) for r, _, c, act in _chat_all_actions() if c == pc]
+                    lines = [f"- {act}: {_fmt_item(_tdf.loc[r])}" for r, act in acts]
+                    return f"{pc} current changes ({len(acts):,}):\n" + _chat_fmt_lines(lines, "- no changes")
+
+                def _chat_planogram_tobe_change_answer(q: str) -> str:
+                    pc, msg = _chat_planogram_from_question(q)
+                    if msg:
+                        return msg
+                    as_is, to_be, new_count, delete_count = _chat_planogram_counts_with_actions(pc)
+                    return f"{pc}: AS-IS {as_is:,}, TO-BE {to_be:,}, Net {to_be - as_is:+,} (New {new_count:,}, Delete {delete_count:,})"
+
+                def _chat_planogram_deleted_best_answer(q: str) -> str:
+                    pc, msg = _chat_planogram_from_question(q)
+                    if msg:
+                        return msg
+                    rows = [(r, val) for r, c, val, _ in _chat_delete_best_seller_rows() if c == pc]
+                    lines = [f"- {_fmt_item(_tdf.loc[r])} ({val:,.2f})" for r, val in rows]
+                    return f"{pc} deleted Top 10% best seller count: {len(rows):,}\n" + _chat_fmt_lines(lines, "- none")
+
+                def _chat_planogram_added_lowest_answer(q: str) -> str:
+                    pc, msg = _chat_planogram_from_question(q)
+                    if msg:
+                        return msg
+                    rows = [(r, val, src) for r, c, val, src in _chat_new_lowest_seller_rows() if c == pc]
+                    lines = [f"- {_fmt_item(_tdf.loc[r])} ({val:,.2f} {src})" for r, val, src in rows if val is not None]
+                    return f"{pc} added Top 10% lowest seller count: {len(rows):,}\n" + _chat_fmt_lines(lines, "- none")
+
+                def _chat_cluster_planograms_answer(q: str) -> str:
+                    cl, msg = _chat_cluster_from_question(q)
+                    if msg:
+                        return msg
+                    cols = [pc for pc in _dyn_pog_cols if pc in _tdf.columns and _chat_cluster_for_pog(pc) == cl]
+                    return f"{cl} has {len(cols):,} planogram(s):\n" + _chat_fmt_lines([f"- {c}" for c in cols], "- none")
+
+                def _chat_cluster_changes_answer(q: str) -> str:
+                    cl, msg = _chat_cluster_from_question(q)
+                    if msg:
+                        return msg
+                    acts = [(r, pc, act) for r, _, pc, act in _chat_all_actions() if _chat_cluster_for_pog(pc) == cl]
+                    delete_count = sum(1 for _, _, a in acts if a == "Delete")
+                    new_count = sum(1 for _, _, a in acts if a == "New")
+                    lines = [f"- {act}: {_fmt_item(_tdf.loc[r])} / {pc}" for r, pc, act in acts]
+                    return f"{cl} changes: Delete {delete_count:,}, New {new_count:,}, Total {len(acts):,}\n" + _chat_fmt_lines(lines, "- no changes")
+
+                def _chat_cluster_risk_answer(q: str) -> str:
+                    cl, msg = _chat_cluster_from_question(q)
+                    if msg:
+                        return msg
+                    del_risk = [(r, pc, val) for r, pc, val, _ in _chat_delete_best_seller_rows() if _chat_cluster_for_pog(pc) == cl]
+                    add_risk = [(r, pc, val, src) for r, pc, val, src in _chat_new_lowest_seller_rows() if _chat_cluster_for_pog(pc) == cl]
+                    lines = [f"- Delete best seller: {_fmt_item(_tdf.loc[r])} / {pc} ({val:,.2f})" for r, pc, val in del_risk]
+                    lines += [f"- Add lowest seller: {_fmt_item(_tdf.loc[r])} / {pc} ({val:,.2f} {src})" for r, pc, val, src in add_risk if val is not None]
+                    return f"{cl} risk flags: delete best seller {len(del_risk):,}, add lowest seller {len(add_risk):,}\n" + _chat_fmt_lines(lines, "- no risk flags")
+
+                def _chat_cluster_tobe_change_answer(q: str) -> str:
+                    cl, msg = _chat_cluster_from_question(q)
+                    if msg:
+                        return msg
+                    cols = [pc for pc in _dyn_pog_cols if pc in _tdf.columns and _chat_cluster_for_pog(pc) == cl]
+                    totals = [_chat_planogram_counts_with_actions(pc) for pc in cols]
+                    as_is = sum(x[0] for x in totals)
+                    to_be = sum(x[1] for x in totals)
+                    new_count = sum(x[2] for x in totals)
+                    delete_count = sum(x[3] for x in totals)
+                    return f"{cl}: AS-IS {as_is:,}, TO-BE {to_be:,}, Net {to_be - as_is:+,} (New {new_count:,}, Delete {delete_count:,})"
+
+                def _chat_new_item_rows_with_data() -> list[int]:
+                    rows = []
+                    for row_i in _tdf.index:
+                        row = _tdf.loc[row_i]
+                        is_new_row = bool(row.get(_NEW_ROW_COL, False)) if _NEW_ROW_COL in _tdf.columns else False
+                        rk = _make_rk(int(row_i))
+                        status = str(_status_overrides.get(rk) or row.get("Status", "") or "").strip().upper()
+                        if not is_new_row and status != "NEWNEW":
+                            continue
+                        normal_cols = [c for c in _tdf.columns if not str(c).startswith("__")]
+                        has_data = any(str(row.get(c, "") or "").strip() not in ("", "nan", "None") for c in normal_cols)
+                        if has_data:
+                            rows.append(int(row_i))
+                    return rows
+
+                def _chat_new_item_validation():
+                    rows = _chat_new_item_rows_with_data()
+                    missing_id = []
+                    missing_52 = []
+                    avg_col = _find_col(_tdf, ["Avg Units 52wk/ Forecast new item sales", "Avg Units 52wk/Forecast new item sales"])
+                    for row_i in rows:
+                        row = _tdf.loc[row_i]
+                        item_id = str(row.get("ID", "") or "").strip()
+                        if not _re.fullmatch(r"\d{9}", item_id):
+                            missing_id.append(row_i)
+                        if not avg_col or _num_cell(row.get(avg_col)) is None:
+                            missing_52.append(row_i)
+                    return rows, missing_id, missing_52
+
+                def _chat_pending_confirm_count() -> int:
+                    total = 0
+                    for key in (_pending_del_key, _pending_new_key, f"{p}_rs_chat_confirm_new"):
+                        val = st.session_state.get(key)
+                        if isinstance(val, list):
+                            total += len(val)
+                        elif val:
+                            total += 1
+                    return total
+
+                def _chat_pre_submit_answer(kind: str = "all") -> str:
+                    rows, missing_id, missing_52 = _chat_new_item_validation()
+                    pending = _chat_pending_confirm_count()
+                    blockers = len(missing_id) + len(missing_52) + pending
+                    if kind == "missing_id":
+                        return f"New item missing valid 9-digit ID: {len(missing_id):,}"
+                    if kind == "missing_52":
+                        return f"New item missing Avg Units 52wk/ Forecast new item sales: {len(missing_52):,}"
+                    if kind == "incomplete":
+                        return f"New item incomplete rows: {len(set(missing_id + missing_52)):,} from {len(rows):,} new row(s)"
+                    if kind == "pending":
+                        return f"Pending confirmation action(s): {pending:,}"
+                    lines = [
+                        "Pre-submit check:",
+                        f"- New rows with data: {len(rows):,}",
+                        f"- Missing valid 9-digit ID: {len(missing_id):,}",
+                        f"- Missing 52wk/Forecast: {len(missing_52):,}",
+                        f"- Pending confirmations: {pending:,}",
+                    ]
+                    lines.append("Blocking submit: Yes" if blockers else "Blocking submit: No")
+                    return "\n".join(lines)
+
+                def _chat_clear_item_changes(q: str):
+                    row_i, msg = _chat_item_row_from_question(q)
+                    if msg:
+                        return msg, False
+                    rk = _make_rk(row_i)
+                    st.session_state[f"{p}_rs_chat_last_undo"] = {"rows": {rk: {
+                        "pog_actions": dict(_pog_actions.get(rk, {}) or {}),
+                        "pog_edits": dict(_pog_edits.get(rk, {}) or {}),
+                        "status": _status_overrides.get(rk),
+                    }}}
+                    _pog_actions.pop(rk, None)
+                    _pog_edits.pop(rk, None)
+                    _status_overrides.pop(rk, None)
+                    _chat_invalidate_calc_cache()
+                    _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
+                    return f"Cleared current changes for {_fmt_item(_tdf.loc[row_i])}.", True
+
+                def _chat_clear_planogram_changes(q: str):
+                    pc, msg = _chat_planogram_from_question(q)
+                    if msg:
+                        return msg, False
+                    undo_rows = {}
+                    changed_rows = 0
+                    for row_i in _tdf.index:
+                        rk = _make_rk(int(row_i))
+                        had = pc in (_pog_actions.get(rk, {}) or {}) or pc in (_pog_edits.get(rk, {}) or {})
+                        if not had:
+                            continue
+                        undo_rows[rk] = {
+                            "pog_actions": dict(_pog_actions.get(rk, {}) or {}),
+                            "pog_edits": dict(_pog_edits.get(rk, {}) or {}),
+                            "status": _status_overrides.get(rk),
+                        }
+                        if rk in _pog_actions:
+                            _pog_actions[rk].pop(pc, None)
+                            if not _pog_actions[rk]:
+                                _pog_actions.pop(rk, None)
+                        if rk in _pog_edits:
+                            _pog_edits[rk].pop(pc, None)
+                            if not _pog_edits[rk]:
+                                _pog_edits.pop(rk, None)
+                        _status_overrides[rk] = _derive_status(rk)
+                        changed_rows += 1
+                    if undo_rows:
+                        st.session_state[f"{p}_rs_chat_last_undo"] = {"rows": undo_rows}
+                        _chat_invalidate_calc_cache()
+                        _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
+                    return f"Cleared {changed_rows:,} change(s) in {pc}.", bool(undo_rows)
+
+                def _chat_delete_lowest5_from_planogram(q: str):
+                    pc, msg = _chat_planogram_from_question(q)
+                    if msg:
+                        return msg, False
+                    rows = [row_i for _, _, row_i in _chat_ranked_sales_rows(False, 5)]
+                    changed, pending = _chat_apply_delete_rows(rows, [pc])
+                    st.session_state[f"{p}_rs_chat_recent_items"] = [
+                        {"row_i": r, "item": _fmt_item(_tdf.loc[r])}
+                        for r in rows
+                    ]
+                    return f"Applied Delete for lowest-sales 5 item(s) in {pc}: changed {len(changed):,}, pending confirmation {len(pending):,}.", bool(changed)
+
+                def _chat_apply_recent_items_to_planogram(q: str, action: str):
+                    rows = _chat_recent_rows()
+                    if not rows:
+                        return "No recent item answer found. Ask an item ranking question first.", False
+                    pc, msg = _chat_planogram_from_question(q)
+                    if msg:
+                        return msg, False
+                    if action == "New":
+                        low_rows = [r for r in rows if _is_low_sales_item(r)]
+                        if low_rows:
+                            st.session_state[f"{p}_rs_chat_confirm_new"] = {
+                                "rows": rows,
+                                "pog_cols": [pc],
+                                "items": [_fmt_item(_tdf.loc[r]) for r in rows],
+                            }
+                            return f"{len(low_rows):,} item(s) are Top 10% lowest seller. Reply 'yes' to confirm adding to {pc}, or 'no' to cancel.", False
+                        changed = _chat_apply_new_rows(rows, [pc])
+                    else:
+                        changed, pending = _chat_apply_delete_rows(rows, [pc])
+                        if pending:
+                            return f"Applied Delete for {len(changed):,} cell(s). {len(pending):,} cell(s) are Top 10% best seller and need confirmation above the table.", bool(changed)
+                    if action == "New" and not changed:
+                        return f"No blank planogram cell found to add recent item(s) in {pc}.", False
+                    return f"Applied {action} for {len(changed):,} recent item(s) in {pc}.", bool(changed)
+
+                def _chat_handle_extra_action(q: str):
+                    intent = _detect_chat_intent(q)
+                    if _chat_delete_command(q):
+                        row_i, item_score = _best_chat_item_row(q)
+                        if row_i is not None and item_score >= 0.30:
+                            direct = _chat_delete_item_from_planogram(q)
+                            if direct[0] is not None:
+                                return direct
+                    if intent == "restore_maintain":
+                        return _chat_restore_maintain(q), True
+                    if intent == "undo_last":
+                        return _chat_undo_last_answer(), True
+                    if intent == "clear_item_changes":
+                        return _chat_clear_item_changes(q)
+                    if intent == "clear_planogram_changes":
+                        return _chat_clear_planogram_changes(q)
+                    if intent == "delete_lowest5_from_planogram":
+                        return _chat_delete_lowest5_from_planogram(q)
+                    if intent == "add_recent_item_planogram":
+                        return _chat_apply_recent_items_to_planogram(q, "New")
+                    if intent == "delete_recent_item_planogram":
+                        return _chat_apply_recent_items_to_planogram(q, "Delete")
+                    return None, False
+
+                def _answer_extra_intent(intent: str, q: str):
+                    if intent == "item_planograms_detail":
+                        return _chat_item_planograms_answer(q)
+                    if intent == "item_changes_detail":
+                        return _chat_item_changes_answer(q)
+                    if intent == "item_sales_detail":
+                        return _chat_item_sales_answer(q)
+                    if intent == "item_best_seller_check":
+                        return _chat_item_best_check_answer(q)
+                    if intent == "item_lowest_seller_check":
+                        return _chat_item_lowest_check_answer(q)
+                    if intent == "item_clusters_detail":
+                        return _chat_item_clusters_answer(q)
+                    if intent == "planogram_items_detail":
+                        return _chat_planogram_items_answer(q)
+                    if intent == "planogram_changes_detail":
+                        return _chat_planogram_changes_answer(q)
+                    if intent == "planogram_tobe_change":
+                        return _chat_planogram_tobe_change_answer(q)
+                    if intent == "planogram_deleted_best_check":
+                        return _chat_planogram_deleted_best_answer(q)
+                    if intent == "planogram_added_lowest_check":
+                        return _chat_planogram_added_lowest_answer(q)
+                    if intent == "cluster_planograms_detail":
+                        return _chat_cluster_planograms_answer(q)
+                    if intent == "cluster_changes_detail":
+                        return _chat_cluster_changes_answer(q)
+                    if intent == "cluster_risk_detail":
+                        return _chat_cluster_risk_answer(q)
+                    if intent == "cluster_tobe_change":
+                        return _chat_cluster_tobe_change_answer(q)
+                    if intent in ("pre_submit_check", "submit_fix_summary"):
+                        return _chat_pre_submit_answer("all")
+                    if intent == "new_item_incomplete_check":
+                        return _chat_pre_submit_answer("incomplete")
+                    if intent == "new_item_missing_id":
+                        return _chat_pre_submit_answer("missing_id")
+                    if intent == "new_item_missing_52wk":
+                        return _chat_pre_submit_answer("missing_52")
+                    if intent == "pending_confirm_check":
+                        return _chat_pre_submit_answer("pending")
+                    if intent == "clear_item_changes":
+                        return _chat_clear_item_changes(q)[0]
+                    if intent == "clear_planogram_changes":
+                        return _chat_clear_planogram_changes(q)[0]
+                    if intent == "delete_lowest5_from_planogram":
+                        return _chat_delete_lowest5_from_planogram(q)[0]
+                    if intent == "add_recent_item_planogram":
+                        return _chat_apply_recent_items_to_planogram(q, "New")[0]
+                    if intent == "delete_recent_item_planogram":
+                        return _chat_apply_recent_items_to_planogram(q, "Delete")[0]
+                    return None
+
+                def _chat_answer_pending_entity(q: str):
+                    pending = st.session_state.get(f"{p}_rs_chat_pending_entity")
+                    if not pending:
+                        return None
+                    intent = pending.get("intent") or _detect_chat_intent(str(pending.get("q", "")))
+                    combined_q = f"{pending.get('q', '')} {q}".strip()
+                    kind = str(pending.get("kind", ""))
+                    if kind == "planogram" and not _chat_planogram_columns(q):
+                        return None
+                    if kind == "item":
+                        row_i, score = _best_chat_item_row(q)
+                        if row_i is None or score < 0.25:
+                            return None
+                    if kind == "cluster":
+                        q_cmp = _chat_cmp(q)
+                        clusters = {
+                            _chat_cluster_for_pog(pc)
+                            for pc in _dyn_pog_cols
+                            if pc in _tdf.columns
+                        }
+                        if not any(_chat_cmp(cl) and _chat_cmp(cl) in q_cmp for cl in clusters):
+                            return None
+                    ans = _answer_extra_intent(intent, combined_q)
+                    if ans is None:
+                        ans = _answer_chat(combined_q)
+                    st.session_state.pop(f"{p}_rs_chat_pending_entity", None)
+                    return ans
+
                 def _answer_chat(q: str) -> str:
                     intent = _detect_chat_intent(q)
+                    extra = _answer_extra_intent(intent, q)
+                    if extra is not None:
+                        return extra
                     if intent == "planogram_most_products":
                         return _planogram_counts_answer("max")
                     if intent == "planogram_fewest_products":
@@ -3320,8 +4696,14 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     if intent == "planogram_lowest_total":
                         return _planogram_total_answer("min")
                     if intent == "item_most_planograms":
+                        scoped = _item_rank_in_scope_answer(q, "max")
+                        if scoped is not None:
+                            return scoped
                         return _item_planogram_answer("max")
                     if intent == "item_fewest_planograms":
+                        scoped = _item_rank_in_scope_answer(q, "min")
+                        if scoped is not None:
+                            return scoped
                         return _item_planogram_answer("min")
                     if intent == "planogram_most_blanks":
                         return _planogram_blanks_answer()
@@ -3329,12 +4711,42 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         return _action_counts_answer()
                     if intent == "summary":
                         return _summary_answer()
-                    return "ยังไม่เข้าใจคำถามนี้ ลองถามเช่น: planogramme ไหนมีสินค้ามากที่สุด, ควรลบสินค้าไหน, สรุป DG นี้"
+                    if intent == "cluster_most_impacted":
+                        return _chat_cluster_impact_answer()
+                    if intent == "deleted_best_sellers":
+                        return _chat_best_deleted_answer(False)
+                    if intent == "added_lowest_sellers":
+                        return _chat_lowest_added_answer(False)
+                    if intent == "deleted_best_seller_count":
+                        return _chat_best_deleted_answer(True)
+                    if intent == "added_lowest_seller_count":
+                        return _chat_lowest_added_answer(True)
+                    if intent in ("riskiest_items", "submit_risk"):
+                        return _chat_risk_review_answer()
+                    if intent == "restore_maintain":
+                        return _chat_restore_maintain(q)
+                    if intent == "undo_last":
+                        return _chat_undo_last_answer()
+                    if intent == "planogram_most_deleted":
+                        return _chat_planogram_action_answer("delete")
+                    if intent == "planogram_most_added":
+                        return _chat_planogram_action_answer("new")
+                    if intent == "best_sales_items":
+                        return _chat_best_sales_items_answer()
+                    if intent == "new_item_risk":
+                        return _chat_new_item_risk_answer()
+                    if intent == "impact_analysis":
+                        return _chat_impact_answer()
+                    return "ยังไม่เข้าใจคำถามนี้ ลองถามเช่น: planogram ไหนมีสินค้ามากที่สุด, ควรลบสินค้าไหน, สรุป DG นี้"
 
                 def _intent_label(intent: str) -> str:
                     return _CHAT_INTENT_LIBRARY.get(intent, {}).get("label", "คำถามอื่น")
 
                 def _answer_intent(intent: str) -> str:
+                    _intent_q = st.session_state.get(_chat_pending_key, {}).get("q", "")
+                    extra = _answer_extra_intent(intent, _intent_q)
+                    if extra is not None:
+                        return extra
                     if intent == "planogram_most_products":
                         return _planogram_counts_answer("max")
                     if intent == "planogram_fewest_products":
@@ -3346,8 +4758,14 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     if intent == "planogram_lowest_total":
                         return _planogram_total_answer("min")
                     if intent == "item_most_planograms":
+                        scoped = _item_rank_in_scope_answer(_intent_q, "max")
+                        if scoped is not None:
+                            return scoped
                         return _item_planogram_answer("max")
                     if intent == "item_fewest_planograms":
+                        scoped = _item_rank_in_scope_answer(_intent_q, "min")
+                        if scoped is not None:
+                            return scoped
                         return _item_planogram_answer("min")
                     if intent == "planogram_most_blanks":
                         return _planogram_blanks_answer()
@@ -3355,6 +4773,32 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         return _action_counts_answer()
                     if intent == "summary":
                         return _summary_answer()
+                    if intent == "cluster_most_impacted":
+                        return _chat_cluster_impact_answer()
+                    if intent == "deleted_best_sellers":
+                        return _chat_best_deleted_answer(False)
+                    if intent == "added_lowest_sellers":
+                        return _chat_lowest_added_answer(False)
+                    if intent == "deleted_best_seller_count":
+                        return _chat_best_deleted_answer(True)
+                    if intent == "added_lowest_seller_count":
+                        return _chat_lowest_added_answer(True)
+                    if intent in ("riskiest_items", "submit_risk"):
+                        return _chat_risk_review_answer()
+                    if intent == "restore_maintain":
+                        return _chat_restore_maintain(st.session_state.get(_chat_pending_key, {}).get("q", ""))
+                    if intent == "undo_last":
+                        return _chat_undo_last_answer()
+                    if intent == "planogram_most_deleted":
+                        return _chat_planogram_action_answer("delete")
+                    if intent == "planogram_most_added":
+                        return _chat_planogram_action_answer("new")
+                    if intent == "best_sales_items":
+                        return _chat_best_sales_items_answer()
+                    if intent == "new_item_risk":
+                        return _chat_new_item_risk_answer()
+                    if intent == "impact_analysis":
+                        return _chat_impact_answer()
                     return "ยังไม่เข้าใจคำถามนี้"
 
                 _chat_key = f"{p}_rs_chat_history"
@@ -3482,6 +4926,23 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
     padding: 12px;
     margin: 10px 0 14px 0;
 }
+.rs-chat-more {
+    margin-top: 6px;
+    white-space: pre-wrap;
+}
+.rs-chat-more summary {
+    cursor: pointer;
+    color: #6D28D9;
+    font-weight: 700;
+    list-style: none;
+}
+.rs-chat-more summary::-webkit-details-marker {
+    display: none;
+}
+.rs-chat-more-body {
+    margin-top: 6px;
+    white-space: pre-wrap;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -3494,10 +4955,19 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                     compact = _chat_cmp(q)
                     return (
                         any(k in s for k in ("all", "ทุก planogram", "ทุกแพลน", "ทั้งแถว"))
+                        or any(k in s for k in ("ที่เหลือ", "ที่ว่าง", "remaining", "blank"))
                         or _chat_cmp("ทั้งหมด") in compact
                         or _chat_cmp("ทั้งแถว") in compact
                         or _chat_cmp("ทุกแพลน") in compact
+                        or _chat_cmp("ที่เหลือ") in compact
+                        or _chat_cmp("ที่ว่าง") in compact
                         or _chat_cmp("ทุก planogram") in compact
+                        or "allplanogram" in compact
+                        or "allplanograms" in compact
+                        or "everyplanogram" in compact
+                        or "ทุกplanogram" in compact
+                        or "ทุกๆplanogram" in compact
+                        or ("ทุก" in compact and "planogram" in compact)
                     )
 
                 def _chat_yes_word(q: str) -> bool:
@@ -3507,6 +4977,14 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                 def _chat_no_word(q: str) -> bool:
                     compact = _chat_cmp(q)
                     return any(k in compact for k in ("no", "cancel", _chat_cmp("ไม่"), _chat_cmp("ยกเลิก")))
+
+                def _chat_looks_like_planogram_scope(q: str) -> bool:
+                    if _chat_all_word(q):
+                        return True
+                    if _chat_planogram_columns(q):
+                        return True
+                    s = _chat_norm(q)
+                    return bool(_re.fullmatch(r"\s*(target[_\s-]?)?\d{3,6}\s*", s))
 
                 def _chat_answer_confirm_new(q: str):
                     pending = st.session_state.get(_chat_confirm_new_key)
@@ -3521,9 +4999,11 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                     pog_cols = [c for c in pending.get("pog_cols", []) if c in _tdf.columns]
                     st.session_state.pop(_chat_confirm_new_key, None)
                     if not rows or not pog_cols:
-                        return "ไม่พบ item หรือ planogramme สำหรับเพิ่มแล้ว"
+                        return "ไม่พบ item หรือ planogram สำหรับเพิ่มแล้ว"
                     changed = _chat_apply_new_rows(rows, pog_cols)
-                    scope = "ทุก planogramme" if len(pog_cols) == len([c for c in _dyn_pog_cols if c in _tdf.columns]) else ", ".join(pog_cols)
+                    scope = "planogram ที่ว่างอยู่" if len(pog_cols) == len([c for c in _dyn_pog_cols if c in _tdf.columns]) else ", ".join(pog_cols)
+                    if not changed:
+                        return f"ยืนยันแล้ว แต่ไม่มี planogram ว่างใน scope นี้ให้เพิ่มเป็น New"
                     return f"ยืนยันแล้ว เพิ่มเป็น New {len(changed):,} ช่อง สำหรับ {scope}"
 
                 def _chat_answer_pending_add_scope(q: str):
@@ -3534,12 +5014,14 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                     if not rows:
                         st.session_state.pop(_chat_pending_add_key, None)
                         return "ไม่พบ item เดิมในข้อมูลหลัง filter แล้ว"
+                    if not _chat_looks_like_planogram_scope(q):
+                        return None
                     if _chat_all_word(q):
                         pog_cols = [c for c in _dyn_pog_cols if c in _tdf.columns]
                     else:
                         pog_cols = _chat_planogram_columns(q)
                     if not pog_cols:
-                        return "ยังหา planogramme ไม่เจอ กรุณาพิมพ์ชื่อ planogramme / target เช่น 5012 หรือพิมพ์ 'ทั้งหมด'"
+                        return "ยังหา planogram ไม่เจอ กรุณาพิมพ์ชื่อ planogram / target เช่น 5012 หรือพิมพ์ 'ทั้งหมด'"
                     st.session_state.pop(_chat_pending_add_key, None)
                     low_rows = [r for r in rows if _is_low_sales_item(r)]
                     if low_rows:
@@ -3549,14 +5031,16 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                             "items": [_fmt_item(_tdf.loc[r]) for r in rows],
                         }
                         item_txt = ", ".join(_fmt_item(_tdf.loc[r]) for r in low_rows[:3])
-                        scope = "ทุก planogramme" if _chat_all_word(q) else ", ".join(pog_cols)
+                        scope = "planogram ที่ว่างอยู่" if _chat_all_word(q) else ", ".join(pog_cols)
                         return (
                             f"{item_txt} is a Top 10% lowest seller. "
                             f"Are you sure you want to add this item to {scope}? "
                             "Reply 'ใช่' to confirm or 'ไม่' to cancel."
                         )
                     changed = _chat_apply_new_rows(rows, pog_cols)
-                    scope = "ทุก planogramme" if _chat_all_word(q) else ", ".join(pog_cols)
+                    scope = "planogram ที่ว่างอยู่" if _chat_all_word(q) else ", ".join(pog_cols)
+                    if not changed:
+                        return f"ไม่มี planogram ว่างใน scope นี้ให้เพิ่มเป็น New"
                     return f"เพิ่มเป็น New แล้ว {len(changed):,} ช่อง สำหรับ {scope}"
 
                 def _chat_start_recent_delete(q: str):
@@ -3571,8 +5055,8 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                         return "ไม่พบ item ล่าสุดในข้อมูลหลัง filter แล้ว"
                     st.session_state[_chat_recent_delete_key] = {"rows": rows, "items": recent}
                     return (
-                        "ต้องการให้ลบ item ที่ตอบล่าสุดออกจาก planogramme ไหน? "
-                        "พิมพ์ชื่อ planogramme / target เช่น 5029, 5086 หรือพิมพ์ 'ทั้งหมด'"
+                        "ต้องการให้ลบ item ที่ตอบล่าสุดออกจาก planogram ไหน? "
+                        "พิมพ์ชื่อ planogram / target เช่น 5029, 5086 หรือพิมพ์ 'ทั้งหมด'"
                     )
 
                 def _chat_answer_recent_delete_scope(q: str):
@@ -3583,17 +5067,23 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                     if not rows:
                         st.session_state.pop(_chat_recent_delete_key, None)
                         return "ไม่พบ item ล่าสุดในข้อมูลหลัง filter แล้ว"
+                    if not _chat_looks_like_planogram_scope(q):
+                        return None
                     if _chat_all_word(q):
-                        pog_cols = [c for c in _dyn_pog_cols if c in _tdf.columns]
+                        changed_items = _chat_apply_delete_all_rows(rows)
+                        st.session_state.pop(_chat_recent_delete_key, None)
+                        if changed_items:
+                            return f"Changed {len(changed_items):,} item(s) to DELETE ALL. All numeric planogram cells in those row(s) are treated as Delete using the same logic as the Status dropdown."
+                        return "Selected item(s) are already DELETE ALL"
                     else:
                         pog_cols = _chat_planogram_columns(q)
                     if not pog_cols:
-                        return "ยังหา planogramme ไม่เจอ กรุณาพิมพ์ชื่อ planogramme / target หรือพิมพ์ 'ทั้งหมด'"
+                        return "ยังหา planogram ไม่เจอ กรุณาพิมพ์ชื่อ planogram / target หรือพิมพ์ 'ทั้งหมด'"
                     changed, top_pending = _chat_apply_delete_rows(rows, pog_cols)
                     st.session_state.pop(_chat_recent_delete_key, None)
                     changed_count = len(changed)
                     top_count = len(top_pending)
-                    scope = "ทุก planogramme" if _chat_all_word(q) else ", ".join(pog_cols)
+                    scope = "ทุก planogram" if _chat_all_word(q) else ", ".join(pog_cols)
                     if top_count:
                         msg = (
                             f"ตั้งค่า Delete แล้ว {changed_count:,} ช่อง สำหรับ {scope}. "
@@ -3607,6 +5097,21 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                     return msg
 
                 def _render_chat_dialog():
+                    def _chat_request_rerun(full: bool = False):
+                        if full:
+                            try:
+                                st.rerun()
+                            except Exception:
+                                pass
+                            return
+                        try:
+                            st.rerun(scope="fragment")
+                        except Exception:
+                            try:
+                                st.rerun()
+                            except Exception:
+                                pass
+
                     st.markdown("""
 <div class="rs-chat-head">
   <div class="rs-chat-title"><span class="rs-chat-avatar">&#129302;</span><span>RangeBot</span></div>
@@ -3621,12 +5126,31 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                             '</div></div>',
                             unsafe_allow_html=True,
                         )
-                    for _msg in st.session_state[_chat_key][-6:]:
+                    _visible_msgs = st.session_state[_chat_key][-6:]
+                    _visible_start = max(0, len(st.session_state[_chat_key]) - len(_visible_msgs))
+                    for _offset, _msg in enumerate(_visible_msgs):
+                        _msg_idx = _visible_start + _offset
                         _uq = _html.escape(str(_msg.get("q", "")))
-                        _ba = _html.escape(str(_msg.get("a", "")))
+                        _ans_raw = str(_msg.get("a", ""))
+                        _more_match = _re.search(r"\n?\[\[RS_CHAT_MORE:(\d+):(.*?)\]\]\s*$", _ans_raw, flags=_re.S)
+                        _more_count = 0
+                        _full_extra = ""
+                        if _more_match:
+                            _more_count = int(_more_match.group(1))
+                            _full_extra = _more_match.group(2)
+                            _ans_raw = _ans_raw[:_more_match.start()].rstrip() + f"\n... +{_more_count} more"
+                        _ba = _html.escape(_ans_raw)
+                        _more_html = ""
+                        if _more_count:
+                            _more_html = (
+                                '<details class="rs-chat-more">'
+                                f'<summary>More ({_more_count})</summary>'
+                                f'<div class="rs-chat-more-body">{_html.escape(_full_extra)}</div>'
+                                '</details>'
+                            )
                         st.markdown(
                             f'<div class="rs-user-row"><div class="rs-bubble rs-user">{_uq}</div></div>'
-                            f'<div class="rs-bot-row"><div class="rs-bubble rs-bot">{_ba}</div></div>',
+                            f'<div class="rs-bot-row"><div class="rs-bubble rs-bot">{_ba}{_more_html}</div></div>',
                             unsafe_allow_html=True,
                         )
                     st.markdown('</div>', unsafe_allow_html=True)
@@ -3647,39 +5171,72 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                             st.session_state[_chat_key].append({"q": _pending["q"], "a": ans})
                             st.session_state.pop(_chat_pending_key, None)
                             st.session_state[_chat_input_seq_key] += 1
-                            st.rerun()
+                            _chat_request_rerun()
                         if _nc.button("ไม่ใช่", key=f"{p}_rs_chat_no", use_container_width=True):
                             st.session_state.pop(_chat_pending_key, None)
                             st.session_state[_chat_input_seq_key] += 1
                             st.warning("คุณต้องการถามว่าอะไร? กรุณาพิมพ์คำถามใหม่")
                     _input_key = f"{p}_rs_chat_input_{st.session_state[_chat_input_seq_key]}"
-                    _q = st.text_input("Ask chatbot", key=_input_key, label_visibility="collapsed", placeholder="Type your rangesheet question...")
-                    _qa, _qb = st.columns([1, 1])
-                    if _qa.button("Ask", key=f"{p}_rs_chat_ask", use_container_width=True) and _q.strip():
+                    with st.form(key=f"{p}_rs_chat_form_{st.session_state[_chat_input_seq_key]}", clear_on_submit=False):
+                        _q = st.text_input("Ask chatbot", key=_input_key, label_visibility="collapsed", placeholder="Type your rangesheet question...")
+                        _qa, _qb = st.columns([1, 1])
+                        _ask_submitted = _qa.form_submit_button("Ask", use_container_width=True)
+                        _clear_submitted = _qb.form_submit_button("Clear chat", use_container_width=True)
+                    if _ask_submitted and _q.strip():
+                        _edit_intents = {
+                            "restore_maintain", "undo_last", "clear_item_changes",
+                            "clear_planogram_changes", "delete_lowest5_from_planogram",
+                            "add_recent_item_planogram", "delete_recent_item_planogram",
+                        }
+                        _is_edit_request = (
+                            (not _CAN_EDIT)
+                            and (
+                                _chat_delete_command(_q)
+                                or _chat_add_command(_q)
+                                or _detect_chat_intent(_q) in _edit_intents
+                                or bool(st.session_state.get(_chat_recent_delete_key))
+                                or bool(st.session_state.get(_chat_pending_add_key))
+                                or bool(st.session_state.get(_chat_confirm_new_key))
+                            )
+                        )
+                        if _is_edit_request:
+                            st.session_state[_chat_key].append({
+                                "q": _q.strip(),
+                                "a": "Viewer mode: you can ask analytics questions, but editing actions are disabled for this role.",
+                            })
+                            st.session_state[_chat_input_seq_key] += 1
+                            _chat_request_rerun()
+                            st.stop()
                         _follow_answer = _chat_answer_confirm_new(_q)
                         if _follow_answer is None:
                             _follow_answer = _chat_answer_pending_add_scope(_q)
                         if _follow_answer is None:
                             _follow_answer = _chat_answer_recent_delete_scope(_q)
+                        if _follow_answer is None:
+                            _follow_answer = _chat_answer_pending_entity(_q)
                         if _follow_answer is not None:
                             st.session_state[_chat_key].append({"q": _q.strip(), "a": _follow_answer})
                             st.session_state[_chat_input_seq_key] += 1
-                            st.rerun()
+                            _chat_request_rerun()
                         else:
-                            _cmd_answer, _cmd_changed = _chat_delete_item_from_planogram(_q)
+                            _cmd_answer, _cmd_changed = _chat_handle_extra_action(_q)
+                            if _cmd_answer is None:
+                                _cmd_answer, _cmd_changed = _chat_delete_item_from_planogram(_q)
                             if _cmd_answer is None:
                                 _cmd_answer, _cmd_changed = _chat_add_item_to_planogram(_q)
                             if _cmd_answer is not None:
                                 st.session_state[_chat_key].append({"q": _q.strip(), "a": _cmd_answer})
                                 st.session_state.pop(_chat_pending_key, None)
                                 st.session_state[_chat_input_seq_key] += 1
-                                st.rerun()
+                                if _cmd_changed:
+                                    st.session_state[f"{p}_rs_chat_grid_dirty"] = True
+                                _chat_request_rerun()
                             else:
                                 _recent_delete_answer = _chat_start_recent_delete(_q)
                                 if _recent_delete_answer is not None:
                                     st.session_state[_chat_key].append({"q": _q.strip(), "a": _recent_delete_answer})
                                     st.session_state[_chat_input_seq_key] += 1
-                                    st.rerun()
+                                    _chat_request_rerun()
                                 else:
                                     intent = _detect_chat_intent(_q)
                                     if intent == "unknown":
@@ -3691,15 +5248,19 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                                             "score": _score_chat_intent(_q, intent),
                                         }
                                         st.session_state[_chat_input_seq_key] += 1
-                                        st.rerun()
-                    if _qb.button("Clear chat", key=f"{p}_rs_chat_clear", use_container_width=True):
+                                        _chat_request_rerun()
+                    if _clear_submitted:
                         st.session_state[_chat_key] = []
                         st.session_state.pop(_chat_pending_key, None)
                         st.session_state.pop(_chat_recent_delete_key, None)
                         st.session_state.pop(_chat_pending_add_key, None)
                         st.session_state.pop(_chat_confirm_new_key, None)
+                        st.session_state.pop(f"{p}_rs_chat_pending_entity", None)
                         st.session_state[_chat_input_seq_key] += 1
-                        st.rerun()
+                        _chat_request_rerun()
+
+                if hasattr(st, "fragment"):
+                    _render_chat_dialog = st.fragment(_render_chat_dialog)
 
                 if hasattr(st, "popover"):
                     with st.popover("💬", help="Open Rangesheet chat"):
@@ -4034,6 +5595,11 @@ function(params) {
                         "background": "transparent !important",
                         "pointer-events": "none !important",
                     },
+                    ".ag-overlay-panel": {
+                        "display": "none !important",
+                        "background": "transparent !important",
+                        "pointer-events": "none !important",
+                    },
                     ".ag-overlay-loading-wrapper": {
                         "display": "none !important",
                         "background": "transparent !important",
@@ -4042,8 +5608,13 @@ function(params) {
                     ".ag-overlay-loading-center": {
                         "display": "none !important",
                     },
-                    ".ag-root-wrapper, .ag-root, .ag-body-viewport, .ag-center-cols-container, .ag-row, .ag-cell": {
+                    ".ag-root-wrapper, .ag-root, .ag-body-viewport, .ag-center-cols-viewport, .ag-center-cols-container, .ag-row, .ag-cell": {
                         "opacity": "1 !important",
+                        "filter": "none !important",
+                    },
+                    ".ag-root-wrapper.ag-layout-normal, .ag-root-wrapper-body, .ag-body": {
+                        "opacity": "1 !important",
+                        "filter": "none !important",
                     },
                 }
 
@@ -4088,7 +5659,7 @@ function(params) {
                         gb.configure_column(
                             _gc, pinned="left",
                             width=_COL_W.get(_gc, 130), minWidth=_COL_W.get(_gc, 80),
-                            editable=True, hide=_hidden, suppressMovable=True,
+                            editable=_CAN_EDIT, hide=_hidden, suppressMovable=True,
                             wrapHeaderText=True,
                             headerClass=_header_class(_gc),
                             cellStyle=_style_data,
@@ -4104,7 +5675,7 @@ function(params) {
                             valueFormatter=_fmt_pog,
                             cellStyle=_style_pog,
                             cellClass="pog-value-cell",
-                            editable=True,
+                            editable=_CAN_EDIT,
                             cellEditor="agSelectCellEditor",
                             cellEditorParams=_pog_action_editor_params,
                             valueSetter=_delete_guard,
@@ -4116,7 +5687,7 @@ function(params) {
                     elif _gc == _AVG_U_STD:
                         gb.configure_column(
                             _gc, valueFormatter=_fmt_avg_u,
-                            editable=True, hide=_hidden,
+                            editable=_CAN_EDIT, hide=_hidden,
                             wrapHeaderText=True, minWidth=120, width=130,
                             headerClass=_header_class(_gc),
                             cellStyle=_style_data,
@@ -4124,7 +5695,7 @@ function(params) {
                         )
                     elif _gc == "Status":
                         gb.configure_column(
-                            _gc, editable=True, hide=_hidden,
+                            _gc, editable=_CAN_EDIT, hide=_hidden,
                             wrapHeaderText=True, minWidth=120, width=130,
                             headerClass=_header_class(_gc),
                             valueFormatter=_fmt_status,
@@ -4137,7 +5708,7 @@ function(params) {
                     else:
                         # Data columns: readable widths, word-wrap headers, user-resizable
                         gb.configure_column(
-                            _gc, editable=True, hide=_hidden,
+                            _gc, editable=_CAN_EDIT, hide=_hidden,
                             wrapHeaderText=True, minWidth=120, width=130,
                             headerClass=_header_class(_gc),
                             cellStyle=_style_data,
@@ -4451,6 +6022,8 @@ function(params){
                 _go["suppressCellFocus"]         = False
                 _go["suppressLoadingOverlay"]    = True
                 _go["suppressNoRowsOverlay"]     = True
+                _go["suppressScrollOnNewData"]   = True
+                _go["suppressAnimationFrame"]    = True
                 _go["overlayLoadingTemplate"]    = "<span></span>"
                 _go["overlayNoRowsTemplate"]     = "<span></span>"
                 # Columns tool panel — lets users re-show hidden columns via a sidebar
@@ -5121,21 +6694,21 @@ function({streamlitRerunEventTriggerName, eventData}) {
             _tb1,_tb2,_tb3,_tb4,_tb5=st.columns([3.2,1.1,1.0,0.9,0.8])
             with _tb1: st.text_input("_ct",key=f"{p}_ct_inp",placeholder="Type name → Add as Column or Row…",label_visibility="collapsed")
             with _tb2:
-                if st.button("＋ Column",key=f"{p}_ct_add_col",use_container_width=True):
+                if st.button("＋ Column",key=f"{p}_ct_add_col",use_container_width=True, disabled=not _CAN_EDIT):
                     _v=st.session_state.get(f"{p}_ct_inp","").strip()
                     if _v and _v not in st.session_state[_kc]:
                         st.session_state[_kc].append(_v)
                         for _rk in st.session_state[_kd]: st.session_state[_kd][_rk].setdefault(_v,"")
                     st.session_state[f"{p}_ct_inp"]=""; st.rerun()
             with _tb3:
-                if st.button("＋ Row",key=f"{p}_ct_add_row",use_container_width=True):
+                if st.button("＋ Row",key=f"{p}_ct_add_row",use_container_width=True, disabled=not _CAN_EDIT):
                     _v=st.session_state.get(f"{p}_ct_inp","").strip() or f"Metric {len(st.session_state[_kd])+1}"
                     if _v not in st.session_state[_kd]:
                         st.session_state[_kd][_v]={c:"" for c in st.session_state[_kc]}
                         st.session_state[_kr][_v]=("#FFFFFF","#000000")
                     st.session_state[f"{p}_ct_inp"]=""; st.rerun()
             with _tb4:
-                if st.button("↺ Reset",key=f"{p}_ct_reset",use_container_width=True):
+                if st.button("↺ Reset",key=f"{p}_ct_reset",use_container_width=True, disabled=not _CAN_EDIT):
                     st.session_state[_kc]=_auto_clusters[:]
                     st.session_state[_kd]={r:{} for r,_,_ in _DM}
                     st.session_state[_kr]=dict(_DRC); st.rerun()
@@ -5196,7 +6769,7 @@ function({streamlitRerunEventTriggerName, eventData}) {
         st.caption(f"{len(_cdf):,} rows · {len(_cnv_cols)} columns")
         _ccb1,_ccb2=st.columns(2)
         with _ccb1:
-            if st.button("💾 Save Canvas",use_container_width=True,key=f"{p}_save_canvas"):
+            if st.button("💾 Save Canvas",use_container_width=True,key=f"{p}_save_canvas", disabled=not _CAN_EDIT):
                 _nm=_cnv_name.strip() or f"Canvas {len(st.session_state.canvases)+1}"
                 st.session_state.canvases[_nm]=_cdf.copy(); add_audit("Save Canvas",_nm)
                 st.success(f'✅ Canvas "{_nm}" saved!')
@@ -5427,7 +7000,8 @@ function({streamlitRerunEventTriggerName, eventData}) {
                 st.session_state[_blank_hl_key] = True
                 st.session_state.pop(_submit_missing_key, None)
                 st.rerun()
-            if _mb2.button("Submit anyway", key=f"{p}_submit_anyway", type="primary", use_container_width=True):
+            if _mb2.button("Submit anyway", key=f"{p}_submit_anyway", type="primary",
+                           use_container_width=True, disabled=not _CAN_EDIT):
                 _submit_full_internal = _submit_payload_df(keep_internal=True)
                 _required_missing = _new_item_required_missing(_submit_full_internal)
                 if _required_missing:
@@ -5458,7 +7032,8 @@ function({streamlitRerunEventTriggerName, eventData}) {
         _export_col = None
 
     with _submit_col:
-        if st.button("SUBMIT TO REPORT", key=f"{p}_btn_sub", type="primary", use_container_width=True):
+        if st.button("SUBMIT TO REPORT", key=f"{p}_btn_sub", type="primary", use_container_width=True,
+                     disabled=not _CAN_EDIT):
             _submit_full_internal = _submit_payload_df(keep_internal=True)
             _required_missing = _new_item_required_missing(_submit_full_internal)
             if _required_missing:
@@ -5640,7 +7215,12 @@ with _tab["Range Sheet_SSPOG"]:
             _sig = f"{_ns_hdet_path}|{_ns_dg_query}"
             if st.session_state.get("ns_lf_dg_sig") != _sig:
                 with st.spinner(f"Loading DG '{_ns_dg_query}' from HDET…"):
-                    _loaded = load_large_file_by_dg(_ns_hdet_path, _ns_dg_query)
+                    try:
+                        _mtime = os.path.getmtime(_ns_hdet_path)
+                        _size = os.path.getsize(_ns_hdet_path)
+                    except OSError:
+                        _mtime, _size = 0.0, 0
+                    _loaded = _rs_load_dg_slice_cached(_ns_hdet_path, _ns_dg_query, _mtime, _size)
                 st.session_state["ns_hdet_df"]   = _loaded
                 st.session_state["_ns_hdet_src"] = f"DG = {_ns_dg_query} ({len(_loaded):,} rows)"
                 st.session_state["ns_lf_dg_sig"] = _sig
@@ -6018,7 +7598,12 @@ with _tab["5.1 ItembyStore"]:
             _dg_val = _ib_dg_inp.strip()
             if _dg_val:
                 with st.spinner(f"Loading DG={_dg_val} from {_hfname}…"):
-                    _hdet_df = load_large_file_by_dg(_hdet_path, _dg_val)
+                    try:
+                        _mtime = os.path.getmtime(_hdet_path)
+                        _size = os.path.getsize(_hdet_path)
+                    except OSError:
+                        _mtime, _size = 0.0, 0
+                    _hdet_df = _rs_load_dg_slice_cached(_hdet_path, _dg_val, _mtime, _size)
                 if not _hdet_df.empty:
                     st.session_state.ib_data = _build_ib(_hdet_df)
                     st.session_state["_ib_source"] = f"HDET · DG={_dg_val} ({len(_hdet_df):,} rows)"
@@ -6031,19 +7616,26 @@ with _tab["5.1 ItembyStore"]:
     # ── Toolbar ───────────────────────────────────────────────────────────────
     _ib_c1, _ib_c2, _ib_c3, _ = st.columns([1.1, 1.0, 1.4, 4.5])
     with _ib_c1:
-        if st.button("＋ Add Row", key="ib_add_row", use_container_width=True):
+        if st.button("＋ Add Row", key="ib_add_row", use_container_width=True, disabled=not _CAN_EDIT):
             _empty = pd.DataFrame([{c: None for c in _IB_COLS}])
             st.session_state.ib_data = pd.concat(
                 [st.session_state.ib_data, _empty], ignore_index=True)
             st.rerun()
     with _ib_c2:
+<<<<<<< Updated upstream
         if st.button("↺ Reset", key="ib_clear", use_container_width=True):
             _ib_load_default()
+=======
+        if st.button("↺ Reset", key="ib_clear", use_container_width=True, disabled=not _CAN_EDIT):
+            st.session_state.ib_data = _cast_text_cols(
+                _fill_from_db(_IB_COLS, merged), _IB_TEXT_COLS)
+            st.session_state["_ib_source"] = "Rangesheet data"
+>>>>>>> Stashed changes
             st.session_state.pop("vw_submit_51", None)
             st.rerun()
     with _ib_c3:
         if st.button("✅ Submit to Report", key="ib_submit", use_container_width=True,
-                     type="primary"):
+                     type="primary", disabled=not _CAN_EDIT):
             _to_send = st.session_state.ib_data.dropna(how="all")
             st.session_state["vw_submit_51"] = _to_send.reset_index(drop=True)
             st.success(f"Submitted {len(_to_send):,} rows → go to Report page to export.")
@@ -6055,6 +7647,7 @@ with _tab["5.1 ItembyStore"]:
         hide_index=True,
         column_config=_IB_COL_CFG,
         height=420,
+        disabled=not _CAN_EDIT,
         key="ib_editor",
     )
     st.session_state.ib_data = _ib_edited
@@ -6085,20 +7678,20 @@ with _tab["5.2 ItembyStore_SC"]:
     # ── Toolbar ──────────────────────────────────────────────────────────────
     _ibs_c1, _ibs_c2, _ibs_c3, _ibs_c4 = st.columns([1.1, 1.0, 1.4, 4.5])
     with _ibs_c1:
-        if st.button("＋ Add Row", key="ibs_add_row", use_container_width=True):
+        if st.button("＋ Add Row", key="ibs_add_row", use_container_width=True, disabled=not _CAN_EDIT):
             _empty = pd.DataFrame([{c: None for c in _IBS_COLS}])
             st.session_state.ibs_sc_data = pd.concat(
                 [st.session_state.ibs_sc_data, _empty], ignore_index=True
             )
             st.rerun()
     with _ibs_c2:
-        if st.button("↺ Reset", key="ibs_clear", use_container_width=True):
+        if st.button("↺ Reset", key="ibs_clear", use_container_width=True, disabled=not _CAN_EDIT):
             st.session_state.ibs_sc_data = _fill_from_db(_IBS_COLS, merged)
             st.session_state.pop("vw_submit_52", None)
             st.rerun()
     with _ibs_c3:
         if st.button("✅ Submit to Report", key="ibs_submit", use_container_width=True,
-                     type="primary"):
+                     type="primary", disabled=not _CAN_EDIT):
             _to_send = st.session_state.ibs_sc_data.dropna(how="all")
             st.session_state["vw_submit_52"] = _to_send.reset_index(drop=True)
             st.success(f"Submitted {len(_to_send):,} rows → go to Report page to export.")
@@ -6111,6 +7704,7 @@ with _tab["5.2 ItembyStore_SC"]:
         hide_index=True,
         column_config=_IBS_COL_CFG,
         height=420,
+        disabled=not _CAN_EDIT,
         key="ibs_editor",
     )
     st.session_state.ibs_sc_data = _ibs_edited
@@ -6126,20 +7720,20 @@ with _tab["5.3 Upload_product_library"]:
     # ── Toolbar ──────────────────────────────────────────────────────────────
     _pl_c1, _pl_c2, _pl_c3, _pl_c4 = st.columns([1.1, 1.0, 1.4, 4.5])
     with _pl_c1:
-        if st.button("＋ Add Row", key="pl_add_row", use_container_width=True):
+        if st.button("＋ Add Row", key="pl_add_row", use_container_width=True, disabled=not _CAN_EDIT):
             _empty = pd.DataFrame([{c: None for c in _PRODLIB_COLS}])
             st.session_state.vw_prodlib_data = pd.concat(
                 [st.session_state.vw_prodlib_data, _empty], ignore_index=True
             )
             st.rerun()
     with _pl_c2:
-        if st.button("↺ Reset", key="pl_clear", use_container_width=True):
+        if st.button("↺ Reset", key="pl_clear", use_container_width=True, disabled=not _CAN_EDIT):
             st.session_state.vw_prodlib_data = _fill_from_db(_PRODLIB_COLS, merged)
             st.session_state.pop("vw_submit_53", None)
             st.rerun()
     with _pl_c3:
         if st.button("✅ Submit to Report", key="pl_submit", use_container_width=True,
-                     type="primary"):
+                     type="primary", disabled=not _CAN_EDIT):
             _to_send = st.session_state.vw_prodlib_data.dropna(how="all")
             st.session_state["vw_submit_53"] = _to_send.reset_index(drop=True)
             st.success(f"Submitted {len(_to_send):,} rows → go to Report page to export.")
@@ -6155,6 +7749,7 @@ with _tab["5.3 Upload_product_library"]:
         },
         key="vw_prodlib_editor",
         height=460,
+        disabled=not _CAN_EDIT,
     )
     st.session_state.vw_prodlib_data = _prodlib_edited
     st.caption(f"{len(_prodlib_edited):,} rows")
@@ -6386,7 +7981,12 @@ with _tab["5.4 Upload to Citrix"]:
             _cx_dg = _cx_dg_inp.strip()
             if _cx_dg:
                 with st.spinner(f"Loading DG={_cx_dg} from {_cx_hfname}…"):
-                    _cx_hdet_df = load_large_file_by_dg(_cx_hdet_path, _cx_dg)
+                    try:
+                        _mtime = os.path.getmtime(_cx_hdet_path)
+                        _size = os.path.getsize(_cx_hdet_path)
+                    except OSError:
+                        _mtime, _size = 0.0, 0
+                    _cx_hdet_df = _rs_load_dg_slice_cached(_cx_hdet_path, _cx_dg, _mtime, _size)
                 if not _cx_hdet_df.empty:
                     st.session_state.vw_citrix_data = _build_cx(_cx_hdet_df)
                     st.session_state["_cx_source"] = f"HDET · DG={_cx_dg} ({len(_cx_hdet_df):,} rows)"
@@ -6399,20 +7999,27 @@ with _tab["5.4 Upload to Citrix"]:
     # ── Toolbar ──────────────────────────────────────────────────────────────
     _cx_c1, _cx_c2, _cx_c3, _ = st.columns([1.1, 1.0, 1.4, 4.5])
     with _cx_c1:
-        if st.button("＋ Add Row", key="cx_add_row", use_container_width=True):
+        if st.button("＋ Add Row", key="cx_add_row", use_container_width=True, disabled=not _CAN_EDIT):
             _empty = pd.DataFrame([{c: None for c in _CITRIX_COLS}])
             st.session_state.vw_citrix_data = pd.concat(
                 [st.session_state.vw_citrix_data, _empty], ignore_index=True
             )
             st.rerun()
     with _cx_c2:
+<<<<<<< Updated upstream
         if st.button("↺ Reset", key="cx_clear", use_container_width=True):
             _cx_load_default()
+=======
+        if st.button("↺ Reset", key="cx_clear", use_container_width=True, disabled=not _CAN_EDIT):
+            st.session_state.vw_citrix_data = _cast_text_cols(
+                _fill_from_db(_CITRIX_COLS, merged), _CX_TEXT_COLS)
+            st.session_state["_cx_source"] = "Rangesheet data"
+>>>>>>> Stashed changes
             st.session_state.pop("vw_submit_54", None)
             st.rerun()
     with _cx_c3:
         if st.button("✅ Submit to Report", key="cx_submit", use_container_width=True,
-                     type="primary"):
+                     type="primary", disabled=not _CAN_EDIT):
             _to_send = st.session_state.vw_citrix_data.dropna(how="all")
             st.session_state["vw_submit_54"] = _to_send.reset_index(drop=True)
             st.success(f"Submitted {len(_to_send):,} rows → go to Report page to export.")
@@ -6424,6 +8031,7 @@ with _tab["5.4 Upload to Citrix"]:
         hide_index=True,
         column_config=_CITRIX_COL_CFG,
         height=420,
+        disabled=not _CAN_EDIT,
         key="cx_editor",
     )
     st.session_state.vw_citrix_data = _citrix_edited
@@ -6544,7 +8152,7 @@ if False:
                           type="primary")
             with _btn_b:
                 st.button("SUBMIT TO REPORT", key="btn_submit_range",
-                          use_container_width=True)
+                          use_container_width=True, disabled=not _CAN_EDIT)
 
 
     # ── Range Architecture card (7-column, two-row merged headers) ────────────
@@ -6690,20 +8298,24 @@ if False:
         st.markdown(f"""
 <div style="background:#fff;overflow:hidden;border:1px solid #B8B8B8;">
     <div style="overflow-x:auto;">
-        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <table style="width:auto;border-collapse:collapse;font-size:11px;table-layout:fixed;">
+            <colgroup>
+                <col style="width:140px;"><col style="width:58px;"><col style="width:58px;">
+                <col style="width:46px;"><col style="width:46px;"><col style="width:42px;"><col style="width:60px;">
+            </colgroup>
             <thead>
                 <tr>
                     <th colspan="3" style="{_TH}text-align:left;min-width:130px;">Range architecture</th>
-                    <th colspan="3" style="{_TH}">Sale Impact ( ex.vat) / Week<br>calcualte from Mer Price</th>
+                      <th colspan="3" style="{_TH}min-width:130px;max-width:150px;">Sale Impact ( ex.vat) / Week<br>calcualte from Mer Price</th>
                     <th colspan="1" style="{_TH}">Margin Impact ( ex.vat) / Week<br>calcualte from EDLP Price</th>
                 </tr>
                 <tr>
                     <th style="{_TH}text-align:left;">TYPE</th>
-                    <th style="{_TH}min-width:52px;">AS IS</th>
-                    <th style="{_TH}min-width:52px;border-right:2px solid #999;">TO BE</th>
-                    <th style="{_TH}min-width:60px;">AS IS</th>
-                    <th style="{_TH}min-width:60px;">TO BE</th>
-                    <th style="{_TH}min-width:52px;border-right:2px solid #999;">DIFF</th>
+                    <th style="{_TH}width:58px;">AS IS</th>
+                    <th style="{_TH}width:58px;border-right:2px solid #999;">TO BE</th>
+                      <th style="{_TH}min-width:46px;">AS IS</th>
+                      <th style="{_TH}min-width:46px;">TO BE</th>
+                      <th style="{_TH}min-width:42px;border-right:2px solid #999;">DIFF</th>
                     <th style="{_TH}min-width:60px;">AS IS</th>
                 </tr>
             </thead>
@@ -7011,7 +8623,7 @@ if False:
                 label_visibility="collapsed",
             )
         with _tb2:
-            if st.button("＋ Column", key="ct_add_col", use_container_width=True):
+            if st.button("＋ Column", key="ct_add_col", use_container_width=True, disabled=not _CAN_EDIT):
                 _v = st.session_state.get("ct_inp", "").strip()
                 if _v and _v not in st.session_state.ct_clusters:
                     st.session_state.ct_clusters.append(_v)
@@ -7020,7 +8632,7 @@ if False:
                 st.session_state["ct_inp"] = ""
                 st.rerun()
         with _tb3:
-            if st.button("＋ Row", key="ct_add_row", use_container_width=True):
+            if st.button("＋ Row", key="ct_add_row", use_container_width=True, disabled=not _CAN_EDIT):
                 _v = st.session_state.get("ct_inp", "").strip() or f"Metric {len(st.session_state.ct_data)+1}"
                 if _v not in st.session_state.ct_data:
                     st.session_state.ct_data[_v] = {c: "" for c in st.session_state.ct_clusters}
@@ -7028,7 +8640,7 @@ if False:
                 st.session_state["ct_inp"] = ""
                 st.rerun()
         with _tb4:
-            if st.button("↺ Reset", key="ct_reset", use_container_width=True):
+            if st.button("↺ Reset", key="ct_reset", use_container_width=True, disabled=not _CAN_EDIT):
                 st.session_state.ct_clusters = []
                 st.session_state.ct_data     = {r: {} for r, _, _ in _DEFAULT_METRICS}
                 st.session_state.ct_row_clrs = dict(_DEF_ROW_COLORS)

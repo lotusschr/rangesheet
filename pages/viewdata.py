@@ -109,7 +109,8 @@ def _build_hdet_mini(path: str, _mtime: int = 0) -> pd.DataFrame:
     _sep, _enc, _hr = _detect_large_file_params(path)
     _WANT = {
         "ClusterName":        ["ClusterName","Cluster_Name","cluster_name","Cluster Name"],
-        "store_Format":       ["store_Format","Store_Format","StoreFormat","Format"],
+        "store_Format":       ["store_Format","Store_Format","StoreFormat","STORE_FORMAT",
+                               "Store Format","store format","Format"],
         "Div Code&Desc":      ["Div Code&Desc","Div Code & Desc","DivCode&Desc"],
         "Display Group":      ["Display Group","DG","DG_CODE","Display_Group"],
         "DG_Desc":            ["Display group desc","Display Group Desc","DisplayGroupDesc",
@@ -374,7 +375,7 @@ def _render_data(entry: dict, tab_key: str):
         st.caption(f"{_rows:,} rows · {_cols} columns")
 
 
-def _build_pog_cluster_html(pvt, cl_sel, max_height="520px"):
+def _build_pog_cluster_html(pvt, cl_sel, max_height="calc(100vh - 250px)"):
     _TH = "#f0f2f6"; _TC = "#2BBFA4"; _TC2 = "#1a9e8b"; _B = "#dee2e6"
     _COL_W = {"DG_CODE": 74, "ID": 108, "ProductDescription": 230}
     _row_labels = [c for c in ["DG_CODE", "ID", "ProductDescription"] if c in pvt.columns]
@@ -480,6 +481,7 @@ def _pog_fullscreen_dialog():
         height: 100vh !important; max-height: 100vh !important;
         margin: 0 !important; border-radius: 0 !important;
         top: 0 !important; left: 0 !important; transform: none !important;
+        padding: 14px 18px !important;
     }
     div[data-testid="stDialog"] > div {
         width: 100vw !important; height: 100vh !important;
@@ -505,7 +507,7 @@ def _pog_fullscreen_dialog():
             _im = _si.str.contains(_sq, case=False, na=False)
             _pvt_fs = pd.concat([_pvt_fs[_im], _pvt_fs[~_im]]).reset_index(drop=True)
         st.markdown(
-            _build_pog_cluster_html(_pvt_fs, _cl_sel_fs, max_height="calc(100vh - 110px)"),
+            _build_pog_cluster_html(_pvt_fs, _cl_sel_fs, max_height="calc(100vh - 78px)"),
             unsafe_allow_html=True,
         )
 
@@ -523,7 +525,9 @@ def _render_minor():
     # ── Column detection ──────────────────────────────────────────────────────
     # Never fall back to "Department" for div — that's a different column.
     # Never mix "Display Group" into dg_col — it conflicts with disp_col.
-    _fmt_col   = _find_col(_df, "store_Format", "store_format", "StoreFormat", "Format")
+    _fmt_col   = _find_col(_df, "store_Format", "Store_Format", "store_format",
+                           "STORE_FORMAT", "StoreFormat", "Store Format",
+                           "store format", "Format")
     _div_col   = _find_col(_df, "Div Code&Desc", "Div Code & Desc", "DivCode&Desc", "DivCode")
     _dg_col    = _find_col(_df, "DG", "DG_CODE", "dg_code")
     _cl_col    = _find_col(_df, "ClusterName", "cluster_name", "Cluster_Name",
@@ -538,7 +542,7 @@ def _render_minor():
                            "Display_Group", "displayGroup")
 
     # ── DIAGNOSTIC — expand to confirm column names, then remove this block ───
-    with st.expander("🔍 Column diagnostic (remove when confirmed)", expanded=False):
+    if False:
         st.write("**All columns in _df:**", list(_df.columns))
         st.write(f"fmt=`{_fmt_col}` | div=`{_div_col}` | dg=`{_dg_col}` "
                  f"| cl=`{_cl_col}` | disp=`{_disp_col}` | store=`{_store_col}`")
@@ -574,6 +578,15 @@ def _render_minor():
                 .astype(str)
                 .to_dict()
             )
+    _mini_fmt_col = _find_col(_mini, "store_Format", "Store_Format", "store_format",
+                              "STORE_FORMAT", "StoreFormat", "Store Format",
+                              "store format", "Format") if _mini is not None else None
+    _mini_div_col = _find_col(_mini, "Div Code&Desc", "Div Code & Desc",
+                              "DivCode&Desc", "DivCode") if _mini is not None else None
+    _mini_dg_col = _find_col(_mini, "Display Group", "DG", "DG_CODE",
+                             "Display_Group", "displayGroup") if _mini is not None else None
+    _mini_cl_col = _find_col(_mini, "ClusterName", "Cluster_Name", "cluster_name",
+                             "Cluster Name") if _mini is not None else None
 
     # ── Migrate old multiselect lists → single value ──────────────────────────
     for _ss in ("minor_fmt", "minor_div", "minor_dg", "minor_cl"):
@@ -591,35 +604,57 @@ def _render_minor():
         if _mini is None:
             return []
         _f = _mini
-        if skip != "fmt" and _cur_fmt and "store_Format" in _f.columns: _f = _f[_f["store_Format"] == _cur_fmt]
-        if skip != "div" and _cur_div and "Div Code&Desc" in _f.columns: _f = _f[_f["Div Code&Desc"] == _cur_div]
-        if skip != "dg"  and _cur_dg  and "Display Group" in _f.columns: _f = _f[_f["Display Group"] == _cur_dg]
-        if skip != "cl"  and _cur_cl  and "ClusterName"   in _f.columns: _f = _f[_f["ClusterName"] == _cur_cl]
-        _col = {"fmt": "store_Format", "div": "Div Code&Desc",
-                "dg": "Display Group", "cl": "ClusterName"}[skip]
+        if skip != "fmt" and _cur_fmt and _mini_fmt_col in _f.columns:
+            _f = _f[_f[_mini_fmt_col].astype(str).str.strip() == str(_cur_fmt).strip()]
+        if skip != "div" and _cur_div and _mini_div_col in _f.columns:
+            _f = _f[_f[_mini_div_col].astype(str).str.strip() == str(_cur_div).strip()]
+        if skip != "dg" and _cur_dg and _mini_dg_col in _f.columns:
+            _f = _f[_f[_mini_dg_col].astype(str).str.strip() == str(_cur_dg).strip()]
+        if skip != "cl" and _cur_cl and _mini_cl_col in _f.columns:
+            _f = _f[_f[_mini_cl_col].astype(str).str.strip() == str(_cur_cl).strip()]
+        _col = {"fmt": _mini_fmt_col, "div": _mini_div_col,
+                "dg": _mini_dg_col, "cl": _mini_cl_col}[skip]
         if _col not in _f.columns:
             return []
-        return sorted(v for v in _f[_col].dropna().astype(str).unique()
-                      if v not in ("", "nan"))
+        return sorted(v for v in _f[_col].dropna().astype(str).str.strip().unique()
+                      if v not in ("", "nan", "None", "none", "null"))
 
-    _a5_sfmt = st.session_state.get("_a5_sfmt_opts", [])
-    _fmt_opts = sorted(set(_cascade("fmt")) | set(_a5_sfmt),
-                       key=lambda x: (x not in _a5_sfmt, x))
-    _div_opts = _cascade("div")
-    _dg_opts  = _cascade("dg")
-    _cl_opts  = _cascade("cl")
+    def _current_options():
+        _a5_sfmt_local = st.session_state.get("_a5_sfmt_opts", [])
+        return (
+            sorted(set(_cascade("fmt")) | set(_a5_sfmt_local),
+                   key=lambda x: (x not in _a5_sfmt_local, x)),
+            _cascade("div"),
+            _cascade("dg"),
+            _cascade("cl"),
+        )
 
-    # Drop stale single-select values no longer in options
-    for _ss, _opts in [("minor_fmt", _fmt_opts), ("minor_div", _div_opts),
-                       ("minor_dg",  _dg_opts),  ("minor_cl",  _cl_opts)]:
-        if st.session_state.get(_ss) not in (None, *_opts):
-            st.session_state[_ss] = None
+    # Drop stale values and auto-select when a cascaded dropdown has only one
+    # possible value. This keeps filters visibly connected without extra clicks.
+    for _ in range(4):
+        _fmt_opts, _div_opts, _dg_opts, _cl_opts = _current_options()
+        _changed = False
+        for _ss, _opts in [("minor_fmt", _fmt_opts), ("minor_div", _div_opts),
+                           ("minor_dg",  _dg_opts),  ("minor_cl",  _cl_opts)]:
+            _cur = st.session_state.get(_ss)
+            if _cur not in (None, *_opts):
+                st.session_state[_ss] = None
+                _cur = None
+                _changed = True
+            if _cur is None and len(_opts) == 1:
+                st.session_state[_ss] = _opts[0]
+                _changed = True
+        _cur_fmt = st.session_state.get("minor_fmt")
+        _cur_div = st.session_state.get("minor_div")
+        _cur_dg  = st.session_state.get("minor_dg")
+        _cur_cl  = st.session_state.get("minor_cl")
+        if not _changed:
+            break
+    _fmt_opts, _div_opts, _dg_opts, _cl_opts = _current_options()
 
     # ── Filter bar (4 single-select dropdowns) ────────────────────────────────
-    _fc1, _fc2, _fc3, _fc4 = st.columns(4)
-    with _fc1:
-        _fmt_sel = st.selectbox("STORE_FORMAT", [None] + _fmt_opts, key="minor_fmt",
-                                format_func=lambda x: "All formats" if x is None else x)
+    _fmt_sel = st.session_state.get("minor_fmt")
+    _fc2, _fc3, _fc4 = st.columns(3)
     with _fc2:
         _div_sel = st.selectbox("DIV CODE&DESC", [None] + _div_opts, key="minor_div",
                                 format_func=lambda x: "All divisions" if x is None else x)
@@ -638,6 +673,11 @@ def _render_minor():
     if _dg_sel  and _dg_col:   _fdf = _fdf[_fdf[_dg_col].astype(str)  == _dg_sel]
     if _cl_sel  and _cl_col:   _fdf = _fdf[_fdf[_cl_col].astype(str)  == _cl_sel]
 
+    def _filter_eq(_frame: pd.DataFrame, _col: str | None, _val):
+        if not _val or not _col or _col not in _frame.columns:
+            return _frame
+        return _frame[_frame[_col].astype(str).str.strip() == str(_val).strip()]
+
     # ── Cluster summary from mini-table (instant pandas, no re-scan) ──────────
     _summary_df = None
     if _mini is not None:
@@ -645,17 +685,17 @@ def _render_minor():
         _null_s = {"", "nan", "None", "NaN", "none", "null"}
         # Base filter: format + div + cluster (NO DG — keeps StoreCount stable)
         _mf = _mini
-        if _fmt_sel: _mf = _mf[_mf["store_Format"] == _fmt_sel]
-        if _div_sel: _mf = _mf[_mf["Div Code&Desc"] == _div_sel]
-        if _cl_sel:  _mf = _mf[_mf["ClusterName"] == _cl_sel]
+        _mf = _filter_eq(_mf, _mini_fmt_col, _fmt_sel)
+        _mf = _filter_eq(_mf, _mini_div_col, _div_sel)
+        _mf = _filter_eq(_mf, _mini_cl_col, _cl_sel)
         # TotalStoreApply: add DG filter (counts DG entries on planogram)
-        _mf_dg = _mf[_mf["Display Group"] == _dg_sel] if _dg_sel else _mf
+        _mf_dg = _filter_eq(_mf, _mini_dg_col, _dg_sel)
         # Left cluster table: Format + Div + DG only — NO ClusterName filter so all
         # clusters connected to the selected DG are shown (mirrors PBI behaviour)
         _mf_for_clusters = _mini
-        if _fmt_sel: _mf_for_clusters = _mf_for_clusters[_mf_for_clusters["store_Format"] == _fmt_sel]
-        if _div_sel: _mf_for_clusters = _mf_for_clusters[_mf_for_clusters["Div Code&Desc"] == _div_sel]
-        if _dg_sel:  _mf_for_clusters = _mf_for_clusters[_mf_for_clusters["Display Group"] == _dg_sel]
+        _mf_for_clusters = _filter_eq(_mf_for_clusters, _mini_fmt_col, _fmt_sel)
+        _mf_for_clusters = _filter_eq(_mf_for_clusters, _mini_div_col, _div_sel)
+        _mf_for_clusters = _filter_eq(_mf_for_clusters, _mini_dg_col, _dg_sel)
 
         # StoreCount = DISTINCTCOUNT(POG_Store[store_no])
         # PBI source: A5_2_POG_FP_HDET_LIVE_*.csv  →  store_no + Property_Store_Cluster + POGName
@@ -793,7 +833,7 @@ def _render_minor():
             _pc_tot = (int(_mf[_mf["Name"] != ""]["Name"].nunique())
                        if "Name" in _mf.columns else 0)
 
-        with st.expander("🔍 StoreCount source", expanded=False):
+        if False:
             st.caption(f"Source: **{_sc_src_label}** | clusters: {len(_sc)}")
         if _cl_sel:
             # ClusterName selected: use _mf_dg (has ClusterName filter) so horizontal
@@ -953,13 +993,10 @@ def _render_minor():
             st.info("Select a **ClusterName** to display the POG_Cluster table.")
         else:
             # Build pivot from mini-table (instant — no additional HDET scan)
-            _f = _mini[_mini["ClusterName"] == _cl_sel].copy()
-            if _fmt_sel and "store_Format" in _f.columns:
-                _f = _f[_f["store_Format"] == _fmt_sel]
-            if _div_sel and "Div Code&Desc" in _f.columns:
-                _f = _f[_f["Div Code&Desc"] == _div_sel]
-            if _dg_sel and "Display Group" in _f.columns:
-                _f = _f[_f["Display Group"] == _dg_sel]
+            _f = _filter_eq(_mini, _mini_cl_col, _cl_sel).copy()
+            _f = _filter_eq(_f, _mini_fmt_col, _fmt_sel)
+            _f = _filter_eq(_f, _mini_div_col, _div_sel)
+            _f = _filter_eq(_f, _mini_dg_col, _dg_sel)
             _ren = {"Display Group": "DG_CODE", "Name": "POGName", "ForecastSales": "Value"}
             _raw_pvt = _f.rename(columns=_ren)
             _pvt_cols = [c for c in ["DG_CODE","ID","ProductDescription","POGName","Value"]
