@@ -7082,10 +7082,7 @@ _nonsspog_df = (
 # picks up changes immediately without stale module-import caches from utils/shared.py.
 # RS_SHEETS (imported) stays at 7 entries for other pages; this local list owns the UI.
 _TAB_LABELS = [
-    "Range Sheet_Non-SSPOG",
-    "Range Sheet_SSPOG", # (Simple)
-    # "Range Sheet_Non-SSPOG",
-    "StoreApply_SSPOG",
+    "Range Sheet",
     "5.1 ItembyStore",
     "5.2 ItembyStore_SC",
     "5.3 Upload_product_library",
@@ -7098,7 +7095,7 @@ _tab = {name: t for name, t in zip(_TAB_LABELS, _sheet_tabs)}
 assert len(_tab) == len(_TAB_LABELS), "Bug: tab dict is shorter than label list"
 
 
-with _tab["Range Sheet_Non-SSPOG"]:
+with _tab["Range Sheet"]:
     # ── Step 1: Find pinned HDET (large) and A5 files ────────────────────────
     _ns_hdet_path = None
     _ns_a5_name   = None
@@ -7244,12 +7241,6 @@ with _tab["Range Sheet_Non-SSPOG"]:
                               fixed_dg_code=st.session_state.get("_ns_loaded_dg_code"),
                               fixed_dg_name=st.session_state.get("_ns_loaded_dg_name"))
 
-with _tab["Range Sheet_SSPOG"]: # Simple — p="ns2" avoids key collision with HDET tab (p="ns")
-    _render_sheet_content(_nonsspog_df, "ns2")
-# with _tab["Range Sheet_Non-SSPOG"]:
-#     _render_sheet_content(_nonsspog_df, "nsv")
-with _tab["StoreApply_SSPOG"]:
-    _render_sheet_content(_sspog_df, "sa")
 with _tab["5.1 ItembyStore"]:
     _IB_COLS = [
         "Department", "Class", "Subclass", "Barcode", "TPNA", "ID",
@@ -7574,65 +7565,36 @@ with _tab["5.1 ItembyStore"]:
             + " · Enter DG code below to load a full filtered slice.</div>",
             unsafe_allow_html=True,
         )
-        _hc1, _hc2, _hc3, _ = st.columns([1.8, 1.4, 1.6, 3.2])
+        # Search bar only — no buttons. Typing a DG code (then Enter / click away)
+        # loads that slice automatically; clearing it restores the default view.
+        _hc1, _ = st.columns([1.8, 6.2])
         with _hc1:
             _ib_dg_inp = st.text_input(
                 "DG Code", key="ib_hdet_dg",
                 placeholder="e.g. 101",
                 label_visibility="collapsed",
             )
-        with _hc2:
-            _ib_reload = st.button("Load by DG", key="ib_hdet_reload", use_container_width=True)
-        with _hc3:
-            _ib_reset_hdet = st.button("↺ Reload HDET Preview", key="ib_hdet_reset", use_container_width=True)
 
-        if _ib_reset_hdet:
-            with st.spinner(f"Reloading preview from {_hfname}…"):
-                _auto_df = read_large_file_head(_hdet_path, n_rows=500)
-            st.session_state.ib_data = _build_ib(_auto_df)
-            st.session_state["_ib_source"] = "HDET preview (500 rows)"
-            st.rerun()
-
-        if _ib_reload:
-            _dg_val = _ib_dg_inp.strip()
-            if _dg_val:
-                with st.spinner(f"Loading DG={_dg_val} from {_hfname}…"):
+        _ib_dg_val = str(_ib_dg_inp or "").strip()
+        if st.session_state.get("_ib_dg_typed") != _ib_dg_val:
+            st.session_state["_ib_dg_typed"] = _ib_dg_val
+            if _ib_dg_val:
+                with st.spinner(f"Loading DG={_ib_dg_val} from {_hfname}…"):
                     try:
                         _mtime = os.path.getmtime(_hdet_path)
                         _size = os.path.getsize(_hdet_path)
                     except OSError:
                         _mtime, _size = 0.0, 0
-                    _hdet_df = _rs_load_dg_slice_cached(_hdet_path, _dg_val, _mtime, _size)
+                    _hdet_df = _rs_load_dg_slice_cached(_hdet_path, _ib_dg_val, _mtime, _size)
                 if not _hdet_df.empty:
                     st.session_state.ib_data = _build_ib(_hdet_df)
-                    st.session_state["_ib_source"] = f"HDET · DG={_dg_val} ({len(_hdet_df):,} rows)"
+                    st.session_state["_ib_source"] = f"HDET · DG={_ib_dg_val} ({len(_hdet_df):,} rows)"
                     st.rerun()
                 else:
-                    st.warning(f"No rows found for DG={_dg_val!r} in {_hfname}")
+                    st.warning(f"No rows found for DG={_ib_dg_val!r} in {_hfname}")
             else:
-                st.info("Enter a DG code first, then click Load by DG.")
-
-    # ── Toolbar ───────────────────────────────────────────────────────────────
-    _ib_c1, _ib_c2, _ib_c3, _ = st.columns([1.1, 1.0, 1.4, 4.5])
-    with _ib_c1:
-        if st.button("＋ Add Row", key="ib_add_row", use_container_width=True, disabled=not _CAN_EDIT):
-            _empty = pd.DataFrame([{c: None for c in _IB_COLS}])
-            st.session_state.ib_data = pd.concat(
-                [st.session_state.ib_data, _empty], ignore_index=True)
-            st.rerun()
-    with _ib_c2:
-        if st.button("↺ Reset", key="ib_clear", use_container_width=True, disabled=not _CAN_EDIT):
-            st.session_state.ib_data = _cast_text_cols(
-                _fill_from_db(_IB_COLS, merged), _IB_TEXT_COLS)
-            st.session_state["_ib_source"] = "Rangesheet data"
-            st.session_state.pop("vw_submit_51", None)
-            st.rerun()
-    with _ib_c3:
-        if st.button("✅ Submit to Report", key="ib_submit", use_container_width=True,
-                     type="primary", disabled=not _CAN_EDIT):
-            _to_send = st.session_state.ib_data.dropna(how="all")
-            st.session_state["vw_submit_51"] = _to_send.reset_index(drop=True)
-            st.success(f"Submitted {len(_to_send):,} rows → go to Report page to export.")
+                _ib_load_default()
+                st.rerun()
 
     _ib_edited = st.data_editor(
         st.session_state.ib_data,
@@ -7669,27 +7631,6 @@ with _tab["5.2 ItembyStore_SC"]:
         st.session_state.ibs_sc_data = _fill_from_db(_IBS_COLS, merged)
         st.session_state["_ibs_db_sig"] = _db_sig
 
-    # ── Toolbar ──────────────────────────────────────────────────────────────
-    _ibs_c1, _ibs_c2, _ibs_c3, _ibs_c4 = st.columns([1.1, 1.0, 1.4, 4.5])
-    with _ibs_c1:
-        if st.button("＋ Add Row", key="ibs_add_row", use_container_width=True, disabled=not _CAN_EDIT):
-            _empty = pd.DataFrame([{c: None for c in _IBS_COLS}])
-            st.session_state.ibs_sc_data = pd.concat(
-                [st.session_state.ibs_sc_data, _empty], ignore_index=True
-            )
-            st.rerun()
-    with _ibs_c2:
-        if st.button("↺ Reset", key="ibs_clear", use_container_width=True, disabled=not _CAN_EDIT):
-            st.session_state.ibs_sc_data = _fill_from_db(_IBS_COLS, merged)
-            st.session_state.pop("vw_submit_52", None)
-            st.rerun()
-    with _ibs_c3:
-        if st.button("✅ Submit to Report", key="ibs_submit", use_container_width=True,
-                     type="primary", disabled=not _CAN_EDIT):
-            _to_send = st.session_state.ibs_sc_data.dropna(how="all")
-            st.session_state["vw_submit_52"] = _to_send.reset_index(drop=True)
-            st.success(f"Submitted {len(_to_send):,} rows → go to Report page to export.")
-
     # ── Editable table ────────────────────────────────────────────────────────
     _ibs_edited = st.data_editor(
         st.session_state.ibs_sc_data,
@@ -7710,27 +7651,6 @@ with _tab["5.3 Upload_product_library"]:
     if "vw_prodlib_data" not in st.session_state or st.session_state.get("_pl_db_sig") != _db_sig:
         st.session_state.vw_prodlib_data = _fill_from_db(_PRODLIB_COLS, merged)
         st.session_state["_pl_db_sig"] = _db_sig
-
-    # ── Toolbar ──────────────────────────────────────────────────────────────
-    _pl_c1, _pl_c2, _pl_c3, _pl_c4 = st.columns([1.1, 1.0, 1.4, 4.5])
-    with _pl_c1:
-        if st.button("＋ Add Row", key="pl_add_row", use_container_width=True, disabled=not _CAN_EDIT):
-            _empty = pd.DataFrame([{c: None for c in _PRODLIB_COLS}])
-            st.session_state.vw_prodlib_data = pd.concat(
-                [st.session_state.vw_prodlib_data, _empty], ignore_index=True
-            )
-            st.rerun()
-    with _pl_c2:
-        if st.button("↺ Reset", key="pl_clear", use_container_width=True, disabled=not _CAN_EDIT):
-            st.session_state.vw_prodlib_data = _fill_from_db(_PRODLIB_COLS, merged)
-            st.session_state.pop("vw_submit_53", None)
-            st.rerun()
-    with _pl_c3:
-        if st.button("✅ Submit to Report", key="pl_submit", use_container_width=True,
-                     type="primary", disabled=not _CAN_EDIT):
-            _to_send = st.session_state.vw_prodlib_data.dropna(how="all")
-            st.session_state["vw_submit_53"] = _to_send.reset_index(drop=True)
-            st.success(f"Submitted {len(_to_send):,} rows → go to Report page to export.")
 
     _prodlib_edited = st.data_editor(
         st.session_state.vw_prodlib_data,
@@ -7952,27 +7872,19 @@ with _tab["5.4 Upload to Citrix"]:
             + " · enter DG to load filtered slice.</div>",
             unsafe_allow_html=True,
         )
-        _cxh1, _cxh2, _cxh3, _ = st.columns([1.8, 1.4, 1.6, 3.2])
+        # Search bar only — no buttons. Typing a DG code (then Enter / click away)
+        # loads that slice automatically; clearing it restores the default view.
+        _cxh1, _ = st.columns([1.8, 6.2])
         with _cxh1:
             _cx_dg_inp = st.text_input(
                 "DG Code", key="cx_hdet_dg",
                 placeholder="e.g. 101",
                 label_visibility="collapsed",
             )
-        with _cxh2:
-            _cx_reload = st.button("Load by DG", key="cx_hdet_reload", use_container_width=True)
-        with _cxh3:
-            _cx_reset_hdet = st.button("↺ Reload HDET Preview", key="cx_hdet_reset", use_container_width=True)
 
-        if _cx_reset_hdet:
-            with st.spinner(f"Reloading preview from {_cx_hfname}…"):
-                _cx_auto = read_large_file_head(_cx_hdet_path, n_rows=500)
-            st.session_state.vw_citrix_data = _build_cx(_cx_auto)
-            st.session_state["_cx_source"] = "HDET preview (500 rows)"
-            st.rerun()
-
-        if _cx_reload:
-            _cx_dg = _cx_dg_inp.strip()
+        _cx_dg = str(_cx_dg_inp or "").strip()
+        if st.session_state.get("_cx_dg_typed") != _cx_dg:
+            st.session_state["_cx_dg_typed"] = _cx_dg
             if _cx_dg:
                 with st.spinner(f"Loading DG={_cx_dg} from {_cx_hfname}…"):
                     try:
@@ -7988,30 +7900,8 @@ with _tab["5.4 Upload to Citrix"]:
                 else:
                     st.warning(f"No rows found for DG={_cx_dg!r} in {_cx_hfname}")
             else:
-                st.info("Enter a DG code first, then click Load by DG.")
-
-    # ── Toolbar ──────────────────────────────────────────────────────────────
-    _cx_c1, _cx_c2, _cx_c3, _ = st.columns([1.1, 1.0, 1.4, 4.5])
-    with _cx_c1:
-        if st.button("＋ Add Row", key="cx_add_row", use_container_width=True, disabled=not _CAN_EDIT):
-            _empty = pd.DataFrame([{c: None for c in _CITRIX_COLS}])
-            st.session_state.vw_citrix_data = pd.concat(
-                [st.session_state.vw_citrix_data, _empty], ignore_index=True
-            )
-            st.rerun()
-    with _cx_c2:
-        if st.button("↺ Reset", key="cx_clear", use_container_width=True, disabled=not _CAN_EDIT):
-            st.session_state.vw_citrix_data = _cast_text_cols(
-                _fill_from_db(_CITRIX_COLS, merged), _CX_TEXT_COLS)
-            st.session_state["_cx_source"] = "Rangesheet data"
-            st.session_state.pop("vw_submit_54", None)
-            st.rerun()
-    with _cx_c3:
-        if st.button("✅ Submit to Report", key="cx_submit", use_container_width=True,
-                     type="primary", disabled=not _CAN_EDIT):
-            _to_send = st.session_state.vw_citrix_data.dropna(how="all")
-            st.session_state["vw_submit_54"] = _to_send.reset_index(drop=True)
-            st.success(f"Submitted {len(_to_send):,} rows → go to Report page to export.")
+                _cx_load_default()
+                st.rerun()
 
     _citrix_edited = st.data_editor(
         st.session_state.vw_citrix_data,
