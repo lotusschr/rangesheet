@@ -7082,8 +7082,8 @@ _nonsspog_df = (
 # picks up changes immediately without stale module-import caches from utils/shared.py.
 # RS_SHEETS (imported) stays at 7 entries for other pages; this local list owns the UI.
 _TAB_LABELS = [
-    "Range Sheet_SSPOG",
-    "Range Sheet_Non-SSPOG", # (Simple)
+    "Range Sheet_Non-SSPOG",
+    "Range Sheet_SSPOG", # (Simple)
     # "Range Sheet_Non-SSPOG",
     "StoreApply_SSPOG",
     "5.1 ItembyStore",
@@ -7098,7 +7098,7 @@ _tab = {name: t for name, t in zip(_TAB_LABELS, _sheet_tabs)}
 assert len(_tab) == len(_TAB_LABELS), "Bug: tab dict is shorter than label list"
 
 
-with _tab["Range Sheet_SSPOG"]:
+with _tab["Range Sheet_Non-SSPOG"]:
     # ── Step 1: Find pinned HDET (large) and A5 files ────────────────────────
     _ns_hdet_path = None
     _ns_a5_name   = None
@@ -7244,7 +7244,7 @@ with _tab["Range Sheet_SSPOG"]:
                               fixed_dg_code=st.session_state.get("_ns_loaded_dg_code"),
                               fixed_dg_name=st.session_state.get("_ns_loaded_dg_name"))
 
-with _tab["Range Sheet_Non-SSPOG"]: # Simple — p="ns2" avoids key collision with HDET tab (p="ns")
+with _tab["Range Sheet_SSPOG"]: # Simple — p="ns2" avoids key collision with HDET tab (p="ns")
     _render_sheet_content(_nonsspog_df, "ns2")
 # with _tab["Range Sheet_Non-SSPOG"]:
 #     _render_sheet_content(_nonsspog_df, "nsv")
