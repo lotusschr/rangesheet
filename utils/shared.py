@@ -1352,17 +1352,25 @@ def render_page_nav(current: str):
     with c_prev:
         if prev_page:
             st.markdown('<div class="page-nav-btn">', unsafe_allow_html=True)
-            if st.button(f"← {_PAGE_LABELS[prev_page]}", key="page_nav_prev",
-                         use_container_width=True):
-                st.switch_page(f"pages/{prev_page}.py")
+            st.button(
+                f"← {_PAGE_LABELS[prev_page]}",
+                key="page_nav_prev",
+                use_container_width=True,
+                on_click=st.switch_page,
+                args=(f"pages/{prev_page}.py",),
+            )
             st.markdown("</div>", unsafe_allow_html=True)
 
     with c_next:
         if next_page:
             st.markdown('<div class="page-nav-btn">', unsafe_allow_html=True)
-            if st.button(f"{_PAGE_LABELS[next_page]} →", key="page_nav_next",
-                         use_container_width=True):
-                st.switch_page(f"pages/{next_page}.py")
+            st.button(
+                f"{_PAGE_LABELS[next_page]} →",
+                key="page_nav_next",
+                use_container_width=True,
+                on_click=st.switch_page,
+                args=(f"pages/{next_page}.py",),
+            )
             st.markdown("</div>", unsafe_allow_html=True)
 
 

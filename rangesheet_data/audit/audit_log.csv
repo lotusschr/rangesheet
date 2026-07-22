@@ -3238,3 +3238,30 @@ DEV001,Developer,ADMIN,09:20,11/06/2026,UPLOAD & AUTO-MERGE,2 ไฟล์ → 3
 ,Lucas Martin,ADMIN,08:50,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
 ,Lucas Martin,ADMIN,08:54,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
 ,Lucas Martin,ADMIN,08:59,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
+,Lucas Martin,ADMIN,09:47,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
+,Lucas Martin,ADMIN,09:54,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '015038432', 'เมจิกทวินแครกเกอร์ไส้ครีมเนย 15ก.x24'): status -> MAINTAIN",TH100001,ONLINE
+,Lucas Martin,ADMIN,09:56,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
+,Lucas Martin,ADMIN,09:59,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '015038424', 'เมจิกทวินแครกเกอร์ไส้ครีมชอค 15ก.x24'): status -> MAINTAIN",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:04,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5086 I 9 OMM-WHT9_target_5086: '332.53'→'Delete'",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:04,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.'): status -> MAINTAIN",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:05,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5086 I 9 OMM-WHT9_target_5086: '332.53'→cleared",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:05,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5088 F 6 OMS-WHT6_target_5088: '205.28'→'Delete'",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:05,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.'): status -> MAINTAIN",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:06,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: '228.22'→'Delete'",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: 'Delete'→cleared",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: New blocked for low-sales confirm",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: New blocked for low-sales confirm",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: New blocked for low-sales confirm",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: New blocked for low-sales confirm",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: New blocked for low-sales confirm",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: New blocked for low-sales confirm",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: New blocked for low-sales confirm",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.')|CRACKER H_G_5029 F 6 OMS-WHT6_target_5029: New blocked for low-sales confirm",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:07,22/07/2026,Planogram Action,"tab=ns; 1 change(s): ('K3K', '010349839', 'เมจิกแครกเกอร์ ดั้งเดิม 90ก.'): status -> MAINTAIN",TH100001,ONLINE
+,Lucas Martin,ADMIN,10:21,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
+,Lucas Martin,ADMIN,10:34,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
+,Lucas Martin,ADMIN,10:40,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
+,Lucas Martin,ADMIN,10:40,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
+,Lucas Martin,ADMIN,10:49,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
+,Lucas Martin,ADMIN,10:53,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE
+,Lucas Martin,ADMIN,10:58,22/07/2026,Login,Lucas Martin signed in as ADMIN,TH100001,ONLINE

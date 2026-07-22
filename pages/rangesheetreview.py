@@ -100,6 +100,20 @@ def _rs_edit_state_path(scope: str) -> str:
     return os.path.join(_RS_NEW_ROWS_DIR, f"edit_state_{digest}.json")
 
 
+def _rs_edit_scope(
+    page_key: str,
+    source_path: str | None,
+    source_shape,
+    dg_code: str | None,
+    dg_name: str | None,
+) -> str:
+    """Stable autosave scope shared by pre-summary loading and the main grid."""
+    code = str(dg_code or "").strip()
+    name = str(dg_name or "").strip()
+    dg_key = code if code and code.upper() != "ALL" else (name or "ALL")
+    return f"v2|{page_key}|{source_path or ''}|{source_shape}|{dg_key}"
+
+
 def _rs_table_base_path(scope: str) -> str:
     os.makedirs(_RS_NEW_ROWS_DIR, exist_ok=True)
     digest = _hashlib.sha1(str(scope).encode("utf-8")).hexdigest()
@@ -283,9 +297,22 @@ all_cols = list(merged.columns)
 def _nc(s):  return str(s).lower().strip().replace('\n', ' ').replace('  ', ' ')
 def _nca(s): return _re.sub(r'[^a-z0-9]', '', _nc(s))   # letters+digits only
 
-@st.cache_data(show_spinner=False)
-def _load_a5_subset(amp: str, mtime: float, dyn_pog_cols_key: tuple):
-    """Load only A5 columns/rows needed for the visible planograms."""
+@st.cache_data(show_spinner=False, max_entries=4)
+def _load_a5_base(amp: str, mtime: float, file_size: int):
+    """Read the column-pruned A5 source once, shared by every DG/view."""
+    _ = (mtime, file_size)  # explicit cache invalidation inputs
+    _base_digest = _hashlib.sha1(
+        f"a5_base_v2|{amp}|{mtime}|{file_size}".encode("utf-8")
+    ).hexdigest()
+    _base_path = os.path.join(_RS_NEW_ROWS_DIR, f"a5_base_{_base_digest}.pkl")
+    if os.path.exists(_base_path):
+        try:
+            _cached = pd.read_pickle(_base_path)
+            if isinstance(_cached, dict) and isinstance(_cached.get("a5"), pd.DataFrame):
+                return _cached["a5"], dict(_cached.get("meta", {})), None
+        except Exception:
+            pass
+
     _ext = os.path.splitext(amp)[1].lower()
     _encodings = ("utf-8-sig", "cp874", "latin1")
     _header = None
@@ -334,12 +361,64 @@ def _load_a5_subset(amp: str, mtime: float, dyn_pog_cols_key: tuple):
 
     try:
         if _ext in (".csv", ".txt"):
-            _a5 = pd.read_csv(amp, sep="|", encoding=_enc_used, usecols=_usecols)
+            _a5 = None
+            _last_read_err = None
+            _read_encodings = list(dict.fromkeys([_enc_used, *_encodings]))
+            for _read_enc in _read_encodings:
+                if not _read_enc:
+                    continue
+                try:
+                    _a5 = pd.read_csv(
+                        amp, sep="|", encoding=_read_enc, usecols=_usecols
+                    )
+                    break
+                except UnicodeDecodeError as _read_err:
+                    _last_read_err = _read_err
+            if _a5 is None:
+                raise _last_read_err or ValueError("Unable to decode A5 source")
         else:
             _a5 = pd.read_excel(amp, usecols=_usecols)
     except Exception as _e:
         return None, {}, str(_e)
 
+    _meta = {
+        "pog_candidates": list(_pog_candidates),
+        "pog_norms": {
+            c: _a5[c].astype("string").str.strip().str.lower().str.replace(
+                r"[^a-z0-9]", "", regex=True
+            )
+            for c in _pog_candidates
+        },
+        "cluster": _cluster_c,
+        "mod": _mod_c,
+        "fixture": _fix_c,
+        "range": _rng_c,
+    }
+    try:
+        os.makedirs(_RS_NEW_ROWS_DIR, exist_ok=True)
+        _tmp = f"{_base_path}.tmp"
+        pd.to_pickle({"a5": _a5, "meta": _meta}, _tmp)
+        os.replace(_tmp, _base_path)
+    except Exception:
+        pass
+    return _a5, _meta, _warn
+
+
+@st.cache_data(show_spinner=False, max_entries=48)
+def _load_a5_subset(amp: str, mtime: float, dyn_pog_cols_key: tuple):
+    """Filter the shared A5 base to planograms needed by the current DG."""
+    try:
+        _file_size = os.path.getsize(amp)
+    except OSError:
+        _file_size = 0
+    _a5, _base_meta, _warn = _load_a5_base(amp, mtime, _file_size)
+    if _a5 is None:
+        return None, {}, _warn
+
+    _pog_candidates = [
+        c for c in _base_meta.get("pog_candidates", []) if c in _a5.columns
+    ]
+    _pog_norms = _base_meta.get("pog_norms", {})
     _target = {
         _nca(v) for v in dyn_pog_cols_key
         if str(v).strip() not in ("", "nan", "None")
@@ -347,20 +426,30 @@ def _load_a5_subset(amp: str, mtime: float, dyn_pog_cols_key: tuple):
     _best_col, _best_hit = (_pog_candidates[0] if _pog_candidates else None), -1
     if _target:
         for _cand in _pog_candidates:
-            _vals = set(_a5[_cand].dropna().astype(str).str.strip().map(_nca))
+            _norm_s = _pog_norms.get(_cand)
+            if not isinstance(_norm_s, pd.Series) or len(_norm_s) != len(_a5):
+                _norm_s = _a5[_cand].astype("string").str.strip().str.lower().str.replace(
+                    r"[^a-z0-9]", "", regex=True
+                )
+            _vals = set(_norm_s.dropna())
             _hit = len(_vals & _target)
             if _hit > _best_hit:
                 _best_col, _best_hit = _cand, _hit
         if _best_col and _best_hit > 0:
-            _mask = _a5[_best_col].astype(str).str.strip().map(_nca).isin(_target)
+            _best_norm_s = _pog_norms.get(_best_col)
+            if not isinstance(_best_norm_s, pd.Series) or len(_best_norm_s) != len(_a5):
+                _best_norm_s = _a5[_best_col].astype("string").str.strip().str.lower().str.replace(
+                    r"[^a-z0-9]", "", regex=True
+                )
+            _mask = _best_norm_s.isin(_target)
             _a5 = _a5.loc[_mask].copy()
 
     _meta = {
         "pog": _best_col,
-        "cluster": _cluster_c,
-        "mod": _mod_c,
-        "fixture": _fix_c,
-        "range": _rng_c,
+        "cluster": _base_meta.get("cluster"),
+        "mod": _base_meta.get("mod"),
+        "fixture": _base_meta.get("fixture"),
+        "range": _base_meta.get("range"),
     }
     return _a5, _meta, _warn
 
@@ -767,17 +856,19 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
         ):
             if _candidate_sticky not in _pre_scope_candidates:
                 _pre_scope_candidates.append(_candidate_sticky)
-        _pre_edit_state_scope = (
-            f"{p}|{large_file_path or ''}|"
-            f"{getattr(df_src, 'shape', ('', ''))}|"
-            f"{_sel_dg_code or ''}|{_sel_dg_name or ''}|"
-            f"{','.join(map(str, _pre_sticky_for_state))}"
+        _pre_edit_state_scope = _rs_edit_scope(
+            p,
+            large_file_path,
+            getattr(df_src, "shape", ("", "")),
+            _sel_dg_code,
+            _sel_dg_name,
         )
         _pre_edit_state_scope_key = f"{p}_edit_state_scope"
         if st.session_state.get(_pre_edit_state_scope_key) != _pre_edit_state_scope:
-            _loaded_edit_state = {}
-            _loaded_edit_scope = _pre_edit_state_scope
+            _loaded_edit_state = _rs_load_edit_state(_pre_edit_state_scope)
             for _scope_sticky in _pre_scope_candidates:
+                if any(_loaded_edit_state.get(_k) for _k in ("pog_actions", "pog_edits", "avg_u_edits", "data_edits", "status_overrides")):
+                    break
                 _candidate_scope = (
                     f"{p}|{large_file_path or ''}|"
                     f"{getattr(df_src, 'shape', ('', ''))}|"
@@ -787,7 +878,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _candidate_state = _rs_load_edit_state(_candidate_scope)
                 if any(_candidate_state.get(_k) for _k in ("pog_actions", "pog_edits", "avg_u_edits", "data_edits", "status_overrides")):
                     _loaded_edit_state = _candidate_state
-                    _loaded_edit_scope = _candidate_scope
                     break
                 _legacy_scope = (
                     f"{p}|{large_file_path or ''}|"
@@ -796,9 +886,10 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _legacy_state = _rs_load_edit_state(_legacy_scope)
                 if any(_legacy_state.get(_k) for _k in ("pog_actions", "pog_edits", "avg_u_edits", "data_edits", "status_overrides")):
                     _loaded_edit_state = _legacy_state
-                    _loaded_edit_scope = _candidate_scope
                     break
-            st.session_state[_pre_edit_state_scope_key] = _loaded_edit_scope
+            # Always mark the canonical scope as active.  Legacy scopes above are
+            # read-only fallbacks and will migrate on the next autosaved edit.
+            st.session_state[_pre_edit_state_scope_key] = _pre_edit_state_scope
             st.session_state[f"{p}_pog_actions"] = _loaded_edit_state.get("pog_actions", {})
             st.session_state[f"{p}_pog_edits"] = _loaded_edit_state.get("pog_edits", {})
             st.session_state[f"{p}_avg_u_edits"] = _loaded_edit_state.get("avg_u_edits", {})
@@ -1180,20 +1271,35 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     s = s.iloc[:, 0]
                 return s.iloc[:n].reset_index(drop=True)
             _STATUS_COL_NCA = _nca("Status")
-            _tdf = pd.DataFrame({
-                sc: (_safe_col(df_view, _t_col_map[sc], _n)
-                     if _t_col_map.get(sc)
-                     else pd.Series([0] * _n) if _nca(sc) in _ZERO_DEFAULT_COLS
-                     else pd.Series(["MAINTAIN"] * _n) if _nca(sc) == _STATUS_COL_NCA
-                     else pd.Series([""] * _n))
-                for sc in _std_all
-            })
-            # Prepend DG Code as first column if available
             _dg_raw_col = next(
                 (c for c in df_view.columns if dg_col_hint and _nca(c) == _nca(dg_col_hint)), None
             ) if dg_col_hint else None
-            if _dg_raw_col and "DG Code" not in _tdf.columns:
-                _tdf.insert(0, "DG Code", _safe_col(df_view, _dg_raw_col, _n))
+
+            # Building the standard long-form frame is one of the most expensive
+            # operations on this page.  Keep it lazy: on a pivot-cache hit the
+            # cached product-level frame replaces it completely, so materialising
+            # every source row here only delays the grid without changing output.
+            _tdf_materialized = False
+            _tdf_columns = list(_std_all)
+            if _dg_raw_col and "DG Code" not in _tdf_columns:
+                _tdf_columns.insert(0, "DG Code")
+            _tdf = pd.DataFrame(columns=_tdf_columns)
+
+            def _materialize_source_tdf() -> None:
+                nonlocal _tdf, _tdf_materialized
+                if _tdf_materialized:
+                    return
+                _tdf = pd.DataFrame({
+                    sc: (_safe_col(df_view, _t_col_map[sc], _n)
+                         if _t_col_map.get(sc)
+                         else pd.Series([0] * _n) if _nca(sc) in _ZERO_DEFAULT_COLS
+                         else pd.Series(["MAINTAIN"] * _n) if _nca(sc) == _STATUS_COL_NCA
+                         else pd.Series([""] * _n))
+                    for sc in _std_all
+                })
+                if _dg_raw_col and "DG Code" not in _tdf.columns:
+                    _tdf.insert(0, "DG Code", _safe_col(df_view, _dg_raw_col, _n))
+                _tdf_materialized = True
 
             # Dynamic planogram columns: one column per unique NAME — no count limit
             _pog_src_col = _t_col_map.get("Planogram Name") or next(
@@ -1301,8 +1407,38 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _piv.columns.name = None
                     _piv_pog_cols = [c for c in _piv.columns if c in set(_dyn_pog_cols)]
 
-                    # Deduplicate _tdf to one row per product (take first occurrence of each attr)
-                    _tdf_dedup = _tdf.groupby(_pk_std, sort=False).first().reset_index()
+                    # Build attributes directly at product grain.  The previous
+                    # path first allocated every standard column for every long
+                    # source row, only to group it down immediately afterwards.
+                    # Group raw matched columns first, then add defaults to the
+                    # much smaller product frame.
+                    _matched_raw_cols = list(dict.fromkeys(
+                        [c for c in _t_col_map.values() if c]
+                        + ([_dg_raw_col] if _dg_raw_col else [])
+                    ))
+                    _raw_product = (
+                        df_view[_matched_raw_cols]
+                        .groupby(_pk_raw, sort=False)
+                        .first()
+                        .reset_index()
+                    )
+                    _product_n = len(_raw_product)
+                    _tdf_dedup = pd.DataFrame({
+                        sc: (_safe_col(_raw_product, _t_col_map[sc], _product_n)
+                             if _t_col_map.get(sc)
+                             else pd.Series([0] * _product_n)
+                             if _nca(sc) in _ZERO_DEFAULT_COLS
+                             else pd.Series(["MAINTAIN"] * _product_n)
+                             if _nca(sc) == _STATUS_COL_NCA
+                             else pd.Series([""] * _product_n))
+                        for sc in _std_all
+                    })
+                    if _dg_raw_col and "DG Code" not in _tdf_dedup.columns:
+                        _tdf_dedup.insert(
+                            0,
+                            "DG Code",
+                            _safe_col(_raw_product, _dg_raw_col, _product_n),
+                        )
 
                     # Rename pivot's raw key columns to standard names, then merge
                     _piv_std = (
@@ -1476,8 +1612,12 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     # # ── END TEMPORARY DEBUG EXPANDER ─────────────────────────────
 
                 else:
+                    _materialize_source_tdf()
                     _cs_base_pog_counts = {}
                     _tdf["Check Range To-be Waterfall"] = ""
+
+            if not _pog_src_col:
+                _materialize_source_tdf()
 
             # Column ordering: sticky left | data cols | Status | planogram cols rightmost
             _STICKY      = [c for c in ["DG Code", "ID", "Item Name"] if c in _tdf.columns]
@@ -2146,11 +2286,12 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _pending_del_key = f"{p}_pending_top_delete"
                 _pending_new_key = f"{p}_pending_low_sales_new"
                 _blank_hl_key    = f"{p}_highlight_submit_blanks"
-                _edit_state_scope = (
-                    f"{p}|{large_file_path or ''}|"
-                    f"{getattr(df_src, 'shape', ('', ''))}|"
-                    f"{_sel_dg_code or ''}|{_sel_dg_name or ''}|"
-                    f"{','.join(map(str, _STICKY))}"
+                _edit_state_scope = _rs_edit_scope(
+                    p,
+                    large_file_path,
+                    getattr(df_src, "shape", ("", "")),
+                    _sel_dg_code,
+                    _sel_dg_name,
                 )
                 _edit_state_scope_key = f"{p}_edit_state_scope"
                 if st.session_state.get(_edit_state_scope_key) != _edit_state_scope:
@@ -2244,6 +2385,20 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     cutoff = nums[cutoff_idx]
                     return val >= cutoff, val, cutoff
 
+                def _delete_is_row_max(row_i: int, pog_col: str):
+                    """Return whether a POG cell is this product row's highest value."""
+                    val = _num_for_rank(_tdf.at[row_i, pog_col])
+                    if val is None:
+                        return False, None, None
+                    nums = [
+                        _num_for_rank(_tdf.at[row_i, pc])
+                        for pc in _dyn_pog_cols
+                        if pc in _tdf.columns
+                    ]
+                    nums = [n for n in nums if n is not None]
+                    row_max = max(nums) if nums else None
+                    return row_max is not None and val >= row_max, val, row_max
+
                 # ── Status derivation from action overlay ─────────────────────────
                 _rk_to_i = {_make_rk(_ri): _ri for _ri in range(len(_tdf))}
 
@@ -2298,10 +2453,29 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     _pending_del_items = _pending_del if isinstance(_pending_del, list) else [_pending_del]
                     _item_nm = _pending_del_items[0].get("item", "") if _pending_del_items else ""
                     _pog_nm = ", ".join(str(x.get("pog", "")) for x in _pending_del_items if x.get("pog"))
-                    st.warning(
-                        f"Item {_item_nm} is a Top 10% best seller in this row "
-                        f"for planogram {_pog_nm}. Do you still want to delete it?"
+                    _is_last_pog = any(
+                        int(x.get("remaining_pog_count", 0) or 0) <= 1
+                        for x in _pending_del_items
                     )
+                    _will_leave_one_pog = any(
+                        int(x.get("remaining_pog_count", 0) or 0) == 2
+                        for x in _pending_del_items
+                    )
+                    if _is_last_pog:
+                        st.warning(
+                            f"Item {_item_nm} remains in only 1 planogram ({_pog_nm}). "
+                            "Do you want to remove it from the last planogram?"
+                        )
+                    elif _will_leave_one_pog:
+                        st.warning(
+                            f"Deleting from {_pog_nm} will leave Item {_item_nm} "
+                            "in only 1 planogram. Do you still want to delete it?"
+                        )
+                    else:
+                        st.warning(
+                            f"Item {_item_nm} has its highest value in planogram {_pog_nm}. "
+                            "Do you still want to delete it?"
+                        )
                     _c_ok, _c_cancel = st.columns([1, 1])
                     if _c_ok.button("Confirm Delete", key=f"{p}_confirm_top_delete"):
                         for _pd in _pending_del_items:
@@ -3330,14 +3504,16 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                                 n = _num_for_rank(_tdf.at[row_i, pc])
                                 if n is not None:
                                     nums_by_col[pc] = n
-                        cutoff = None
-                        if nums_by_col:
-                            sorted_nums = sorted(nums_by_col.values(), reverse=True)
-                            cutoff_idx = max(1, int(math.ceil(len(sorted_nums) * 0.10))) - 1
-                            cutoff = sorted_nums[cutoff_idx]
+                        row_max = max(nums_by_col.values()) if nums_by_col else None
                         for pog_col in valid_pog_cols:
                             cell_val = nums_by_col.get(pog_col)
-                            is_top = cutoff is not None and cell_val is not None and cell_val >= cutoff
+                            is_top = (
+                                cell_val is not None
+                                and (
+                                    (row_max is not None and cell_val >= row_max)
+                                    or len(nums_by_col) <= 2
+                                )
+                            )
                             if is_top:
                                 pending.append({
                                     "rk": rk,
@@ -3346,7 +3522,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                                     "pog": pog_col,
                                     "item": item_txt,
                                     "value": cell_val,
-                                    "cutoff": cutoff,
+                                    "cutoff": row_max,
+                                    "remaining_pog_count": len(nums_by_col),
                                 })
                                 continue
                             _pog_actions.setdefault(rk, {})[pog_col] = "Delete"
@@ -3357,12 +3534,17 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             _status_overrides[rk] = _derive_status(rk)
                     if changed:
                         st.session_state[f"{p}_rs_chat_last_undo"] = {"rows": undo_rows}
+                        st.session_state[f"{p}_rs_chat_grid_dirty"] = True
                         _chat_invalidate_calc_cache()
                         _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
                     if pending:
                         existing = st.session_state.get(_pending_del_key)
                         existing_items = existing if isinstance(existing, list) else ([existing] if existing else [])
                         st.session_state[_pending_del_key] = existing_items + pending
+                        # The confirmation warning lives above the grid, outside
+                        # the chat fragment, so make it visible immediately even
+                        # when every requested cell is blocked and changed is empty.
+                        st.session_state[f"{p}_rs_chat_grid_dirty"] = True
                     return changed, pending
 
                 def _chat_apply_delete_all_rows(row_indices: list[int]):
@@ -3386,6 +3568,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             changed.append(_fmt_item(_tdf.loc[row_i]))
                     if changed:
                         st.session_state[f"{p}_rs_chat_last_undo"] = {"rows": undo_rows}
+                        st.session_state[f"{p}_rs_chat_grid_dirty"] = True
                         _chat_invalidate_calc_cache()
                         _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
                     return changed
@@ -3419,6 +3602,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             _status_overrides[rk] = _derive_status(rk)
                     if changed:
                         st.session_state[f"{p}_rs_chat_last_undo"] = {"rows": undo_rows}
+                        st.session_state[f"{p}_rs_chat_grid_dirty"] = True
                         _chat_invalidate_calc_cache()
                         _rs_save_edit_state(_edit_state_scope, _pog_actions, _pog_edits, _avg_u_edits, _status_overrides, _data_edits)
                     return changed
@@ -3540,7 +3724,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             if changed else ""
                         )
                         return (
-                            f"{item_txt} in planogram {pending_names} is a Top 10% best seller. "
+                            f"{item_txt} has its highest value in planogram {pending_names}. "
                             "Please confirm before deleting by clicking Confirm Delete or Cancel above the table."
                             + changed_txt,
                             False,
@@ -4569,7 +4753,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     else:
                         changed, pending = _chat_apply_delete_rows(rows, [pc])
                         if pending:
-                            return f"Applied Delete for {len(changed):,} cell(s). {len(pending):,} cell(s) are Top 10% best seller and need confirmation above the table.", bool(changed)
+                            return f"Applied Delete for {len(changed):,} cell(s). {len(pending):,} highest-value cell(s) need confirmation above the table.", bool(changed)
                     if action == "New" and not changed:
                         return f"No blank planogram cell found to add recent item(s) in {pc}.", False
                     return f"Applied {action} for {len(changed):,} recent item(s) in {pc}.", bool(changed)
@@ -5086,7 +5270,7 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                     if top_count:
                         msg = (
                             f"ตั้งค่า Delete แล้ว {changed_count:,} ช่อง สำหรับ {scope}. "
-                            f"มี {top_count:,} ช่องเป็น Top 10% best seller ต้องกด Confirm Delete หรือ Cancel ด้านบนตารางก่อน"
+                            f"มี {top_count:,} ช่องเป็นค่าสูงสุดของสินค้านั้น ต้องกด Confirm Delete หรือ Cancel ด้านบนตารางก่อน"
                         )
                     else:
                         msg = (
@@ -5097,7 +5281,9 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
 
                 def _render_chat_dialog():
                     def _chat_request_rerun(full: bool = False):
-                        if full:
+                        _grid_dirty_key = f"{p}_rs_chat_grid_dirty"
+                        _grid_dirty = bool(st.session_state.pop(_grid_dirty_key, False))
+                        if full or _grid_dirty:
                             try:
                                 st.rerun()
                             except Exception:
@@ -5261,13 +5447,6 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
                 if hasattr(st, "fragment"):
                     _render_chat_dialog = st.fragment(_render_chat_dialog)
 
-                if hasattr(st, "popover"):
-                    with st.popover("💬", help="Open Rangesheet chat"):
-                        _render_chat_dialog()
-                else:
-                    with st.expander("Rangesheet chatbot", expanded=False):
-                        _render_chat_dialog()
-
                 _fmt_pog = JsCode("""
 function(params) {
     if (params.value == null || params.value === '') return '';
@@ -5388,7 +5567,10 @@ function(params) {
     var field = String((params.colDef && params.colDef.field) || '');
     var rowKey = String((params.data && params.data['__rs_row_key']) || '');
     var origKey = rowKey + '\\u241f' + field;
-    var origValue = Object.prototype.hasOwnProperty.call(origMap, origKey) ? String(origMap[origKey]) : '';
+    var cellOriginals = (params.data && params.data.__rs_cell_originals) || {};
+    var origValue = Object.prototype.hasOwnProperty.call(cellOriginals, field)
+        ? String(cellOriginals[field])
+        : (Object.prototype.hasOwnProperty.call(origMap, origKey) ? String(origMap[origKey]) : '');
     function isNumericCell(v) {
         if (v === null || v === undefined) return false;
         var s = String(v).replace(/,/g, '').trim();
@@ -5409,6 +5591,28 @@ function(params) {
     var oldValue = params.oldValue;
     var newValue = params.newValue;
     var pogCols = __POG_COLS__;
+    var field = String((params.colDef && params.colDef.field) || '');
+    var cellOriginals = params.data.__rs_cell_originals || {};
+    if (!Object.prototype.hasOwnProperty.call(cellOriginals, field)) {
+        var originalCellValue = oldValue;
+        if (oldValue === 'Delete' || oldValue === 'New' ||
+            oldValue === 'Keep' || oldValue === 'Delist') {
+            originalCellValue = newValue;
+        }
+        if (originalCellValue === null || originalCellValue === undefined ||
+            String(originalCellValue) === 'nan' || String(originalCellValue) === 'None') {
+            originalCellValue = '';
+        }
+        cellOriginals[field] = originalCellValue;
+        try {
+            Object.defineProperty(params.data, '__rs_cell_originals', {
+                value: cellOriginals, writable: true, configurable: true,
+                enumerable: false
+            });
+        } catch (e) {
+            params.data.__rs_cell_originals = cellOriginals;
+        }
+    }
     function updateRowStatus() {
         var actions = {'Keep':true, 'Delete':true, 'New':true, 'Delist':true};
         function isNum(v) {
@@ -5500,15 +5704,18 @@ function(params) {
         params.data[params.colDef.field] = newValue;
         return true;
     }
-    nums.sort(function(a, b) { return b - a; });
-    var cutoffIndex = Math.max(1, Math.ceil(nums.length * 0.10)) - 1;
-    var cutoff = nums[cutoffIndex];
-    if (current >= cutoff) {
+    var rowMax = Math.max.apply(null, nums);
+    if (current >= rowMax || nums.length <= 2) {
         var item = params.data['Item Name'] || params.data['ID'] || '';
-        var ok = window.confirm(
-            'Item ' + item + ' is a Top 10% best seller in this row.\\n' +
-            'Do you still want to delete it?'
-        );
+        var warningText = nums.length <= 1
+            ? ('Item ' + item + ' remains in only 1 planogram.\\n' +
+               'Do you want to remove it from the last planogram?')
+            : (nums.length === 2
+                ? ('Deleting this value will leave Item ' + item +
+                   ' in only 1 planogram.\\nDo you still want to delete it?')
+            : ('Item ' + item + ' has the highest value in this row.\\n' +
+               'Do you still want to delete it?'));
+        var ok = window.confirm(warningText);
         if (!ok) {
             params.data[params.colDef.field] = oldValue;
             updateRowStatus();
@@ -5739,7 +5946,11 @@ function(params) {
       var stickyKey = stickyCols.map(function(c){
         return String(params.data[c] == null ? '' : params.data[c]);
       }).join('\\u241e');
+      var deleteAllOriginals = params.data.__rs_delete_all_originals || {};
       function originalValue(col) {
+        if (Object.prototype.hasOwnProperty.call(deleteAllOriginals, col)) {
+          return deleteAllOriginals[col];
+        }
         var k1 = rowKey + '\\u241f' + col;
         if (Object.prototype.hasOwnProperty.call(origMap, k1)) return origMap[k1];
         var k2 = stickyKey + '\\u241f' + col;
@@ -5769,15 +5980,28 @@ function(params) {
         params.api.refreshCells({rowNodes: [params.node], force: false});
       } catch (e) {}
     } else if (sv === 'DELETE ALL') {
+      var deleteAllSnapshot = {};
       for (var si = 0; si < pogCols.length; si++) {
         var sc = String(pogCols[si]);
         if (!(sc in params.data)) continue;
         var cv = params.data[sc];
         if (isNum(cv) || cv === 'Delete') {
+          if (isNum(cv)) deleteAllSnapshot[sc] = cv;
           params.data[sc] = 'Delete';
         } else if (cv === 'New') {
           params.data[sc] = '';
         }
+      }
+      /* Keep a client-side snapshot for DELETE ALL -> MAINTAIN changes that
+         happen before Streamlit finishes its rerun.  Non-enumerable prevents
+         this helper state from being returned or persisted as table data. */
+      try {
+        Object.defineProperty(params.data, '__rs_delete_all_originals', {
+          value: deleteAllSnapshot, writable: true, configurable: true,
+          enumerable: false
+        });
+      } catch (e) {
+        params.data.__rs_delete_all_originals = deleteAllSnapshot;
       }
       params.data['Status'] = 'DELETE ALL';
       params.data['Check Range To-be Waterfall'] = 0;
@@ -6061,6 +6285,24 @@ function(params){
                             _cs["width"] = max(int(_cs.get("width") or 0), 120)
                 st.session_state[f"{p}_latest_grid_df"] = _tdf_display
                 st.session_state[f"{p}_latest_grid_sig"] = f"{_sel_dg_code}|{_sel_dg_name}"
+                # Remount AG Grid only when the server-side row view changes.
+                # Without a new component identity, clearing Search can leave the
+                # browser-side row model showing the previous one-row result even
+                # though _tdf_display has already returned to the applied DG filter.
+                _grid_view_sig = (
+                    str(_sel_dg_code or ""),
+                    str(_sel_dg_name or ""),
+                    str(_search_q_text or ""),
+                    int(_MAX),
+                )
+                _grid_view_sig_key = f"{p}_aggrid_view_sig"
+                _grid_view_epoch_key = f"{p}_aggrid_view_epoch"
+                if st.session_state.get(_grid_view_sig_key) != _grid_view_sig:
+                    st.session_state[_grid_view_sig_key] = _grid_view_sig
+                    st.session_state[_grid_view_epoch_key] = int(
+                        st.session_state.get(_grid_view_epoch_key, 0)
+                    ) + 1
+                _grid_view_epoch = int(st.session_state.get(_grid_view_epoch_key, 0))
                 _grid_return_js = JsCode("""
 function({streamlitRerunEventTriggerName, eventData}) {
   var api = eventData && eventData.api;
@@ -6087,7 +6329,7 @@ function({streamlitRerunEventTriggerName, eventData}) {
                     try_to_convert_back_to_original_types=False,
                     columns_state=_active_col_state,
                     update_on=["cellValueChanged"],
-                    key=f"{p}_aggrid",
+                    key=f"{p}_aggrid_{_grid_view_epoch}",
                 )
                 # Persist column state so hide/width/pin survive reruns and DG changes
                 _saved_col_state = getattr(_grid_response, "columns_state", None)
@@ -6261,7 +6503,6 @@ function({streamlitRerunEventTriggerName, eventData}) {
                         _stat_store    = _status_overrides
                         _audit_lines   = []
                         _needs_rerun   = False
-                        _needs_confirm_rerun = False
                         _changed_rks   = set()
                         _new_rows_changed = False
                         _new_rows_for_commit = (
@@ -6479,7 +6720,11 @@ function({streamlitRerunEventTriggerName, eventData}) {
                                         _status_row_edit
                                         and _status_edit == "DELETE ALL"
                                     ):
-                                        _is_top, _cell_val, _cutoff = _delete_is_top10(_cri, _cpc)
+                                        _remaining_pog_count = len(
+                                            _row_numeric_pog_cols(_cri)
+                                        )
+                                        _is_top, _cell_val, _cutoff = _delete_is_row_max(_cri, _cpc)
+                                        _is_top = _is_top or _remaining_pog_count <= 2
                                         if _is_top:
                                             _item = (
                                                 str(_tdf.at[_cri, "Item Name"])
@@ -6495,10 +6740,10 @@ function({streamlitRerunEventTriggerName, eventData}) {
                                                 "item": _item,
                                                 "value": _cell_val,
                                                 "cutoff": _cutoff,
+                                                "remaining_pog_count": _remaining_pog_count,
                                             }
-                                            _needs_confirm_rerun = True
                                             _audit_lines.append(
-                                                f"{_crk}|{_cpc}: Delete blocked for top10 confirm")
+                                                f"{_crk}|{_cpc}: Delete blocked for row-max confirm")
                                             continue
                                     if _nv_s == "New" and _is_low_sales_item(_cri):
                                         _item = (
@@ -6514,7 +6759,6 @@ function({streamlitRerunEventTriggerName, eventData}) {
                                             "pog": _cpc,
                                             "item": _item,
                                         }
-                                        _needs_confirm_rerun = True
                                         _audit_lines.append(
                                             f"{_crk}|{_cpc}: New blocked for low-sales confirm")
                                         continue
@@ -6631,8 +6875,16 @@ function({streamlitRerunEventTriggerName, eventData}) {
                                 _stat_store,
                                 _data_edit_store,
                             )
-                            if _needs_confirm_rerun:
-                                st.rerun()
+                            # Range Architecture and Cluster Summary are rendered
+                            # above AgGrid.  Refresh the full page immediately after
+                            # the atomic autosave so all three views consume the same
+                            # latest edit state in this interaction.
+                            # Advance the grid identity so its previous edit event is
+                            # not replayed during the full-page rerun.
+                            st.session_state[_grid_view_epoch_key] = int(
+                                st.session_state.get(_grid_view_epoch_key, 0)
+                            ) + 1
+                            st.rerun()
                         elif _new_rows_changed:
                             _session_new_rows = list(_new_rows_by_key.values())
                             _saved_new_rows = [
@@ -6646,6 +6898,16 @@ function({streamlitRerunEventTriggerName, eventData}) {
                             st.session_state[_new_rows_key] = _saved_new_rows
                             st.session_state[_new_rows_placeholder_key] = _placeholder_new_rows
                             _rs_save_new_rows(_new_rows_scope, _saved_new_rows)
+
+                # The chatbot is fixed-position, so rendering it after AgGrid does
+                # not change its visual location.  It does let the browser mount
+                # and enable the main table before secondary components arrive.
+                if hasattr(st, "popover"):
+                    with st.popover("💬", help="Open Rangesheet chat"):
+                        _render_chat_dialog()
+                else:
+                    with st.expander("Rangesheet chatbot", expanded=False):
+                        _render_chat_dialog()
 
             # Row-count helper hidden to keep the review page clean.
 
@@ -7034,18 +7296,20 @@ function({streamlitRerunEventTriggerName, eventData}) {
         if st.button("SUBMIT TO REPORT", key=f"{p}_btn_sub", type="primary", use_container_width=True,
                      disabled=not _CAN_EDIT):
             _submit_full_internal = _submit_payload_df(keep_internal=True)
-            _required_missing = _new_item_required_missing(_submit_full_internal)
-            if _required_missing:
-                st.error("New item rows must have ID and 52wk value before submit.")
-                st.dataframe(pd.DataFrame(_required_missing), hide_index=True, height=180)
-                st.stop()
-            _scan_df = _submit_full_internal.head(50)
-            _missing = _scan_blank_cells(_scan_df)
+            _missing = _scan_blank_cells(
+                _submit_full_internal,
+                max_rows=len(_submit_full_internal),
+            )
             if _missing:
                 st.session_state[_submit_missing_key] = _missing
                 st.session_state[_blank_hl_key] = True
                 st.rerun()
             else:
+                _required_missing = _new_item_required_missing(_submit_full_internal)
+                if _required_missing:
+                    st.error("New item rows must have ID and 52wk value before submit.")
+                    st.dataframe(pd.DataFrame(_required_missing), hide_index=True, height=180)
+                    st.stop()
                 st.session_state.pop(_submit_missing_key, None)
                 st.session_state[_blank_hl_key] = False
                 _submit_to_report_packet(_submit_full_internal)
