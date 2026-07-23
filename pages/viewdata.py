@@ -168,6 +168,106 @@ def _build_hdet_mini(path: str, file_mtime: int = 0) -> pd.DataFrame:
 
 
 @st.cache_resource(show_spinner=False)
+def _build_hdet_filter_index(path: str, file_mtime: int = 0) -> dict:
+    """Build the small DG/Cluster cascade index once per HDET version."""
+    _mini = _build_hdet_mini(path, file_mtime)
+    if _mini is None or _mini.empty:
+        return {"options": pd.DataFrame(), "dg_desc": {}}
+    _option_cols = [
+        col for col in (
+            "store_Format", "Div Code&Desc", "Display Group", "ClusterName"
+        )
+        if col in _mini.columns
+    ]
+    _options = (
+        _mini[_option_cols].drop_duplicates(ignore_index=True)
+        if _option_cols else pd.DataFrame()
+    )
+    _dg_desc = {}
+    if "Display Group" in _mini.columns and "DG_Desc" in _mini.columns:
+        _dg_desc_df = (
+            _mini[["Display Group", "DG_Desc"]]
+            .drop_duplicates(ignore_index=True)
+        )
+        _dg_desc_df = _dg_desc_df[
+            _dg_desc_df["Display Group"].astype(str).str.strip().ne("")
+        ]
+        _dg_desc = dict(zip(
+            _dg_desc_df["Display Group"].astype(str),
+            _dg_desc_df["DG_Desc"].astype(str),
+        ))
+    return {"options": _options, "dg_desc": _dg_desc}
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _build_minor_pog_pivot(
+    path: str,
+    file_mtime: int,
+    cluster_name: str,
+    fmt: str = "",
+    division: str = "",
+    dg: str = "",
+) -> pd.DataFrame:
+    """Return a cached POG pivot for one filter combination."""
+    _mini = _build_hdet_mini(path, file_mtime)
+    if _mini is None or _mini.empty or not cluster_name:
+        return pd.DataFrame()
+
+    _filters = (
+        ("ClusterName", cluster_name),
+        ("Display Group", dg),
+        ("Div Code&Desc", division),
+        ("store_Format", fmt),
+    )
+    _mask = pd.Series(True, index=_mini.index)
+    for _col, _value in _filters:
+        if _value and _col in _mini.columns:
+            _mask &= _mini[_col].eq(_value)
+    _keep = [
+        col for col in (
+            "Display Group", "ID", "ProductDescription", "Name", "ForecastSales"
+        )
+        if col in _mini.columns
+    ]
+    _raw = _mini.loc[_mask, _keep].rename(columns={
+        "Display Group": "DG_CODE",
+        "Name": "POGName",
+        "ForecastSales": "Value",
+    })
+    if _raw.empty or "POGName" not in _raw.columns:
+        return pd.DataFrame()
+
+    _row_keys = [
+        col for col in ("DG_CODE", "ID", "ProductDescription")
+        if col in _raw.columns
+    ]
+    _raw["POGName"] = _raw["POGName"].fillna("").astype(str).str.strip()
+    _raw = _raw[_raw["POGName"].ne("")]
+    if "Value" in _raw.columns:
+        _raw["Value"] = pd.to_numeric(_raw["Value"], errors="coerce")
+    if _row_keys and "Value" in _raw.columns:
+        _pvt = (
+            _raw.groupby(
+                _row_keys + ["POGName"],
+                sort=False,
+                observed=True,
+            )["Value"]
+            .sum()
+            .unstack("POGName")
+            .reset_index()
+        )
+        _pvt.columns.name = None
+    else:
+        _pvt = (
+            _raw[_row_keys].drop_duplicates(ignore_index=True)
+            if _row_keys else pd.DataFrame()
+        )
+    if _row_keys and not _pvt.empty:
+        _pvt = _pvt.sort_values(_row_keys[0]).reset_index(drop=True)
+    return _pvt
+
+
+@st.cache_resource(show_spinner=False)
 def _load_a5_store_source(
     path: str,
     file_mtime: float = 0.0,
@@ -459,7 +559,13 @@ def _render_data(entry: dict, tab_key: str):
         st.caption(f"{_rows:,} rows · {_cols} columns")
 
 
-def _build_pog_cluster_html(pvt, cl_sel, max_height="calc(100vh - 250px)"):
+def _build_pog_cluster_html(
+    pvt,
+    cl_sel,
+    max_height="calc(100vh - 250px)",
+    highlight_id="",
+    fill_container=False,
+):
     _TH = "#f0f2f6"; _TC = "#2BBFA4"; _TC2 = "#1a9e8b"; _B = "#dee2e6"
     _COL_W = {"DG_CODE": 74, "ID": 108, "ProductDescription": 230}
     _row_labels = [c for c in ["DG_CODE", "ID", "ProductDescription"] if c in pvt.columns]
@@ -497,6 +603,12 @@ def _build_pog_cluster_html(pvt, cl_sel, max_height="calc(100vh - 250px)"):
             f"border:1px solid #1a8a74;font-weight:600;text-align:center;"
             f"font-size:0.70rem;min-width:120px;white-space:normal;word-break:break-word;")
 
+    _wrap_height = f"height:{max_height};" if fill_container else ""
+    _table_size = (
+        "width:100%;min-width:100%;"
+        if fill_container else ""
+    )
+    _font_size = "0.86rem" if fill_container else "0.78rem"
     _ht = [
         "<style>"
         ".pog-tbl-wrap::-webkit-scrollbar{height:12px;width:8px}"
@@ -506,9 +618,9 @@ def _build_pog_cluster_html(pvt, cl_sel, max_height="calc(100vh - 250px)"):
         ".pog-tbl-wrap::-webkit-scrollbar-corner{background:#E8E3DC}"
         "</style>"
         f"<div class='pog-tbl-wrap' style='overflow-x:auto;overflow-y:auto;"
-        f"max-height:{max_height};font-size:0.78rem;"
+        f"{_wrap_height}max-height:{max_height};font-size:{_font_size};"
         f"scrollbar-width:auto;scrollbar-color:#2BBFA4 #E8E3DC;'>",
-        "<table style='border-collapse:collapse;'>",
+        f"<table style='border-collapse:collapse;{_table_size}'>",
         "<thead style='position:sticky;top:0;z-index:4;'><tr>",
     ]
     for _lbl in [c for c in ["DG_CODE", "ID"] if c in pvt.columns]:
@@ -527,20 +639,35 @@ def _build_pog_cluster_html(pvt, cl_sel, max_height="calc(100vh - 250px)"):
         _ht.append(f"<th title='{_spc}' style='{_pgS}'>{_spc}</th>")
     _ht.append("</tr></thead><tbody>")
 
+    _highlight_id = str(highlight_id or "").strip().lower()
     _prev_dg4 = object()
     for _ri, _row in pvt.iterrows():
-        _rbg = "#ffffff" if _ri % 2 == 0 else "#f7f8fb"
-        _ht.append(f"<tr style='background:{_rbg};'>")
+        _row_id_raw = str(_row.get("ID", "")).strip()
+        _row_id = (
+            _row_id_raw.zfill(9)
+            if _row_id_raw not in ("", "nan", "None") else ""
+        )
+        _is_id_match = bool(
+            _highlight_id and _highlight_id in _row_id.lower()
+        )
+        _rbg = (
+            "#FFF3A6"
+            if _is_id_match
+            else "#ffffff" if _ri % 2 == 0 else "#f7f8fb"
+        )
+        _row_mark = (
+            "box-shadow:inset 4px 0 #F59E0B;font-weight:700;"
+            if _is_id_match else ""
+        )
+        _ht.append(f"<tr style='background:{_rbg};{_row_mark}'>")
         if "DG_CODE" in pvt.columns:
             _dv4 = str(_row["DG_CODE"]); _bs = _stkB("DG_CODE", _rbg)
             _is_first = _dv4 != _prev_dg4; _prev_dg4 = _dv4
             _dc = "color:#111827;font-weight:600;" if _is_first else "color:#9ca3af;"
             _ht.append(f"<td style='{_bs}{_dc}'>{_dv4}</td>")
         if "ID" in pvt.columns:
-            _id_v = str(_row["ID"]).strip()
-            _id_val = _id_v.zfill(9) if _id_v not in ("", "nan", "None") else ""
             _ib = _stkB("ID", _rbg)
-            _ht.append(f"<td style='{_ib}color:#374151;'>{_id_val}</td>")
+            _ht.append(f"<td style='{_ib}color:#374151;'>{_row_id}</td>")
         if _has_desc:
             _dsc = str(_row["ProductDescription"]).replace("<", "&lt;").replace(">", "&gt;")
             _db = _stkB("ProductDescription", _rbg)
@@ -592,11 +719,18 @@ def _pog_fullscreen_dialog():
             _im = _si.str.contains(_sq, case=False, na=False)
             _pvt_fs = pd.concat([_pvt_fs[_im], _pvt_fs[~_im]]).reset_index(drop=True)
             _ready_html = _build_pog_cluster_html(
-                _pvt_fs, _cl_sel_fs, max_height="calc(100vh - 78px)"
+                _pvt_fs,
+                _cl_sel_fs,
+                max_height="calc(100vh - 250px)",
+                highlight_id=_sq,
+                fill_container=True,
             )
         elif not _ready_html:
             _ready_html = _build_pog_cluster_html(
-                _pvt_fs, _cl_sel_fs, max_height="calc(100vh - 78px)"
+                _pvt_fs,
+                _cl_sel_fs,
+                max_height="calc(100vh - 250px)",
+                fill_container=True,
             )
         st.markdown(_ready_html, unsafe_allow_html=True)
 
@@ -618,14 +752,71 @@ def _render_pog_cluster_panel(pvt, cl_sel, label: str, table_html: str):
             st.session_state["_pog_fs_label"]  = label
             st.session_state["_pog_fs_html"]   = table_html.replace(
                 "max-height:calc(100vh - 250px)",
-                "max-height:calc(100vh - 78px)",
+                "height:calc(100vh - 250px);max-height:calc(100vh - 250px)",
+                1,
+            ).replace(
+                "font-size:0.78rem",
+                "font-size:0.86rem",
+                1,
+            ).replace(
+                "<table style='border-collapse:collapse;'>",
+                "<table style='border-collapse:collapse;width:100%;min-width:100%;'>",
                 1,
             )
             _pog_fullscreen_dialog()
 
 
+def _render_searchable_pog_cluster(pvt, cl_sel):
+    """Search/rerender only the right table instead of the whole dashboard."""
+    _id_srch = st.text_input(
+        "",
+        placeholder="🔎  Search by Item no. (ID)…",
+        label_visibility="collapsed",
+        key="minor_id_srch",
+    )
+    _display_pvt = pvt
+    _search_norm = ""
+    if _id_srch and "ID" in pvt.columns:
+        _si = pvt["ID"].astype(str).str.strip().str.zfill(9)
+        _search_raw = str(_id_srch).strip()
+        # Keep short numeric input usable as a partial search, while still
+        # restoring a missing leading zero for a nearly complete item ID.
+        _search_norm = (
+            _search_raw.zfill(9)
+            if _search_raw.isdigit() and len(_search_raw) >= 8
+            else _search_raw
+        )
+        _matched = _si.str.contains(
+            _search_norm,
+            case=False,
+            na=False,
+            regex=False,
+        )
+        _display_pvt = pd.concat(
+            [pvt.loc[_matched], pvt.loc[~_matched]],
+            ignore_index=True,
+        )
+
+    _row_labels = [
+        col for col in ("DG_CODE", "ID", "ProductDescription")
+        if col in pvt.columns
+    ]
+    _pog_count = len([col for col in pvt.columns if col not in _row_labels])
+    _table_html = _build_pog_cluster_html(
+        _display_pvt,
+        cl_sel,
+        highlight_id=_search_norm,
+    )
+    _label = f"{len(pvt):,} items · {_pog_count} POGs"
+    _render_pog_cluster_panel(
+        _display_pvt, cl_sel, _label, _table_html
+    )
+
+
 if hasattr(st, "fragment"):
-    _render_pog_cluster_panel = st.fragment(_render_pog_cluster_panel)
+    _render_searchable_pog_cluster = st.fragment(
+        _render_searchable_pog_cluster
+    )
 
 
 # ── Minor dashboard ───────────────────────────────────────────────────────────
@@ -683,19 +874,15 @@ def _render_minor():
         st.session_state[_RF_HDET_PATH] = _rf_hdet_path
     _hdet_path = st.session_state.get(_RF_HDET_PATH)
     _mini = None
+    _h_mtime = 0
+    _filter_index = pd.DataFrame()
     _dg_desc_map: dict = {}
     if _hdet_path:
         _h_mtime = int(os.path.getmtime(_hdet_path))
         _mini = _build_hdet_mini(_hdet_path, _h_mtime)
-        if _mini is not None and "DG_Desc" in _mini.columns and "Display Group" in _mini.columns:
-            _dg_desc_map = (
-                _mini[["Display Group", "DG_Desc"]]
-                .drop_duplicates()
-                .dropna(subset=["Display Group"])
-                .set_index("Display Group")["DG_Desc"]
-                .astype(str)
-                .to_dict()
-            )
+        _filter_meta = _build_hdet_filter_index(_hdet_path, _h_mtime)
+        _filter_index = _filter_meta.get("options", pd.DataFrame())
+        _dg_desc_map = dict(_filter_meta.get("dg_desc", {}))
     _mini_fmt_col = _find_col(_mini, "store_Format", "Store_Format", "store_format",
                               "STORE_FORMAT", "StoreFormat", "Store Format",
                               "store format", "Format") if _mini is not None else None
@@ -719,23 +906,26 @@ def _render_minor():
 
     def _cascade(skip: str) -> list:
         """Valid options for `skip` given all other current single-select filters."""
-        if _mini is None:
+        if _filter_index is None or _filter_index.empty:
             return []
-        _f = _mini
+        _f = _filter_index
         if skip != "fmt" and _cur_fmt and _mini_fmt_col in _f.columns:
-            _f = _f[_f[_mini_fmt_col].astype(str).str.strip() == str(_cur_fmt).strip()]
+            _f = _f[_f[_mini_fmt_col].eq(_cur_fmt)]
         if skip != "div" and _cur_div and _mini_div_col in _f.columns:
-            _f = _f[_f[_mini_div_col].astype(str).str.strip() == str(_cur_div).strip()]
+            _f = _f[_f[_mini_div_col].eq(_cur_div)]
         if skip != "dg" and _cur_dg and _mini_dg_col in _f.columns:
-            _f = _f[_f[_mini_dg_col].astype(str).str.strip() == str(_cur_dg).strip()]
+            _f = _f[_f[_mini_dg_col].eq(_cur_dg)]
         if skip != "cl" and _cur_cl and _mini_cl_col in _f.columns:
-            _f = _f[_f[_mini_cl_col].astype(str).str.strip() == str(_cur_cl).strip()]
+            _f = _f[_f[_mini_cl_col].eq(_cur_cl)]
         _col = {"fmt": _mini_fmt_col, "div": _mini_div_col,
                 "dg": _mini_dg_col, "cl": _mini_cl_col}[skip]
         if _col not in _f.columns:
             return []
-        return sorted(v for v in _f[_col].dropna().astype(str).str.strip().unique()
-                      if v not in ("", "nan", "None", "none", "null"))
+        return sorted(
+            str(v).strip()
+            for v in _f[_col].dropna().unique()
+            if str(v).strip() not in ("", "nan", "None", "none", "null")
+        )
 
     def _current_options():
         _a5_sfmt_local = st.session_state.get("_a5_sfmt_opts", [])
@@ -787,7 +977,7 @@ def _render_minor():
     def _filter_eq(_frame: pd.DataFrame, _col: str | None, _val):
         if not _val or not _col or _col not in _frame.columns:
             return _frame
-        return _frame[_frame[_col].astype(str).str.strip() == str(_val).strip()]
+        return _frame[_frame[_col].eq(_val)]
 
     # ── Cluster summary from mini-table (instant pandas, no re-scan) ──────────
     _summary_df = None
@@ -1086,60 +1276,18 @@ def _render_minor():
         elif not _cl_sel:
             st.info("Select a **ClusterName** to display the POG_Cluster table.")
         else:
-            # Build pivot from mini-table (instant — no additional HDET scan)
-            _f = _filter_eq(_mini, _mini_cl_col, _cl_sel).copy()
-            _f = _filter_eq(_f, _mini_fmt_col, _fmt_sel)
-            _f = _filter_eq(_f, _mini_div_col, _div_sel)
-            _f = _filter_eq(_f, _mini_dg_col, _dg_sel)
-            _ren = {"Display Group": "DG_CODE", "Name": "POGName", "ForecastSales": "Value"}
-            _raw_pvt = _f.rename(columns=_ren)
-            _pvt_cols = [c for c in ["DG_CODE","ID","ProductDescription","POGName","Value"]
-                         if c in _raw_pvt.columns]
-            _raw_pvt = _raw_pvt[_pvt_cols].copy()
-            if _raw_pvt.empty or "POGName" not in _raw_pvt.columns:
+            _pvt = _build_minor_pog_pivot(
+                _hdet_path,
+                _h_mtime,
+                str(_cl_sel),
+                str(_fmt_sel or ""),
+                str(_div_sel or ""),
+                str(_dg_sel or ""),
+            )
+            if _pvt.empty:
                 st.caption("No data for current filters (or POGName column not found in HDET).")
             else:
-                _row_keys   = [c for c in ["DG_CODE","ID","ProductDescription"]
-                               if c in _raw_pvt.columns]
-                _raw_pvt["POGName"] = _raw_pvt["POGName"].fillna("").str.strip()
-                if "Value" in _raw_pvt.columns:
-                    _raw_pvt["Value"] = pd.to_numeric(_raw_pvt["Value"], errors="coerce")
-                if _row_keys and "Value" in _raw_pvt.columns:
-                    try:
-                        _pvt = (
-                            _raw_pvt.groupby(_row_keys + ["POGName"], sort=False)["Value"]
-                            .sum().unstack("POGName")
-                        ).reset_index()
-                        _pvt.columns.name = None
-                    except Exception:
-                        _pvt = _raw_pvt[_row_keys].drop_duplicates().reset_index(drop=True)
-                else:
-                    _pvt = (_raw_pvt[_row_keys].drop_duplicates().reset_index(drop=True)
-                            if _row_keys else pd.DataFrame())
-                _row_labels = _row_keys
-                if _row_labels:
-                    _pvt = _pvt.sort_values(_row_labels[0]).reset_index(drop=True)
-
-                # ID search bar — matched row floats to top
-                _id_srch = st.text_input(
-                    "", placeholder="🔎  Search by Item no. (ID)…",
-                    label_visibility="collapsed", key="minor_id_srch"
-                )
-                if _id_srch and "ID" in _pvt.columns:
-                    _si = _pvt["ID"].astype(str).str.strip().str.zfill(9)
-                    _sq = (str(_id_srch).strip().zfill(9)
-                           if str(_id_srch).strip().isdigit()
-                           else str(_id_srch).strip())
-                    _im = _si.str.contains(_sq, case=False, na=False)
-                    _pvt = pd.concat([_pvt[_im], _pvt[~_im]]).reset_index(drop=True)
-
-                _pog_cols = [c for c in _pvt.columns if c not in _row_labels]
-                _N        = len(_pog_cols)
-                _right_html  = _build_pog_cluster_html(_pvt, _cl_sel)
-                _right_label = f"{len(_pvt):,} items · {_N} POGs"
-                _render_pog_cluster_panel(
-                    _pvt, _cl_sel, _right_label, _right_html
-                )
+                _render_searchable_pog_cluster(_pvt, _cl_sel)
 
 
 # ── Tab label list: [Minor] + one per uploaded file ───────────────────────────

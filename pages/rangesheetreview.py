@@ -2274,6 +2274,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             _STICKY      = [c for c in ["DG Code", "ID", "Item Name"] if c in _tdf.columns]
             _dyn_pog_set = set(c for c in _dyn_pog_cols if c in _tdf.columns)
             _pinned_rows: list = []
+            _pog_to_cl: dict = {}
 
             # ── Cluster Summary Panel — pinned above the planogram grid ───────────
             if _dyn_pog_cols:
@@ -2343,7 +2344,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                 _a5_lkp: dict = {}
                 _a5_pair_lkp: dict = {}
                 _a5_target_lkp: dict = {}
-                _pog_to_cl: dict = {}
                 if _a5 is not None and _a5_pog_c:
                     def _pog_target_token(_v) -> str:
                         _m = _re.search(r"(?:target[_\-\s]*|_)(\d{4,})", str(_v or ""), flags=_re.I)
@@ -3019,20 +3019,14 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
 
                 if _new_item_rows:
                     def _new_row_has_input(_row: dict) -> bool:
-                        _skip_cols = {
-                            _ROW_KEY_COL,
-                            _NEW_ROW_COL,
-                            _EDIT_COL,
-                            "Status",
-                            "Check Range To-be Waterfall",
-                        }
-                        for _c, _v in (_row or {}).items():
-                            if _c in _skip_cols:
-                                continue
-                            _s = "" if _v is None else str(_v).strip()
-                            if _s and _s.lower() not in ("nan", "none"):
-                                return True
-                        return False
+                        # ID is the activation field for an Add New Item row.
+                        # Values typed into other cells without an ID remain a
+                        # placeholder and must not be autosaved/submitted.
+                        _id_text = str((_row or {}).get("ID", "") or "").strip()
+                        return bool(
+                            _id_text
+                            and _id_text.lower() not in ("nan", "none", "<na>")
+                        )
 
                     _normalized_new_rows = []
                     _invalid_new_item_ids = []
@@ -3072,6 +3066,25 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             "New Item ID ต้องเป็นตัวเลข 9 หลักเท่านั้น"
                             + (f" — ค่าที่ต้องแก้ไข: {_invalid_preview}" if _invalid_preview else "")
                         )
+
+                # Recompute the displayed TO-BE waterfall from the actual POG
+                # cells after every overlay/new-row merge. Numeric zero is a
+                # valid ranged cell; blanks/Delete are not; New is included in
+                # TO-BE. Returning plain ints also prevents AG Grid from showing
+                # "Invalid Number" when placeholder rows are present.
+                if (
+                    "Check Range To-be Waterfall" in _tdf_display.columns
+                    and _display_pog_cols
+                ):
+                    _display_pog_values = _tdf_display[_display_pog_cols]
+                    _display_numeric_cells = _display_pog_values.apply(
+                        pd.to_numeric,
+                        errors="coerce",
+                    ).notna()
+                    _display_new_cells = _display_pog_values.eq("New")
+                    _tdf_display["Check Range To-be Waterfall"] = (
+                        _display_numeric_cells | _display_new_cells
+                    ).sum(axis=1).astype("int64")
 
                 _search_pog_match_cols = [
                     c for c in _dyn_pog_cols
@@ -6631,6 +6644,12 @@ function(params) {
     s = s.replace(/(\\.[0-9]*?)0+$/, '$1').replace(/\\.$/, '');
     return s;
 }""")
+                _fmt_waterfall = JsCode("""
+function(params) {
+    var n = Number(params.value);
+    if (!Number.isFinite(n)) return '0';
+    return String(Math.max(0, Math.trunc(n)));
+}""")
                 _editable_new_row = JsCode("""
 function(params) {
     return !!(params.data && params.data['__rs_added_row']);
@@ -6915,6 +6934,21 @@ function(params) {
                     suppressMovable=False,
                     menuTabs=["generalMenuTab", "columnsMenuTab"],
                 )
+                # Presentation-only hide list for the Main Table. Keep every
+                # field in _tdf_display / AG Grid row data so Status, Cluster,
+                # autosave, report and export logic continue to use the same
+                # complete records.
+                _main_table_hidden_norms = {
+                    _nca("To be stores applied count"),
+                    _nca("AS IS"),
+                    _nca("MODS"),
+                    _nca("Fixtures"),
+                    _nca("Range Class"),
+                    _nca("Total New SKUs"),
+                    _nca("Total Delete SKUs"),
+                    _nca("%Achieving CRD case (AS is)"),
+                    _nca("%Achieving LRD (AS is)"),
+                }
                 def _header_class(_gc: str, base: str = "") -> str:
                     _classes = [base] if base else []
                     if _search_q_l and (
@@ -6925,7 +6959,7 @@ function(params) {
                     return " ".join(_classes) if _classes else None
 
                 for _gc in _tdf_display.columns:
-                    _hidden = False   # visibility controlled by grid sidebar/menu; not here
+                    _hidden = _nca(_gc) in _main_table_hidden_norms
                     if _gc == _ROW_KEY_COL:
                         gb.configure_column(
                             _gc, hide=True, suppressColumnsToolPanel=True,
@@ -6999,6 +7033,20 @@ function(params) {
                             cellStyle=_style_data,
                             type=["numericColumn"],
                         )
+                    elif _gc == "Check Range To-be Waterfall":
+                        gb.configure_column(
+                            _gc,
+                            editable=False,
+                            hide=_hidden,
+                            wrapHeaderText=True,
+                            minWidth=120,
+                            width=130,
+                            headerClass=_header_class(_gc),
+                            valueFormatter=_fmt_waterfall,
+                            cellStyle=_style_data,
+                            cellDataType=False,
+                            type=[],
+                        )
                     elif _gc == "Status":
                         gb.configure_column(
                             _gc, editable=_CAN_EDIT, hide=_hidden,
@@ -7021,6 +7069,15 @@ function(params) {
                         )
 
                 _go = gb.build()
+                for _col_def in _go.get("columnDefs", []):
+                    _field = str(
+                        _col_def.get("field")
+                        or _col_def.get("colId")
+                        or ""
+                    )
+                    if _nca(_field) in _main_table_hidden_norms:
+                        _col_def["hide"] = True
+                        _col_def["suppressColumnsToolPanel"] = True
                 _go["headerHeight"]              = 260 if _dyn_pog_cols else 56
                 _go["rowHeight"]                 = 32
                 _pog_cols_js = _json.dumps([str(c) for c in _dyn_pog_cols])
@@ -7393,7 +7450,9 @@ function(params){
                     _active_col_state = [dict(_cs) for _cs in _active_col_state]
                     for _cs in _active_col_state:
                         _cid = str(_cs.get("colId") or _cs.get("field") or "")
-                        if _cid == "ID":
+                        if _nca(_cid) in _main_table_hidden_norms:
+                            _cs["hide"] = True
+                        elif _cid == "ID":
                             _cs["width"] = max(int(_cs.get("width") or 0), 120)
                         elif _cid == "Status":
                             _cs["width"] = max(int(_cs.get("width") or 0), 130)
@@ -7410,10 +7469,15 @@ function(params){
                 # browser-side row model showing the previous one-row result even
                 # though _tdf_display has already returned to the applied DG filter.
                 _grid_view_sig = (
+                    "waterfall_count_v2",
                     str(_sel_dg_code or ""),
                     str(_sel_dg_name or ""),
                     str(_search_q_text or ""),
                     int(_MAX),
+                    # Adding placeholder rows must remount the component once so
+                    # onGridReady can scroll/focus the newly appended row. Normal
+                    # cell edits keep the same count and therefore do not remount.
+                    int(len(_new_item_rows)),
                 )
                 _grid_view_sig_key = f"{p}_aggrid_view_sig"
                 _grid_view_epoch_key = f"{p}_aggrid_view_epoch"
@@ -7457,6 +7521,11 @@ function({streamlitRerunEventTriggerName, eventData}) {
                 if _saved_col_state is None and hasattr(_grid_response, "get"):
                     _saved_col_state = _grid_response.get("columnsState")
                 if _saved_col_state is not None:
+                    _saved_col_state = [dict(_cs) for _cs in _saved_col_state]
+                    for _cs in _saved_col_state:
+                        _cid = str(_cs.get("colId") or _cs.get("field") or "")
+                        if _nca(_cid) in _main_table_hidden_norms:
+                            _cs["hide"] = True
                     st.session_state[_col_state_key] = _saved_col_state
                 if st.session_state.get(_new_rows_scroll_key):
                     st.session_state[_new_rows_scroll_key] = ""
@@ -8351,6 +8420,18 @@ function({streamlitRerunEventTriggerName, eventData}) {
         if limit_rows is not None:
             _src = _src.head(limit_rows)
         _out = _src.reset_index(drop=True)
+        # Blank Add New Item placeholders are UI rows only. An added row becomes
+        # submit data only after the user enters an ID.
+        if "__rs_added_row" in _out.columns and "ID" in _out.columns:
+            _added_mask = _out["__rs_added_row"].astype(str).str.lower().isin(
+                ("true", "1", "yes")
+            )
+            _id_text = _out["ID"].astype("string").fillna("").str.strip()
+            _unused_added = _added_mask & _id_text.str.lower().isin(
+                ("", "nan", "none", "<na>")
+            )
+            if bool(_unused_added.any()):
+                _out = _out.loc[~_unused_added].reset_index(drop=True)
         if not keep_internal:
             _out = _strip_submit_internal_cols(_out)
         return _out
@@ -8362,8 +8443,11 @@ function({streamlitRerunEventTriggerName, eventData}) {
             _payload = _submit_payload_df()
         _pog_cluster_map = {}
         try:
-            for _pog in locals().get("_dyn_pog_cols", []) or []:
-                _cl = locals().get("_pog_to_cl", {}).get(_pog) or locals().get("_pog_to_cl", {}).get(_nca(_pog), "")
+            for _pog in _dyn_pog_cols or []:
+                _cl = (
+                    _pog_to_cl.get(_pog)
+                    or _pog_to_cl.get(_nca(_pog), "")
+                )
                 if str(_cl).strip():
                     _pog_cluster_map[str(_pog)] = str(_cl).strip()
                     _pog_cluster_map[_nca(_pog)] = str(_cl).strip()
@@ -8422,11 +8506,17 @@ function({streamlitRerunEventTriggerName, eventData}) {
         if bool(_added_mask.any()):
             _avg_required = _AVG_U_STD
             _required_new_cols = {c for c in ("ID", _avg_required) if c in _scan.columns}
-            _new_data_cols = [
-                c for c in _scan.columns
-                if c not in ("Status", "Check Range To-be Waterfall")
-            ]
-            _new_has_input = (~_blank_mask[_new_data_cols]).any(axis=1)
+            if "ID" in _scan.columns:
+                _new_id_text = _scan["ID"].astype("string").fillna("").str.strip()
+                _new_has_input = ~_new_id_text.str.lower().isin(
+                    ("", "nan", "none", "<na>")
+                )
+            else:
+                _new_data_cols = [
+                    c for c in _scan.columns
+                    if c not in ("Status", "Check Range To-be Waterfall")
+                ]
+                _new_has_input = (~_blank_mask[_new_data_cols]).any(axis=1)
             _optional_new_cols = [c for c in _scan.columns if c not in _required_new_cols]
             _blank_mask.loc[_added_mask, _optional_new_cols] = False
             _blank_mask.loc[_added_mask & ~_new_has_input, :] = False
@@ -8450,30 +8540,18 @@ function({streamlitRerunEventTriggerName, eventData}) {
     def _new_item_required_missing(_df: pd.DataFrame) -> list[dict]:
         if not isinstance(_df, pd.DataFrame) or "__rs_added_row" not in _df.columns:
             return []
-        _skip_cols = {
-            "__rs_row_key",
-            "__rs_added_row",
-            "__rs_last_edit",
-            "Status",
-            "Check Range To-be Waterfall",
-        }
         _avg_required_name = _AVG_U_STD
         _avg_col = _avg_required_name if _avg_required_name in _df.columns else None
         _missing = []
         _added_mask = _df["__rs_added_row"].astype(str).str.lower().isin(("true", "1", "yes"))
         for _ri, _row in _df.loc[_added_mask].reset_index(drop=False).iterrows():
-            _has_input = False
-            for _col in _df.columns:
-                if _col in _skip_cols:
-                    continue
-                if not _is_blank_submit_value(_row.get(_col, "")):
-                    _has_input = True
-                    break
-            if not _has_input:
+            _id_raw = "" if "ID" not in _df.columns else str(_row.get("ID", "") or "").strip()
+            # No ID means this is an unused Add New Item placeholder. Ignore
+            # the entire row even if another cell was touched accidentally.
+            if "ID" in _df.columns and _is_blank_submit_value(_id_raw):
                 continue
 
             _row_no = int(_row.get("index", _ri)) + 1
-            _id_raw = "" if "ID" not in _df.columns else str(_row.get("ID", "")).strip()
             if not _re.fullmatch(r"\d{9}", _id_raw):
                 _missing.append({
                     "row": _row_no,

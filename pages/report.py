@@ -131,6 +131,12 @@ def _cluster_from_planogram_name(pog: str) -> str:
     s = str(pog or "").strip()
     if not s:
         return ""
+    # A5 POG_Cluster values commonly use a compact G-number token such as
+    # N_G1_A. Preserve that exact cluster code when it appears in the
+    # planogram name (for example: SOAP N_G1_A ...).
+    m = _re.search(r"\b([A-Z]+_G\d+(?:_[A-Z0-9]+)+)\b", s.upper())
+    if m:
+        return m.group(1)
     m = _re.search(r"\b([A-Z]+_G(?:_[A-Z0-9]+)+)\b", s.upper())
     if m:
         return m.group(1)
@@ -831,7 +837,6 @@ def _render_portfolio_summary(reports: list[dict], full_df: pd.DataFrame | None 
             _fmt_int(r.get("to_be", 0)),
             r.get("net", 0),
             len(r.get("item_changes", [])),
-            r.get("risk_level", ""),
         ]
         for r in reports
     ]
@@ -843,7 +848,7 @@ def _render_portfolio_summary(reports: list[dict], full_df: pd.DataFrame | None 
 .a4-kicker{{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#2BBFA4;font-weight:800}}
 .a4-title{{font-size:25px;font-weight:800;margin:6px 0 2px}}
 .a4-sub{{font-size:12px;color:#777;margin-bottom:20px}}
-.a4-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0 8px}}
+.a4-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:12px 0 8px}}
 .a4-metric{{border:1px solid #E8E3DC;border-radius:8px;padding:12px;background:#FAFAF8}}
 .a4-metric b{{display:block;font-size:20px}}
 .a4-metric span{{font-size:10px;color:#777;text-transform:uppercase;letter-spacing:.06em}}
@@ -864,12 +869,10 @@ def _render_portfolio_summary(reports: list[dict], full_df: pd.DataFrame | None 
 <div class="a4-sub">Generated {generated} | {len(reports)} submitted DG report(s)</div>
 <div class="a4-callout"><b>Overall summary</b><br>AS-IS SKU is counted from all DGs in the source data. TO-BE SKU applies only the submitted DG changes to that full AS-IS base. Use the following DG pages for item-level review and team action.</div>
 <div class="a4-grid">
-<div class="a4-metric"><span>Total AS-IS SKU</span><b>{_fmt_int(total_as_is)}</b></div>
-<div class="a4-metric"><span>Total TO-BE SKU</span><b>{_fmt_int(total_to_be)}</b></div>
 <div class="a4-metric"><span>Net Change</span><b>{total_to_be - total_as_is}</b></div>
 <div class="a4-metric"><span>Need Review DG</span><b>{need_review}</b></div>
 </div>
-<div class="a4-section"><h3>DG Rollup</h3>{_rows_html(["DG / Source","AS-IS SKU","TO-BE SKU","Net","Changed items","Risk"], rows)}</div>
+<div class="a4-section"><h3>DG Rollup</h3>{_rows_html(["DG / Source","AS-IS SKU","TO-BE SKU","Net","Changed items"], rows)}</div>
 </div>
 </div>
 """
