@@ -750,6 +750,43 @@ def _cast_text_cols(df: pd.DataFrame, text_cols: list) -> pd.DataFrame:
             df[c] = df[c].where(df[c].isna(), df[c].astype(str)).astype("object")
     return df
 
+
+def _citrix_forecast_column_for_dg(dg_code) -> str | None:
+    """Map the numeric middle character of a DG code to its Citrix forecast."""
+    _code = str(dg_code or "").strip().upper()
+    if not _code:
+        return None
+    _middle = _code[len(_code) // 2] if _code else ""
+    _digit_text = _middle if _middle.isdigit() else ""
+    if not _digit_text:
+        _match = _re.search(r"\d", _code)
+        _digit_text = _match.group(0) if _match else ""
+    if not _digit_text:
+        return None
+    _digit = int(_digit_text)
+    if 1 <= _digit <= 4:
+        return "Forecast Sale Unit_Hyper"
+    if 5 <= _digit <= 7:
+        return "Forecast Sale Unit_Super"
+    if 8 <= _digit <= 9:
+        return "Forecast Sale Unit_Mini"
+    return None
+
+
+def _citrix_forecast_number(value):
+    """Return a numeric 52wk value, or None for blank/invalid input."""
+    if value is None:
+        return None
+    _text = str(value).replace(",", "").strip()
+    if _text.lower() in ("", "nan", "none", "<na>"):
+        return None
+    try:
+        _number = float(_text)
+        return None if pd.isna(_number) else _number
+    except (TypeError, ValueError):
+        return None
+
+
 # Columns that should default to 0 (not blank) when not present in the source file.
 _ZERO_DEFAULT_COLS = {
     _nca("AS IS planograms applied"),
@@ -1195,7 +1232,9 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
             _edlp_col  = next((c for c in _src_cols if "edlp price" in _nc(c)), None)
             _asis_stc  = next((c for c in _src_cols if ("as-is stores applied" in _nc(c) or ("as is" in _nc(c) and "stores applied" in _nc(c))) and "to" not in _nc(c)[:4]), None)
             _tobe_stc  = next((c for c in _src_cols if "to-be stores applied" in _nc(c) or "to be stores applied" in _nc(c) or "to-be stores" in _nc(c)), None)
-            _ab = df_src.copy()
+            # Filtering below always creates a new frame; a deep clone of the
+            # complete DG slice here only delays the summary and main table.
+            _ab = df_src.copy(deep=False)
             if _sel_dg_code and _dg_code_col and _dg_code_col in _ab.columns:
                 _ab = _ab[_ab[_dg_code_col].astype(str).str.contains(_sel_dg_code, case=False, na=False)]
             if _sel_dg_name != "ALL" and _dg_name_col and _dg_name_col in _ab.columns:
@@ -2261,11 +2300,34 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     if (os.path.exists(_amp)
                             and "a5" in _am["name"].lower()
                             and not is_large_file(_amp)):
-                        _a5, _a5_meta, _a5_warn = _load_a5_subset(
+                        _a5_mtime = os.path.getmtime(_amp)
+                        _a5_session_sig = (
                             _amp,
-                            os.path.getmtime(_amp),
+                            _a5_mtime,
                             tuple(str(c) for c in _dyn_pog_cols),
                         )
+                        _a5_session_cache = st.session_state.get(
+                            f"{p}_a5_subset_cache"
+                        )
+                        if (
+                            isinstance(_a5_session_cache, dict)
+                            and _a5_session_cache.get("sig") == _a5_session_sig
+                        ):
+                            _a5 = _a5_session_cache.get("df")
+                            _a5_meta = dict(_a5_session_cache.get("meta", {}))
+                            _a5_warn = _a5_session_cache.get("warn")
+                        else:
+                            _a5, _a5_meta, _a5_warn = _load_a5_subset(
+                                _amp,
+                                _a5_mtime,
+                                _a5_session_sig[2],
+                            )
+                            st.session_state[f"{p}_a5_subset_cache"] = {
+                                "sig": _a5_session_sig,
+                                "df": _a5,
+                                "meta": dict(_a5_meta or {}),
+                                "warn": _a5_warn,
+                            }
                         break
 
                 # ── Locate columns in A5 ─────────────────────────────────────────
@@ -4786,7 +4848,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     except OSError:
                         _source_mtime_rec = 0.0
                     _rec_sig = (
-                        "dg_recommendation_v1",
+                        "dg_recommendation_delete_v2",
                         _dg_scope,
                         float(_source_mtime_rec),
                         int(len(_tdf)),
@@ -4828,12 +4890,10 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
 
                     _sales_pct = _sales_metric.rank(pct=True, method="average")
                     _low_sales_cut = float(_valid_sales.quantile(0.15))
-                    _high_sales_cut = float(_valid_sales.quantile(0.90))
                     _pog_counts = _pog_matrix.notna().sum(axis=0)
                     _pog_low_cut = _pog_matrix.quantile(0.10, axis=0)
 
                     _delete_recs = []
-                    _new_recs = []
                     for _row_i in _tdf.index:
                         _row_i_int = int(_row_i)
                         _rk = _make_rk(_row_i_int)
@@ -4895,56 +4955,8 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                                     "present": len(_present),
                                 })
 
-                        # New recommendation: only a top-10% SKU missing from a
-                        # sister planogram in the same mapped cluster. This avoids
-                        # recommending expansion solely because a cell is blank.
-                        if (
-                            _high_sales_cut > _low_sales_cut
-                            and float(_metric) >= _high_sales_cut
-                            and len(_present) >= 2
-                        ):
-                            _best_pc = max(
-                                _present,
-                                key=lambda _pc: float(_pog_matrix.at[_row_i, _pc]),
-                            )
-                            _best_cluster = (
-                                _pog_to_cl.get(_best_pc)
-                                or _pog_to_cl.get(_nca(_best_pc))
-                                or ""
-                            )
-                            if str(_best_cluster).strip():
-                                _sister_blanks = [
-                                    _pc for _pc in _rec_pog_cols
-                                    if pd.isna(_pog_matrix.at[_row_i, _pc])
-                                    and (
-                                        _pog_to_cl.get(_pc)
-                                        or _pog_to_cl.get(_nca(_pc))
-                                        or ""
-                                    ) == _best_cluster
-                                ]
-                                if _sister_blanks:
-                                    _target_pc = max(
-                                        _sister_blanks,
-                                        key=lambda _pc: float(
-                                            _pog_matrix[_pc].sum(skipna=True)
-                                        ),
-                                    )
-                                    _evidence = max(
-                                        60,
-                                        min(95, int(round(float(_sales_pct.at[_row_i]) * 100))),
-                                    )
-                                    _new_recs.append({
-                                        "score": _evidence,
-                                        "action": "NEW SOME",
-                                        "item": _fmt_item(_tdf.loc[_row_i]),
-                                        "metric": float(_metric),
-                                        "targets": [_target_pc],
-                                        "cluster": str(_best_cluster),
-                                    })
-
                     _delete_recs.sort(key=lambda x: (-x["score"], x["metric"]))
-                    _new_recs.sort(key=lambda x: (-x["score"], -x["metric"]))
-                    _selected_recs = (_delete_recs[:4] + _new_recs[:2])[:6]
+                    _selected_recs = _delete_recs[:6]
                     _metric_name = (
                         "52-week sales"
                         if _chat_vol_col and _chat_vol_col != _chat_mapped_col
@@ -4965,16 +4977,12 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             _target_txt = ", ".join(str(x) for x in _rec["targets"])
                             _reason = (
                                 f"{_metric_name}={_rec['metric']:,.2f}; "
-                                + (
-                                    "SKU และ Planogram cell อยู่ในกลุ่มยอดต่ำ"
-                                    if _rec["action"] != "NEW SOME"
-                                    else f"Top 10% และขยายภายใน Cluster {_rec['cluster']}"
-                                )
+                                "SKU และ Planogram cell อยู่ในกลุ่มยอดต่ำ"
                             )
                             _lines.append(
                                 f"{_idx}. {_rec['action']} · {_rec['item']}\n"
                                 f"   → {_target_txt}\n"
-                                f"   เหตุผล: {_reason} · Evidence {_rec['score']}%"
+                                f"   เหตุผล: {_reason}"
                             )
                         _lines.append(
                             "หมายเหตุ: เป็นคำแนะนำเท่านั้น ระบบยังไม่เปลี่ยน Status/Dropdown อัตโนมัติ"
@@ -4985,7 +4993,7 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     return _rec_text
 
                 def _chat_recommendation_html(_rec_text: str) -> str:
-                    """Turn the recommendation text into clear DELETE/NEW cards."""
+                    """Turn the recommendation text into clear DELETE cards."""
                     _raw_lines = [
                         str(_line).strip()
                         for _line in str(_rec_text or "").splitlines()
@@ -5013,7 +5021,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                             _action, _item = _head, ""
                         _target = ""
                         _reason = ""
-                        _evidence = ""
                         _line_i += 1
                         while _line_i < len(_raw_lines):
                             _detail = _raw_lines[_line_i]
@@ -5023,17 +5030,12 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                                 _target = _detail.lstrip("→ ")
                             elif _detail.startswith("เหตุผล:"):
                                 _reason = _detail[len("เหตุผล:"):].strip()
-                                _ev_match = _re.search(r"\s*·\s*Evidence\s+(\d+%)\s*$", _reason)
-                                if _ev_match:
-                                    _evidence = _ev_match.group(1)
-                                    _reason = _reason[:_ev_match.start()].strip()
                             _line_i += 1
                         _rec_items.append({
                             "action": _action.strip(),
                             "item": _item.strip(),
                             "target": _target,
                             "reason": _reason,
-                            "evidence": _evidence,
                         })
 
                     if not _rec_items:
@@ -5065,15 +5067,11 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                                     f'<div class="rs-chat-rec-reason">{_html.escape(_rec["reason"])}</div>'
                                     if _rec["reason"] else ""
                                 )
-                                _evidence_html = (
-                                    f'<span class="rs-chat-rec-score">{_html.escape(_rec["evidence"])}</span>'
-                                    if _rec["evidence"] else ""
-                                )
                                 _card_parts.append(
                                     f'<div class="rs-chat-rec-item rs-chat-rec-item-{_kind}">'
                                     '<div class="rs-chat-rec-item-top">'
                                     f'<span class="rs-chat-rec-action">{_html.escape(_rec["action"])}</span>'
-                                    f'{_evidence_html}</div>'
+                                    '</div>'
                                     f'<div class="rs-chat-rec-item-name">{_html.escape(_rec["item"])}</div>'
                                     f'{_target_html}{_reason_html}</div>'
                                 )
@@ -5091,10 +5089,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                         _rec for _rec in _rec_items
                         if not _rec["action"].upper().startswith("NEW")
                     ]
-                    _new_items = [
-                        _rec for _rec in _rec_items
-                        if _rec["action"].upper().startswith("NEW")
-                    ]
                     _note_html = (
                         f'<div class="rs-chat-rec-note">{_html.escape(_note)}</div>'
                         if _note else ""
@@ -5102,7 +5096,6 @@ def _render_sheet_content(df_src, p, dg_col_hint=None, large_file_path=None, dg_
                     return (
                         f'<div class="rs-chat-rec-summary">{_html.escape(_summary)}</div>'
                         f'{_render_rec_group("delete", "DELETE", _delete_items)}'
-                        f'{_render_rec_group("new", "NEW", _new_items)}'
                         f'{_note_html}'
                     )
 
@@ -6011,10 +6004,6 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
     color: #B42335;
     background: #FFF1F3;
 }
-.rs-chat-rec-group-new .rs-chat-rec-group-head {
-    color: #087D68;
-    background: #ECFDF7;
-}
 .rs-chat-rec-icon {
     display: inline-flex;
     align-items: center;
@@ -6028,7 +6017,6 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
     line-height: 1;
 }
 .rs-chat-rec-group-delete .rs-chat-rec-icon { background: #DC435B; }
-.rs-chat-rec-group-new .rs-chat-rec-icon { background: #1EAE92; }
 .rs-chat-rec-count {
     min-width: 25px;
     margin-left: auto;
@@ -6052,7 +6040,6 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
     box-shadow: 0 1px 2px rgba(15,23,42,.05);
 }
 .rs-chat-rec-item-delete { border-left-color: #E45A70; }
-.rs-chat-rec-item-new { border-left-color: #2BBFA4; }
 .rs-chat-rec-item-top {
     display: flex;
     align-items: center;
@@ -6064,15 +6051,6 @@ div[data-testid="stPopover"] [data-baseweb="popover"] {
     font-size: 12px;
     font-weight: 900;
     letter-spacing: .035em;
-}
-.rs-chat-rec-score {
-    margin-left: auto;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: #EEF2FF;
-    color: #4338CA;
-    font-size: 12px;
-    font-weight: 900;
 }
 .rs-chat-rec-item-name {
     color: #0F172A;
@@ -7470,6 +7448,7 @@ function({streamlitRerunEventTriggerName, eventData}) {
                     enable_enterprise_modules=True,
                     try_to_convert_back_to_original_types=False,
                     columns_state=_active_col_state,
+                    server_sync_strategy="client_wins",
                     update_on=["cellValueChanged"],
                     key=f"{p}_aggrid_{_grid_view_epoch}",
                 )
@@ -7634,6 +7613,29 @@ function({streamlitRerunEventTriggerName, eventData}) {
                                    .reindex(columns=_tdf_display.columns))
                     except Exception:
                         _new_df = None
+                    _grid_edit_event_sig = ""
+                    if _new_df is not None and len(_new_df) > 0:
+                        _event_row = _new_df.iloc[0]
+                        _event_field = str(_event_row.get(_EDIT_COL, "") or "")
+                        _event_row_key = str(_event_row.get(_ROW_KEY_COL, "") or "")
+                        _event_value = _event_row.get(_event_field, "") if _event_field else ""
+                        _grid_edit_event_sig = _hashlib.sha1(
+                            _json.dumps(
+                                [
+                                    _event_row_key,
+                                    _event_field,
+                                    str(_event_value),
+                                    str(_event_row.get("Status", "") or ""),
+                                ],
+                                ensure_ascii=False,
+                            ).encode("utf-8")
+                        ).hexdigest()
+                        _processed_event_key = f"{p}_last_processed_grid_edit"
+                        if st.session_state.get(_processed_event_key) == _grid_edit_event_sig:
+                            # The same component event is returned once more after
+                            # the background synchronization rerun. Ignore it while
+                            # keeping the existing Grid instance mounted.
+                            _new_df = None
                     if _new_df is not None and len(_new_df) > 0:
                         if len(_new_df) >= len(_tdf_display):
                             st.session_state[f"{p}_latest_grid_df"] = _new_df
@@ -8156,15 +8158,12 @@ function({streamlitRerunEventTriggerName, eventData}) {
                                 _event_action = _event_data.pop("action")
                                 _event_detail = _event_data.pop("detail")
                                 add_audit(_event_action, _event_detail, **_event_data)
-                            # Range Architecture and Cluster Summary are rendered
-                            # above AgGrid.  Refresh the full page immediately after
-                            # the atomic autosave so all three views consume the same
-                            # latest edit state in this interaction.
-                            # Advance the grid identity so its previous edit event is
-                            # not replayed during the full-page rerun.
-                            st.session_state[_grid_view_epoch_key] = int(
-                                st.session_state.get(_grid_view_epoch_key, 0)
-                            ) + 1
+                            # Keep the same AG Grid component mounted. The browser
+                            # already applied the Status/dropdown change instantly;
+                            # this background rerun only refreshes the connected
+                            # Range Architecture and Cluster Summary.
+                            if _grid_edit_event_sig:
+                                st.session_state[f"{p}_last_processed_grid_edit"] = _grid_edit_event_sig
                             st.rerun()
                         elif _new_rows_changed:
                             _session_new_rows = list(_new_rows_by_key.values())
@@ -8634,19 +8633,30 @@ function({streamlitRerunEventTriggerName, eventData}) {
     if st.session_state.get(f"vw_submit_{p}") is not None:
         st.caption(f"✅ {len(st.session_state[f'vw_submit_{p}']):,} rows submitted to Report")
 
-# Pre-filter SSPOG / Non-SSPOG rows
+# Pre-filter SSPOG / Non-SSPOG rows once per shared DataFrame. Streamlit
+# executes every tab body on each rerun; repeating two full string scans of the
+# A5 frame after every DG/search filter made the visible Range Sheet wait for
+# work belonging to ItembyStore.
 _pog_col_main = next((c for c in all_cols if "pog" in c.lower() and "cluster" in c.lower()), None)
-_sspog_df = (
-    merged[
-        merged[_pog_col_main].astype(str).str.contains("SSPOG", na=False) &
-        ~merged[_pog_col_main].astype(str).str.contains("Non", na=False)
-    ] if _pog_col_main else merged
+_pre_filter_sig = (
+    id(merged),
+    tuple(merged.shape),
+    str(_pog_col_main or ""),
 )
-# Inverse filter — consistent with .str.contains("Non-SSPOG") used elsewhere in the app
-_nonsspog_df = (
-    merged[merged[_pog_col_main].astype(str).str.contains("Non-SSPOG", na=False)]
-    if _pog_col_main else merged
-)
+if st.session_state.get("_rs_pre_filter_sig") != _pre_filter_sig:
+    if _pog_col_main:
+        _pog_kind = merged[_pog_col_main].astype(str)
+        _is_nonsspog = _pog_kind.str.contains("Non-SSPOG", na=False)
+        st.session_state["_rs_sspog_df"] = merged[
+            _pog_kind.str.contains("SSPOG", na=False) & ~_is_nonsspog
+        ]
+        st.session_state["_rs_nonsspog_df"] = merged[_is_nonsspog]
+    else:
+        st.session_state["_rs_sspog_df"] = merged
+        st.session_state["_rs_nonsspog_df"] = merged
+    st.session_state["_rs_pre_filter_sig"] = _pre_filter_sig
+_sspog_df = st.session_state["_rs_sspog_df"]
+_nonsspog_df = st.session_state["_rs_nonsspog_df"]
 
 # ── Sheet tabs (scrollable via st.tabs) ───────────────────────────────────────
 # Single source of truth for tab labels — defined HERE so Streamlit's file watcher
@@ -8815,7 +8825,7 @@ with _tab["Range Sheet"]:
     if _ns_hdet_path and _ns_hdet_df is None:
         st.info("👆 Select a DG Code or DG Name above to view planogram data.")
     else:
-        _ns_combined = _dedup(_ns_hdet_df.copy()) if _ns_hdet_df is not None else merged
+        _ns_combined = _dedup(_ns_hdet_df) if _ns_hdet_df is not None else merged
         _ns_idx = st.session_state.get("ns_dg_index", {})
         _render_sheet_content(_ns_combined, "ns",
                               dg_col_hint=_ns_idx.get("dg_col"),
@@ -9366,7 +9376,118 @@ with _tab["Upload to Citrix"]:
             _df["StoreNo"] = _df["StoreNo"].map(_cx_clean_store)
         return _cast_text_cols(_df, _CX_TEXT_COLS)
 
-    def _cx_collect_changes(_st_map: dict, _act_map: dict) -> pd.DataFrame:
+    _CX_52WK_KEYS = {
+        _nca("Avg Units 52wk/ Forecast new item sales"),
+        _nca("Avg Units 52wk/Forecast new item sales"),
+        _nca("Avg unit 52wk"),
+        _nca("Avg Units 52wk"),
+        _nca("52wk"),
+    }
+
+    def _cx_extract_52wk(values) -> float | None:
+        if not isinstance(values, dict):
+            return None
+        for _key, _value in values.items():
+            if _nca(_key) in _CX_52WK_KEYS:
+                return _citrix_forecast_number(_value)
+        return None
+
+    def _cx_dg_from_new_row(row: dict) -> str:
+        for _key in ("DG Code", "DG_CODE", "DG", "DisplayGroupCode"):
+            _value = str(row.get(_key, "") or "").strip()
+            if _value:
+                return _value
+        try:
+            _raw_key = _json.loads(str(row.get("__rs_row_key", "") or ""))
+            _scope = str(_raw_key[1]) if isinstance(_raw_key, list) and len(_raw_key) > 1 else ""
+            _parts = _scope.split("|")
+            if len(_parts) > 1 and _parts[1].strip():
+                return _parts[1].strip()
+        except Exception:
+            pass
+        return ""
+
+    def _cx_saved_newnew_inputs() -> tuple[dict, dict]:
+        """Return (52wk by row key, added NEWNEW statuses) from autosave."""
+        _forecast_by_rk: dict = {}
+        _new_status_by_rk: dict = {}
+
+        # Existing rows: 52wk edits are saved in avg_u_edits (data_edits is
+        # included as a backwards-compatible fallback).
+        try:
+            _edit_files = sorted(
+                (
+                    os.path.join(_RS_NEW_ROWS_DIR, _name)
+                    for _name in os.listdir(_RS_NEW_ROWS_DIR)
+                    if _name.startswith("edit_state_") and _name.endswith(".json")
+                ),
+                key=os.path.getmtime,
+            )
+        except Exception:
+            _edit_files = []
+        for _path in _edit_files:
+            try:
+                with open(_path, "r", encoding="utf-8") as _file:
+                    _saved = _json.load(_file)
+            except Exception:
+                continue
+            for _section in ("data_edits", "avg_u_edits"):
+                for _entry in (_saved.get(_section) or []):
+                    _key = _entry.get("key", [])
+                    if not isinstance(_key, list) or not _key:
+                        continue
+                    _value = _cx_extract_52wk(_entry.get("value", {}))
+                    if _value is not None:
+                        _forecast_by_rk[tuple(str(_part) for _part in _key)] = _value
+
+        # Add New Item rows live in separate autosave files and do not appear
+        # in status_overrides, so add their NEWNEW status explicitly.
+        try:
+            _new_files = sorted(
+                (
+                    os.path.join(_RS_NEW_ROWS_DIR, _name)
+                    for _name in os.listdir(_RS_NEW_ROWS_DIR)
+                    if _name.startswith("new_rows_") and _name.endswith(".json")
+                ),
+                key=os.path.getmtime,
+            )
+        except Exception:
+            _new_files = []
+        for _path in _new_files:
+            try:
+                with open(_path, "r", encoding="utf-8") as _file:
+                    _rows = _json.load(_file)
+            except Exception:
+                continue
+            if not isinstance(_rows, list):
+                continue
+            for _row in _rows:
+                if not isinstance(_row, dict):
+                    continue
+                _item_id = str(_row.get("ID", "") or "").strip()
+                if not _re.fullmatch(r"\d{9}", _item_id):
+                    continue
+                _status = str(_row.get("Status", "") or "").strip().upper()
+                if _status not in ("", "NEWNEW"):
+                    continue
+                _dg = _cx_dg_from_new_row(_row)
+                _item_name = str(
+                    _row.get("Item Name", "")
+                    or _row.get("Product Description", "")
+                    or ""
+                ).strip()
+                _rk = (_dg, _item_id, _item_name)
+                _new_status_by_rk[_rk] = "NEWNEW"
+                _value = _cx_extract_52wk(_row)
+                if _value is not None:
+                    _forecast_by_rk[_rk] = _value
+        return _forecast_by_rk, _new_status_by_rk
+
+    def _cx_collect_changes(
+        _st_map: dict,
+        _act_map: dict,
+        _forecast_map: dict | None = None,
+    ) -> pd.DataFrame:
         """One row per changed item × changed planogram cell, from the Status
         changes saved on the range sheet (same source as tab ItembyStore):
         DisplayGroupCode/ItemNo/Product Name from the saved row key,
@@ -9389,6 +9510,7 @@ with _tab["Upload to Citrix"]:
 
         _rows = []
         _slice_cache = {}
+        _forecast_map = _forecast_map or {}
         for _rk, _sv in sorted(_st_map.items()):
             _dg = _rk[0] if len(_rk) >= 3 else ""
             _idv = str(_rk[1] if len(_rk) >= 2 else _rk[0]).strip()
@@ -9396,6 +9518,14 @@ with _tab["Upload to Citrix"]:
             _su = str(_sv).strip().upper()
             _new_y = "Y" if _su in ("NEWNEW", "NEW SOME") else ""
             _del_y = "" if _new_y else "Y"
+            _forecast_col = (
+                _citrix_forecast_column_for_dg(_dg)
+                if _su == "NEWNEW" else None
+            )
+            _forecast_value = (
+                _citrix_forecast_number(_forecast_map.get(_rk))
+                if _forecast_col else None
+            )
             _pogs = [_pc for _pc, _a in (_act_map.get(_rk) or {}).items()
                      if str(_a).strip().lower() in ("delete", "new")]
             if not _pogs and _su == "DELETE ALL" and _cx_hdet_path and _dg:
@@ -9419,7 +9549,7 @@ with _tab["Upload to Citrix"]:
                             .astype(str).str.strip().unique()
                             if _pg and _pg.lower() not in ("nan", "none"))
             for _pg in (_pogs or [""]):
-                _rows.append({
+                _citrix_row = {
                     "DisplayGroupCode": _dg,
                     "DG Description": _c2n.get(_dg, ""),
                     "Event LiveDate": "",
@@ -9429,14 +9559,26 @@ with _tab["Upload to Citrix"]:
                     "StoreNo": _last4(_pg) if _pg else "",
                     "New": _new_y,
                     "Delete": _del_y,
-                })
+                    "Forecast Sale Unit_Hyper": "",
+                    "Forecast Sale Unit_Super": "",
+                    "Forecast Sale Unit_Mini": "",
+                }
+                if _forecast_col and _forecast_value is not None:
+                    _citrix_row[_forecast_col] = _forecast_value
+                _rows.append(_citrix_row)
         _df = pd.DataFrame(_rows, columns=_CITRIX_COLS)
         for _c in _CX_NUM_COLS:
             _df[_c] = pd.to_numeric(_df[_c], errors="coerce")
         return _cast_text_cols(_df, _CX_TEXT_COLS)
 
-    def _cx_load_default():
-        _st_map, _act_map = _ib_all_saved_edits()
+    def _cx_load_default(_inputs=None):
+        if _inputs is None:
+            _st_map, _act_map = _ib_all_saved_edits()
+            _forecast_map, _new_status_map = _cx_saved_newnew_inputs()
+        else:
+            _st_map, _act_map, _forecast_map, _new_status_map = _inputs
+        _st_map = dict(_st_map)
+        _st_map.update(_new_status_map)
         # Show only the DG currently loaded on the main Range Sheet tab;
         # with no DG picked there, show changes from every DG.
         _main_dg = str(st.session_state.get("_ns_loaded_dg_code") or "").strip()
@@ -9444,7 +9586,7 @@ with _tab["Upload to Citrix"]:
             _st_map = {_k: _v for _k, _v in _st_map.items()
                        if len(_k) >= 3
                        and str(_k[0]).strip().upper() == _main_dg.upper()}
-        _chg = _cx_collect_changes(_st_map, _act_map)
+        _chg = _cx_collect_changes(_st_map, _act_map, _forecast_map)
         st.session_state.vw_citrix_data = _chg
         st.session_state["_cx_source"] = (
             f"Range sheet Status changes · DG={_main_dg} ({len(_chg):,} rows)"
@@ -9452,28 +9594,65 @@ with _tab["Upload to Citrix"]:
             f"Range sheet Status changes · all DGs ({len(_chg):,} rows)")
 
     # ── Auto-generate from the saved Status changes; refresh when the column
-    #    set, the main tab's DG, OR any saved status/action changes ───────────
+    #    set, the main tab's DG, Status/action, added item, or 52wk changes ───
     _cx_st_sig, _cx_act_sig = _ib_all_saved_edits()
+    _cx_forecast_sig, _cx_new_status_sig = _cx_saved_newnew_inputs()
     _cx_gen_sig = (
         "|".join(_CITRIX_COLS),
         str(st.session_state.get("_ns_loaded_dg_code") or "").strip().upper(),
         tuple(sorted((str(_k), str(_v)) for _k, _v in _cx_st_sig.items())),
         tuple(sorted((str(_k), str(sorted((_v or {}).items())))
                      for _k, _v in _cx_act_sig.items())),
+        tuple(sorted((str(_k), str(_v)) for _k, _v in _cx_forecast_sig.items())),
+        tuple(sorted((str(_k), str(_v)) for _k, _v in _cx_new_status_sig.items())),
     )
     if "vw_citrix_data" not in st.session_state or st.session_state.get("_cx_gen_sig") != _cx_gen_sig:
-        _cx_load_default()
+        _cx_load_default(
+            (_cx_st_sig, _cx_act_sig, _cx_forecast_sig, _cx_new_status_sig)
+        )
         st.session_state["_cx_gen_sig"] = _cx_gen_sig
 
     # ── HDET controls ─────────────────────────────────────────────────────────
     if _cx_hdet_path:
         _cx_hfname = os.path.basename(_cx_hdet_path)
-        _cx_src = st.session_state.get("_cx_source", "")
+        _cx_summary_df = st.session_state.get("vw_citrix_data")
+
+        def _cx_unique_action_count(_flag_col: str) -> int:
+            if (
+                not isinstance(_cx_summary_df, pd.DataFrame)
+                or _flag_col not in _cx_summary_df.columns
+            ):
+                return 0
+            _mask = (
+                _cx_summary_df[_flag_col]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .eq("Y")
+            )
+            if "ItemNo" in _cx_summary_df.columns:
+                _items = (
+                    _cx_summary_df.loc[_mask, "ItemNo"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                )
+                _items = _items[
+                    ~_items.str.lower().isin(("", "nan", "none", "<na>"))
+                ]
+                if len(_items):
+                    return int(_items.nunique())
+            return int(_mask.sum())
+
+        _cx_new_count = _cx_unique_action_count("New")
+        _cx_delete_count = _cx_unique_action_count("Delete")
         st.markdown(
-            f"<div style='font-size:11px;color:#2BBFA4;margin-bottom:6px;'>"
-            f"Source: <strong>{_cx_hfname}</strong>"
-            + (f" · {_cx_src}" if _cx_src else "")
-            + " · enter DG to load filtered slice.</div>",
+            f"<div style='font-size:12px;margin-bottom:6px;'>"
+            f"<strong style='color:#2BBFA4;'>NEW: {_cx_new_count:,} ตัว</strong>"
+            f"<span style='color:#AAA;padding:0 8px;'>|</span>"
+            f"<strong style='color:#E05555;'>DELETE: {_cx_delete_count:,} ตัว</strong>"
+            f"</div>",
             unsafe_allow_html=True,
         )
         # Search bar only — no buttons. Typing a DG code (then Enter / click away)

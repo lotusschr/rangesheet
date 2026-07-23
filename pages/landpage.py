@@ -6,11 +6,11 @@ import streamlit as st
 from datetime import datetime
 from utils.shared import (
     inject_css, init_session_state, render_sidebar, render_topbar, render_page_nav,
-    APP_CONFIG, read_uploaded_file, auto_merge, save_merged_snapshot,
+    APP_CONFIG, read_uploaded_file,
     clear_merged_snapshot, save_file, add_audit, current_user, is_admin,
     can_manage_files,
     load_admin_manifest, save_admin_manifest, remove_admin_file,
-    bump_shared_db, load_admin_file_df,
+    bump_shared_db,
 )
 
 inject_css()
@@ -30,6 +30,13 @@ if not st.session_state.get("_admin_synced"):
             # Store metadata only; df loaded on demand when user views the file
             st.session_state.raw_files.insert(0, {**_meta, "df": None, "pinned": True})
     st.session_state._admin_synced = True
+
+# The old flow required selecting pinned files and eagerly merging them before
+# navigation. Pinned files are now the single shared source and are loaded only
+# by the destination page when needed.
+st.session_state.selected_files = []
+st.session_state.upload_df = None
+st.session_state.pop("view_file_selection", None)
 
 render_sidebar("landpage")
 render_topbar("My Files")
@@ -377,53 +384,5 @@ with col_files:
                         st.rerun()
 
             st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── File selection for View Data ──────────────────────────────────────────
-    if st.session_state.raw_files:
-        st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
-        _all_file_names = [f["name"] for f in st.session_state.raw_files]
-        _selected = st.multiselect(
-            "select_files_label", options=_all_file_names,
-            key="view_file_selection",
-            placeholder="📂  Select files to show in View Data...",
-            label_visibility="collapsed",
-        )
-        if _selected:
-            if st.button("View Data →", key="go_to_viewdata",
-                         use_container_width=True, type="primary"):
-                _sel_raw = []
-                for _fname in _selected:
-                    _ent = next((f for f in st.session_state.raw_files
-                                 if f["name"] == _fname), None)
-                    if _ent is None:
-                        continue
-                    if _ent.get("df") is None:
-                        with st.spinner(f"Loading {_fname}…"):
-                            _df = load_admin_file_df(_fname)
-                            if _df is not None:
-                                _ent["df"]   = _df
-                                _ent["rows"] = len(_df)
-                                _ent["cols"] = len(_df.columns)
-                    if _ent.get("df") is not None:
-                        _sel_raw.append(_ent)
-                if not _sel_raw:
-                    st.error("Could not load selected file(s).")
-                else:
-                    st.session_state.selected_files = _selected
-                    merged, log = auto_merge(_sel_raw)
-                    st.session_state.upload_df    = merged
-                    st.session_state.merge_log    = log
-                    st.session_state.display_cols = None
-                    save_merged_snapshot(merged)
-                    add_audit("View Data", f"{len(_sel_raw)} file(s) selected")
-                    st.switch_page("pages/viewdata.py")
-        else:
-            if st.session_state.merged_df is not None:
-                st.session_state.merged_df = None
-            st.markdown(
-                "<div style='font-size:12px;color:#AAA;text-align:center;margin-top:6px;'>"
-                "Select files above to enable View Data</div>",
-                unsafe_allow_html=True,
-            )
 
 render_page_nav("landpage")

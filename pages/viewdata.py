@@ -99,13 +99,14 @@ def _scan_hdet_for_pivot(path: str, cl_sel: tuple, dg_sel: tuple,
     return _df.rename(columns=_rename)
 
 
-@st.cache_data(show_spinner="Loading HDET (first load only, ~3 min)…")
-def _build_hdet_mini(path: str, _mtime: int = 0) -> pd.DataFrame:
+@st.cache_resource(show_spinner="Loading HDET (first load only, ~3 min)…")
+def _build_hdet_mini(path: str, file_mtime: int = 0) -> pd.DataFrame:
     """Scan HDET once; return compact categorical DataFrame with key columns.
 
     Replaces the cascade scan + cluster summary + pivot scan.
     After first load everything runs in-memory (instant).
     """
+    _ = file_mtime  # cache invalidation input
     _sep, _enc, _hr = _detect_large_file_params(path)
     _WANT = {
         "ClusterName":        ["ClusterName","Cluster_Name","cluster_name","Cluster Name"],
@@ -164,6 +165,79 @@ def _build_hdet_mini(path: str, _mtime: int = 0) -> pd.DataFrame:
     for _col in _out.select_dtypes("category").columns:
         _out[_col] = _out[_col].cat.remove_unused_categories()
     return _out
+
+
+@st.cache_resource(show_spinner=False)
+def _load_a5_store_source(
+    path: str,
+    file_mtime: float = 0.0,
+    file_size: int = 0,
+) -> dict | None:
+    """Load the A5 columns used by the dashboard once per file version."""
+    _ = (file_mtime, file_size)  # cache invalidation inputs
+    try:
+        _sep, _enc, _hdr = _detect_large_file_params(path)
+        _peek = pd.read_csv(
+            path, sep=_sep, encoding=_enc, skiprows=_hdr,
+            nrows=0, dtype=str, low_memory=False,
+        )
+        _lmap = {str(c).strip().lower(): str(c).strip() for c in _peek.columns}
+
+        def _resolve(candidates):
+            for candidate in candidates:
+                if candidate.lower() in _lmap:
+                    return _lmap[candidate.lower()]
+            return None
+
+        _store_col = _resolve(
+            ["store_no", "StoreNo", "Store_No", "store_number", "StoreNumber"]
+        )
+        _cluster_col = _resolve(
+            ["POG_Cluster", "pog_cluster", "Property_Store_Cluster",
+             "property_store_cluster"]
+        )
+        _pog_col = _resolve(
+            ["planogramname", "POGName", "pog_name", "POG_Name", "POG Name",
+             "planogram_name", "Planogramname"]
+        )
+        _fmt_col = _resolve(
+            ["store_Format", "store_format", "StoreFormat", "store format"]
+        )
+        if not (_store_col and _cluster_col and _pog_col):
+            return None
+
+        _use = list(dict.fromkeys(
+            [_store_col, _cluster_col, _pog_col]
+            + ([_fmt_col] if _fmt_col else [])
+        ))
+        _df = pd.read_csv(
+            path, sep=_sep, encoding=_enc, skiprows=_hdr,
+            usecols=_use, dtype=str, low_memory=False, on_bad_lines="skip",
+        )
+        _df.columns = [str(c).strip() for c in _df.columns]
+        # These values are repeatedly joined/filtered after every dropdown
+        # change, so normalize them once while building the shared cache.
+        _df[_store_col] = _df[_store_col].fillna("").astype(str).str.strip()
+        _df[_pog_col] = _df[_pog_col].fillna("").astype(str).str.strip()
+        if _fmt_col:
+            _df[_fmt_col] = _df[_fmt_col].fillna("").astype(str).str.strip()
+        _fmt_options = (
+            sorted(
+                value for value in _df[_fmt_col].unique()
+                if str(value).lower() not in {"", "nan", "none", "null"}
+            )
+            if _fmt_col else []
+        )
+        return {
+            "df": _df,
+            "store_col": _store_col,
+            "cluster_col": _cluster_col,
+            "pog_col": _pog_col,
+            "fmt_col": _fmt_col,
+            "fmt_options": _fmt_options,
+        }
+    except Exception:
+        return None
 
 
 inject_css()
@@ -562,7 +636,9 @@ def _render_minor():
         st.info("Upload or pin files on **My Files** to populate this dashboard.")
         return
 
-    _df = _dedup(_db_df.copy())
+    # The shared database is read-only on this page. Avoid cloning the full
+    # frame whenever a filter widget reruns the script.
+    _df = _dedup(_db_df)
 
     # ── Column detection ──────────────────────────────────────────────────────
     # Never fall back to "Department" for div — that's a different column.
@@ -708,13 +784,6 @@ def _render_minor():
         _cl_sel = st.selectbox("CLUSTERNAME", [None] + _cl_opts, key="minor_cl",
                                format_func=lambda x: "All clusters" if x is None else x)
 
-    # _fdf: filtered small DB (for any downstream use)
-    _fdf = _df.copy()
-    if _fmt_sel and _fmt_col:  _fdf = _fdf[_fdf[_fmt_col].astype(str) == _fmt_sel]
-    if _div_sel and _div_col:  _fdf = _fdf[_fdf[_div_col].astype(str) == _div_sel]
-    if _dg_sel  and _dg_col:   _fdf = _fdf[_fdf[_dg_col].astype(str)  == _dg_sel]
-    if _cl_sel  and _cl_col:   _fdf = _fdf[_fdf[_cl_col].astype(str)  == _cl_sel]
-
     def _filter_eq(_frame: pd.DataFrame, _col: str | None, _val):
         if not _val or not _col or _col not in _frame.columns:
             return _frame
@@ -746,61 +815,44 @@ def _render_minor():
         _sc_cl_col    = None
         _sc_src_df    = None
         _sc_fmt_col   = None
+        _sc_fmt_options = []
         _sc_src_label = "none"
         _sc_base      = pd.DataFrame()
 
-        # ── Direct scan: find a CSV with store_no + Property_Store_Cluster + POGName ──
-        # This is the exact signature of the A5 POG_Store CSV that PBI uses.
-        # We read only the 4 needed columns (usecols) so it's fast even for large CSVs.
-        _A5_S  = ["store_no", "StoreNo", "Store_No", "store_number", "StoreNumber"]
-        # POG_Cluster = "A"/"N_G_A"/... (the PBI cluster column); planogramname = PBI's POGName
-        _A5_C  = ["POG_Cluster", "pog_cluster", "Property_Store_Cluster", "property_store_cluster"]
-        _A5_P  = ["planogramname", "POGName", "pog_name", "POG_Name", "POG Name",
-                  "planogram_name", "Planogramname"]
-        _A5_F  = ["store_Format", "store_format", "StoreFormat", "store format"]
-
-        for _am in load_admin_manifest():
+        # Find the A5 POG_Store source. Parsing is cached by path + mtime + size,
+        # so changing a filter reuses the same normalized four-column frame.
+        _manifest = load_admin_manifest()
+        _a5_candidates = sorted(
+            _manifest,
+            key=lambda item: ("a5" not in str(item.get("name", "")).lower()),
+        )
+        for _am in _a5_candidates:
             _ap = os.path.join(BASE_DIR, "uploads", _am["name"])
             if not os.path.exists(_ap):
                 continue
             if os.path.splitext(_am["name"])[-1].lower() not in (".csv", ".txt"):
                 continue
-            try:
-                _sep2, _enc2, _hdr2 = _detect_large_file_params(_ap)
-                _peek = pd.read_csv(_ap, sep=_sep2, encoding=_enc2,
-                                    skiprows=_hdr2, nrows=0, dtype=str, low_memory=False)
-                _lmap = {str(c).strip().lower(): str(c).strip() for c in _peek.columns}
-                def _rc(_cands, _m=_lmap):
-                    for _cc in _cands:
-                        if _cc.lower() in _m:
-                            return _m[_cc.lower()]
-                    return None
-                _a5_s = _rc(_A5_S)
-                _a5_c = _rc(_A5_C)
-                _a5_p = _rc(_A5_P)
-                if not (_a5_s and _a5_c and _a5_p):
-                    continue
-                _a5_f  = _rc(_A5_F)
-                _use   = list({_a5_s, _a5_c, _a5_p} | ({_a5_f} if _a5_f else set()))
-                _a5_df = pd.read_csv(_ap, sep=_sep2, encoding=_enc2, skiprows=_hdr2,
-                                     usecols=_use, dtype=str, low_memory=False,
-                                     on_bad_lines="skip")
-                _a5_df.columns = [str(c).strip() for c in _a5_df.columns]
-                _sc_store_col = _a5_s
-                _sc_cl_col    = _a5_c
-                _sc_src_df    = _a5_df
-                _sc_fmt_col   = _a5_f
-                _sc_src_label = f"A5:{_am['name']} store={_a5_s}, cluster={_a5_c}"
-                break
-            except Exception:
-                pass
+            _a5_source = _load_a5_store_source(
+                _ap,
+                os.path.getmtime(_ap),
+                os.path.getsize(_ap),
+            )
+            if not _a5_source:
+                continue
+            _sc_store_col = _a5_source["store_col"]
+            _sc_cl_col    = _a5_source["cluster_col"]
+            _sc_src_df    = _a5_source["df"]
+            _sc_fmt_col   = _a5_source["fmt_col"]
+            _sc_fmt_options = list(_a5_source.get("fmt_options", []))
+            _sc_src_label = (
+                f"A5:{_am['name']} store={_sc_store_col}, "
+                f"cluster={_sc_cl_col}"
+            )
+            break
 
         # ── A5 store_Format: cache options & apply format filter ─────────────────
         if _sc_fmt_col and _sc_src_df is not None and _sc_fmt_col in _sc_src_df.columns:
-            _a5_sfmt_all = sorted(
-                v for v in _sc_src_df[_sc_fmt_col].dropna().astype(str).str.strip().unique()
-                if v.lower() not in {"", "nan", "none", "null"}
-            )
+            _a5_sfmt_all = _sc_fmt_options
             if _a5_sfmt_all != st.session_state.get("_a5_sfmt_opts", []):
                 st.session_state["_a5_sfmt_opts"] = _a5_sfmt_all
                 st.rerun()

@@ -179,7 +179,10 @@ def _total_sku_all_dg(df: pd.DataFrame) -> int:
     id_col = _find_col_any(df, ["ID", "Item ID", "Article"])
     if not id_col or id_col not in df.columns:
         return int(len(df))
-    dg_col = _find_col_any(df, ["DG Code", "DG", "Department"])
+    dg_col = _find_col_any(
+        df,
+        ["DG Code", "DG", "Display Group", "Display group", "Department"],
+    )
     _ids = df[id_col].astype(str).str.strip()
     _valid = _ids.ne("") & ~_ids.str.lower().isin(("nan", "none", "<na>"))
     if dg_col and dg_col in df.columns:
@@ -189,6 +192,181 @@ def _total_sku_all_dg(df: pd.DataFrame) -> int:
         })
         return int(_pairs.drop_duplicates().shape[0])
     return int(_ids.loc[_valid].drop_duplicates().shape[0])
+
+
+@st.cache_data(show_spinner=False)
+def _total_sku_all_dg_parquet(path: str, _mtime: float) -> int:
+    """Count the full Range Sheet AS-IS base without loading its wide table."""
+    if not path or not os.path.exists(path):
+        return 0
+    try:
+        import pyarrow.parquet as _pq
+
+        _columns = [field.name for field in _pq.read_schema(path)]
+        _id_col = next(
+            (
+                col for col in _columns
+                if _nca(col) in {_nca(v) for v in ("ID", "Item ID", "Article")}
+            ),
+            None,
+        )
+        _dg_col = next(
+            (
+                col for col in _columns
+                if _nca(col) in {
+                    _nca(v)
+                    for v in (
+                        "DG Code", "DG", "Display Group",
+                        "Display group", "Department",
+                    )
+                }
+            ),
+            None,
+        )
+        if not _id_col:
+            return 0
+        _read_cols = [_id_col] + ([_dg_col] if _dg_col else [])
+        _slim_df = pd.read_parquet(path, columns=_read_cols)
+        return _total_sku_all_dg(_slim_df)
+    except Exception:
+        return 0
+
+
+def _non_sspog_full_parquet_path() -> str:
+    """Return the latest complete pinned HDET Range Sheet Parquet mirror."""
+    _cache_dir = os.path.join(BASE_DIR, "cache_large")
+    if not os.path.isdir(_cache_dir):
+        return ""
+    try:
+        _candidates = [
+            os.path.join(_cache_dir, name)
+            for name in os.listdir(_cache_dir)
+            if name.lower().endswith(".parquet")
+            and "__dg_" not in name.lower()
+            and "range sheet" in name.lower()
+        ]
+        if not _candidates:
+            return ""
+        return max(_candidates, key=os.path.getmtime)
+    except Exception:
+        return ""
+
+
+def _non_sspog_full_as_is_total() -> int:
+    """Return the AS-IS DG/SKU total from the complete pinned HDET Range Sheet."""
+    _source_path = _non_sspog_full_parquet_path()
+    if not _source_path:
+        return 0
+    try:
+        return _total_sku_all_dg_parquet(
+            _source_path,
+            os.path.getmtime(_source_path),
+        )
+    except Exception:
+        return 0
+
+
+@st.cache_data(show_spinner=False)
+def _hdet_sales_value_by_dg_item(
+    dg_codes: tuple[str, ...],
+    source_path: str,
+    _mtime: float,
+) -> pd.Series:
+    """Aggregate TH_Tot_Sales_Value_52WK from HDET by DG and item."""
+    if not source_path or not os.path.exists(source_path):
+        return pd.Series(dtype=float)
+    try:
+        import pyarrow.parquet as _pq
+
+        _columns = [field.name for field in _pq.read_schema(source_path)]
+        _dg_col = next(
+            (col for col in _columns if _nca(col) in ("displaygroup", "dgcode", "dg")),
+            None,
+        )
+        _id_col = next(
+            (col for col in _columns if _nca(col) in ("id", "itemid", "article")),
+            None,
+        )
+        _value_col = next(
+            (
+                col for col in _columns
+                if _nca(col) == _nca("TH_Tot_Sales_Value_52WK")
+            ),
+            None,
+        )
+        if not _dg_col or not _id_col or not _value_col:
+            return pd.Series(dtype=float)
+
+        _frames = []
+        _base, _ext = os.path.splitext(source_path)
+        for _dg in dg_codes:
+            _slice_path = f"{_base}__dg_{_dg}{_ext}"
+            _read_path = _slice_path if os.path.exists(_slice_path) else source_path
+            _filters = None if _read_path == _slice_path else [(_dg_col, "==", _dg)]
+            _part = pd.read_parquet(
+                _read_path,
+                columns=[_dg_col, _id_col, _value_col],
+                filters=_filters,
+            )
+            if not _part.empty:
+                _frames.append(_part)
+        if not _frames:
+            return pd.Series(dtype=float)
+
+        _metric_df = pd.concat(_frames, ignore_index=True)
+        _metric_df["_dg"] = (
+            _metric_df[_dg_col].fillna("").astype(str).str.strip().str.upper()
+        )
+        _metric_df["_id"] = (
+            _metric_df[_id_col].fillna("").astype(str).str.strip()
+        )
+        _metric_df["_sales_value"] = pd.to_numeric(
+            _metric_df[_value_col],
+            errors="coerce",
+        )
+        _metric_df = _metric_df[
+            _metric_df["_dg"].ne("")
+            & _metric_df["_id"].ne("")
+            & ~_metric_df["_id"].str.lower().isin(("nan", "none", "<na>"))
+        ]
+        return _metric_df.groupby(
+            ["_dg", "_id"],
+            sort=False,
+        )["_sales_value"].sum(min_count=1)
+    except Exception:
+        return pd.Series(dtype=float)
+
+
+def _portfolio_as_is_total(
+    reports: list[dict],
+    fallback_df: pd.DataFrame | None = None,
+) -> int:
+    """Build the portfolio baseline from every DG, not only submitted DG rows."""
+    _source_keys = {
+        str(report.get("source_key") or "").strip()
+        for report in reports
+        if isinstance(report, dict)
+    }
+    _total = 0
+    _has_full_source = False
+    if "ns" in _source_keys:
+        _ns_total = _non_sspog_full_as_is_total()
+        if _ns_total > 0:
+            _total += _ns_total
+            _has_full_source = True
+
+    # SSPOG / StoreApply continue to use their complete merged source. Count it
+    # once even when both report types are selected because they share the same
+    # pinned source table.
+    if _source_keys - {"", "ns"}:
+        _other_total = _total_sku_all_dg(fallback_df)
+        if _other_total > 0:
+            _total += _other_total
+            _has_full_source = True
+
+    if _has_full_source:
+        return _total
+    return _total_sku_all_dg(fallback_df)
 
 
 def _merge_action_stores(p: str) -> dict:
@@ -243,10 +421,11 @@ def _build_management_report(
     id_col = _find_col_any(df, ["ID", "Item ID", "Article"])
     pog_col = _find_col_any(df, ["Planogram Name", "POG Name", "Planogram", "Name"])
     cluster_col = _find_col_any(df, ["POG_Cluster", "Cluster", "Cluster Name"])
-    value_col = _find_col_any(df, ["TH_Tot_Sales_Value_52WK", "Tot Sales Value 52WK", "Sales Value"])
-    volume_col = _find_col_any(df, ["TH_Tot_Sales_Volume_52WK", "Tot Sales Volume 52WK", "Sales Volume"])
-    forecast_col = _find_col_any(df, ["ForecastSales", "Forecast Sales", "Forecast new item sales"])
-    metric_col = volume_col or value_col or forecast_col
+    value_col = _find_col_any(
+        df,
+        ["TH_Tot_Sales_Value_52WK", "Tot Sales Value 52WK", "Sales Value"],
+    )
+    metric_col = "TH_Tot_Sales_Value_52WK"
     status_col = _find_col_any(df, ["Status"])
     dg_col = _find_col_any(df, ["DG Code", "DG", "Department"])
     item_name_col = _find_col_any(df, ["Item Name", "ItemName", "Product Name", "Description"])
@@ -324,10 +503,37 @@ def _build_management_report(
         if s in status_counts:
             status_counts[s] += 1
 
-    if metric_col and id_col and metric_col in df.columns:
+    _hdet_metric_by_id = pd.Series(dtype=float)
+    if id_col and id_col in df.columns:
+        if _dg_filter:
+            _metric_dgs = (_dg_filter.upper(),)
+        elif dg_col and dg_col in df.columns:
+            _metric_dgs = tuple(sorted({
+                str(v).strip().upper()
+                for v in df[dg_col].dropna()
+                if str(v).strip()
+            }))
+        else:
+            _metric_dgs = ()
+        _hdet_source = _non_sspog_full_parquet_path()
+        if _metric_dgs and _hdet_source:
+            _hdet_metric = _hdet_sales_value_by_dg_item(
+                _metric_dgs,
+                _hdet_source,
+                os.path.getmtime(_hdet_source),
+            )
+            if not _hdet_metric.empty:
+                _hdet_metric_by_id = _hdet_metric.groupby(level=1).sum(min_count=1)
+
+    if not _hdet_metric_by_id.empty:
+        metric_by_id = _hdet_metric_by_id
+        vals = metric_by_id.dropna().sort_values()
+        top_cut = vals.quantile(0.90) if len(vals) else None
+        low_cut = vals.quantile(0.10) if len(vals) else None
+    elif value_col and id_col and value_col in df.columns:
         metric_by_id = (
-            df[[id_col, metric_col]]
-            .assign(_metric=pd.to_numeric(df[metric_col], errors="coerce"))
+            df[[id_col, value_col]]
+            .assign(_metric=pd.to_numeric(df[value_col], errors="coerce"))
             .groupby(id_col)["_metric"].sum(min_count=1)
         )
         vals = metric_by_id.dropna().sort_values()
@@ -475,6 +681,7 @@ def _build_management_report(
         risks.append("At least one item removed from all planograms")
     risk_level = "Need Review" if risks else ("Ready to Review" if item_changes else "No Change")
     return {
+        "source_key": p,
         "label": label, "submitted_at": submitted_at, "total_sku": total_sku, "to_be": to_be, "net": to_be - total_sku,
         "status_counts": status_counts, "item_changes": item_changes,
         "planogram_impact": planogram_impact, "cluster_impact": cluster_impact,
@@ -515,40 +722,14 @@ def _render_a4_report(report: dict) -> str:
         for c in report["item_changes"]
     ]
     risk_items = [c for c in risk_items if c.get("risk_reason")][:30]
-    _best_delete_items = [c for c in risk_items if c.get("risk_reason") == "Deleting best seller"]
-    _lowest_add_items = [c for c in risk_items if c.get("risk_reason") == "Adding lowest seller"]
-    def _metric_num(c: dict) -> float:
-        try:
-            _v = c.get("metric")
-            return float(_v) if _v is not None and pd.notna(_v) else 0.0
-        except Exception:
-            return 0.0
-    _pog_risk = {}
-    for _c in risk_items:
-        _sign = -1 if _c.get("risk_reason") == "Deleting best seller" else 1
-        for _pog in _c.get("planograms", []) or ["Unspecified"]:
-            _pog_s = str(_pog or "Unspecified")
-            _pog_risk[_pog_s] = _pog_risk.get(_pog_s, 0.0) + (_sign * _metric_num(_c))
-    _highest_risk_pog = ""
-    if _pog_risk:
-        _highest_risk_pog = min(_pog_risk.items(), key=lambda kv: kv[1])[0]
     _sales_prod = report.get("sales_productivity", {}) or {}
     _total_deleted_units = float(_sales_prod.get("total_deleted_units", 0.0) or 0.0)
     _total_added_units = float(_sales_prod.get("total_added_units", 0.0) or 0.0)
     _net_productivity_units = float(_sales_prod.get("net_productivity_units", _total_added_units - _total_deleted_units) or 0.0)
-    _productivity_direction = "Negative" if _net_productivity_units < 0 else "Positive" if _net_productivity_units > 0 else "Neutral"
     _productivity_rows = [
-        ["Total deleted item volume", _fmt_num(_total_deleted_units)],
-        ["Total added item forecast / volume", _fmt_num(_total_added_units)],
-        ["Net productivity impact", _fmt_num(_net_productivity_units)],
-        ["Productivity direction", _productivity_direction],
-    ]
-    _risk_summary_rows = [
-        ["Best-seller delete count", len(_best_delete_items)],
-        ["Lowest-seller add count", len(_lowest_add_items)],
-        ["Best-seller delete volume", _fmt_num(sum(_metric_num(c) for c in _best_delete_items))],
-        ["Lowest-seller add volume", _fmt_num(sum(_metric_num(c) for c in _lowest_add_items))],
-        ["Highest risk planogram", _highest_risk_pog or "N/A"],
+        ["Total deleted sale impact", _fmt_num(_total_deleted_units)],
+        ["Total added sale impact", _fmt_num(_total_added_units)],
+        ["Net sale impact", _fmt_num(_net_productivity_units)],
     ]
     def _impact_status(v: dict) -> str:
         _new = int(v.get("new", 0) or 0)
@@ -562,12 +743,12 @@ def _render_a4_report(report: dict) -> str:
         return "No Change"
     pog_rows = [[pog, _impact_status(v), v["new"], v["delete"], v["net"]] for pog, v in top_pogs]
     cluster_rows = [[cl, v["new"], v["delete"], v["net"]] for cl, v in top_clusters]
-    item_rows = [[c["risk_reason"], c["status"], f"{c['dg']}-{c['id']}-{c['item']}", ", ".join(map(str, c["planograms"][:5])), c["sales_flag"], _fmt_num(c["metric"]) if c["metric"] is not None and pd.notna(c["metric"]) else ""] for c in risk_items]
+    item_rows = [[c["risk_reason"], c["status"], f"{c['dg']}-{c['id']}-{c['item']}", ", ".join(map(str, c["planograms"][:5])), _fmt_num(c["metric"]) if c["metric"] is not None and pd.notna(c["metric"]) else ""] for c in risk_items]
     risks = "; ".join(report["risks"]) if report["risks"] else "No high-risk movement detected."
     recommendation = (
-        f"This DG has a {_productivity_direction.lower()} overall sales productivity signal. "
-        f"Across all changed items, deleted volume is {_fmt_num(_total_deleted_units)} and added forecast/volume is {_fmt_num(_total_added_units)}, "
-        f"giving a net productivity impact of {_fmt_num(_net_productivity_units)} units."
+        f"Across all changed items, deleted sale volume is {_fmt_num(_total_deleted_units)} "
+        f"and added sale volume is {_fmt_num(_total_added_units)}, "
+        f"giving a net sale impact of {_fmt_num(_net_productivity_units)}."
         if item_rows else
         "No major sales-risk movement was detected from the submitted changes."
     )
@@ -580,9 +761,9 @@ def _render_a4_report(report: dict) -> str:
 <div class="a4-page-no">Page 2</div>
 <div class="a4-kicker">Product Movement</div>
 <div class="a4-title">{_h(report['label'])}</div>
-<div class="a4-section"><h3>Sales Productivity Impact</h3><div class="a4-callout risk"><b>Overall productivity view: {_h(_productivity_direction)}</b><br>{_h(recommendation)}</div>{_rows_html(["Metric","Value"], _productivity_rows)}</div>
-<div class="a4-section"><h3>Sales Risk Review</h3>{_rows_html(["Risk reason","Action","DG-ID-Item","Planogram","Sales flag", report.get("metric_col") or "Metric"], item_rows)}</div>
-<div class="a4-section"><h3>Business Insight</h3><div class="a4-callout risk"><b>Risk view: {_h(report['risk_level'])}</b><br>The table above highlights only movements that are commercially sensitive: deleting a Top 10% best seller or adding a Top 10% lowest seller. These risk items should be reviewed separately from the overall productivity impact because they are a concern subset, not the full net calculation.</div>{_rows_html(["Metric","Value"], _risk_summary_rows)}</div>
+<div class="a4-section"><h3>SALE Impact</h3><div class="a4-callout risk">{_h(recommendation)}</div>{_rows_html(["SALE Impact","Sale Volumn"], _productivity_rows)}</div>
+<div class="a4-section"><h3>Detail by Item Planogram</h3>{_rows_html(["Risk reason","Action","DG-ID-Item","Planogram","Sale Volumn"], item_rows)}</div>
+<div class="a4-section"><h3>Business Insight</h3><div class="a4-callout risk"><b>Risk view: {_h(report['risk_level'])}</b><br>The table above highlights only movements that are commercially sensitive: deleting a Top 10% best seller or adding a Top 10% lowest seller. These risk items should be reviewed separately from the overall productivity impact because they are a concern subset, not the full net calculation.</div></div>
 </div>"""
     return f"""
 <style>
@@ -636,7 +817,7 @@ def _render_portfolio_summary(reports: list[dict], full_df: pd.DataFrame | None 
         return ""
     logo_uri = _report_partner_logo_data_uri()
     submitted_as_is = sum(int(r.get("total_sku", 0) or 0) for r in reports)
-    total_as_is = _total_sku_all_dg(full_df)
+    total_as_is = _portfolio_as_is_total(reports, full_df)
     if total_as_is <= 0:
         total_as_is = submitted_as_is
     total_net = sum(int(r.get("net", 0) or 0) for r in reports)
@@ -747,7 +928,7 @@ def _reports_to_pdf_bytes(reports: list[dict], full_df: pd.DataFrame | None = No
             y += line_h
         return y
 
-    total_as_is = _total_sku_all_dg(full_df)
+    total_as_is = _portfolio_as_is_total(reports, full_df)
     if total_as_is <= 0:
         total_as_is = sum(int(r.get("total_sku", 0) or 0) for r in reports)
     total_net = sum(int(r.get("net", 0) or 0) for r in reports)
@@ -798,26 +979,6 @@ def _reports_to_pdf_bytes(reports: list[dict], full_df: pd.DataFrame | None = No
         _pdf_total_deleted_units = float(_pdf_sales_prod.get("total_deleted_units", 0.0) or 0.0)
         _pdf_total_added_units = float(_pdf_sales_prod.get("total_added_units", 0.0) or 0.0)
         _pdf_net_productivity_units = float(_pdf_sales_prod.get("net_productivity_units", _pdf_total_added_units - _pdf_total_deleted_units) or 0.0)
-        _pdf_productivity_direction = "Negative" if _pdf_net_productivity_units < 0 else "Positive" if _pdf_net_productivity_units > 0 else "Neutral"
-        _pdf_pog_risk = {}
-        _pdf_best_delete_volume = 0.0
-        _pdf_lowest_add_volume = 0.0
-        for c, _reason in _pdf_risk_items:
-            try:
-                _metric = c.get("metric")
-                _metric = float(_metric) if _metric is not None and pd.notna(_metric) else 0.0
-            except Exception:
-                _metric = 0.0
-            if _reason == "Deleting best seller":
-                _pdf_best_delete_volume += _metric
-                _sign = -1
-            else:
-                _pdf_lowest_add_volume += _metric
-                _sign = 1
-            for _pog in c.get("planograms", []) or ["Unspecified"]:
-                _pog_s = str(_pog or "Unspecified")
-                _pdf_pog_risk[_pog_s] = _pdf_pog_risk.get(_pog_s, 0.0) + (_sign * _metric)
-        _pdf_highest_risk_pog = min(_pdf_pog_risk.items(), key=lambda kv: kv[1])[0] if _pdf_pog_risk else "N/A"
         img, draw, y = new_page()
         y = put(draw, y, str(r.get("label", "")), font_h)
         y += 10
@@ -831,23 +992,22 @@ def _reports_to_pdf_bytes(reports: list[dict], full_df: pd.DataFrame | None = No
         y += 10
         y = put(draw, y, f"Risks: {risks}", font)
         y += 18
-        y = put(draw, y, "Sales Productivity Impact", font_b)
+        y = put(draw, y, "SALE Impact", font_b)
         for label, val in [
-            ("Total deleted item volume", _fmt_num(_pdf_total_deleted_units)),
-            ("Total added item forecast / volume", _fmt_num(_pdf_total_added_units)),
-            ("Net productivity impact", _fmt_num(_pdf_net_productivity_units)),
-            ("Productivity direction", _pdf_productivity_direction),
+            ("Total deleted sale impact", _fmt_num(_pdf_total_deleted_units)),
+            ("Total added sale impact", _fmt_num(_pdf_total_added_units)),
+            ("Net sale impact", _fmt_num(_pdf_net_productivity_units)),
         ]:
             y = put(draw, y, f"{label}: {val}", font_s)
             if y > page_h - margin - 80:
                 pages.append(img)
                 img, draw, y = new_page()
         y += 18
-        y = put(draw, y, "Sales Risk Review", font_b)
+        y = put(draw, y, "Detail by Item Planogram", font_b)
         for c, _reason in _pdf_risk_items[:25]:
             line = (
                 f"{_reason} | {c.get('status','')} | {c.get('dg','')}-{c.get('id','')}-{c.get('item','')} | "
-                f"{', '.join(map(str, c.get('planograms', [])[:3]))} | {c.get('sales_flag','')}"
+                f"{', '.join(map(str, c.get('planograms', [])[:3]))}"
             )
             y = put(draw, y, line, font_s)
             if y > page_h - margin - 80:
@@ -855,17 +1015,12 @@ def _reports_to_pdf_bytes(reports: list[dict], full_df: pd.DataFrame | None = No
                 img, draw, y = new_page()
         y += 18
         y = put(draw, y, "Business Insight", font_b)
-        for label, val in [
-            ("Best-seller delete count", sum(1 for _, reason in _pdf_risk_items if reason == "Deleting best seller")),
-            ("Lowest-seller add count", sum(1 for _, reason in _pdf_risk_items if reason == "Adding lowest seller")),
-            ("Best-seller delete volume", _fmt_num(_pdf_best_delete_volume)),
-            ("Lowest-seller add volume", _fmt_num(_pdf_lowest_add_volume)),
-            ("Highest risk planogram", _pdf_highest_risk_pog),
-        ]:
-            y = put(draw, y, f"{label}: {val}", font_s)
-            if y > page_h - margin - 80:
-                pages.append(img)
-                img, draw, y = new_page()
+        y = put(
+            draw,
+            y,
+            "Review the commercially sensitive item and planogram movements above separately from the overall sale impact.",
+            font_s,
+        )
         pages.append(img)
 
     buf = io.BytesIO()

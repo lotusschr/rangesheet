@@ -1,12 +1,48 @@
-﻿id,name,role,session,date,action,detail,employee_id,status
-,Chanitsiree Dattuyawat,ADMIN,15:15,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH100001,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,15:17,22/07/2026,Logout,Chanitsiree Dattuyawat signed out,TH100001,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,15:21,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,15:31,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,17:03,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,17:03,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,08:34,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,08:45,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,08:52,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,09:22,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE
-,Chanitsiree Dattuyawat,ADMIN,09:41,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE
+﻿id,name,role,session,date,action,detail,employee_id,status,page,tab,source,dg_code,item_id,item_name,field,planogram,old_value,new_value
+,Chanitsiree Dattuyawat,ADMIN,15:15,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH100001,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,15:17,22/07/2026,Logout,Chanitsiree Dattuyawat signed out,TH100001,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,15:21,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,15:31,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,17:03,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,17:03,22/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,08:34,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,08:45,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,08:52,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,09:22,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,09:41,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,09:45,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,09:47,23/07/2026,RangeSheet Status Change,DG E2Y | ID 051190894 | CS คานโทเรลบลูเดออูเวิร์นชีส กก. ละ | field Status: MAINTAIN -> DELETE ALL,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,E2Y,051190894,CS คานโทเรลบลูเดออูเวิร์นชีส กก. ละ,Status,,MAINTAIN,DELETE ALL
+,Chanitsiree Dattuyawat,ADMIN,09:47,23/07/2026,RangeSheet Status Change,DG E2Y | ID 012299871 | CS อาร์ลาดานาบลูชีส กก.ละ | field Status: MAINTAIN -> DELETE ALL,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,E2Y,012299871,CS อาร์ลาดานาบลูชีส กก.ละ,Status,,MAINTAIN,DELETE ALL
+,Chanitsiree Dattuyawat,ADMIN,09:48,23/07/2026,RangeSheet Status Change,DG E2Y | ID 012299871 | CS อาร์ลาดานาบลูชีส กก.ละ | field Status: DELETE ALL -> MAINTAIN,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,E2Y,012299871,CS อาร์ลาดานาบลูชีส กก.ละ,Status,,DELETE ALL,MAINTAIN
+,Chanitsiree Dattuyawat,ADMIN,09:52,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,09:53,23/07/2026,RangeSheet Status Change,DG N1A | ID 007983182 | JJ เบบี้ท็อปทูโทวอช 500มล. | field Status: MAINTAIN -> DELETE ALL,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,007983182,JJ เบบี้ท็อปทูโทวอช 500มล.,Status,,MAINTAIN,DELETE ALL
+,Chanitsiree Dattuyawat,ADMIN,09:53,23/07/2026,RangeSheet Status Change,DG N1A | ID 007983182 | JJ เบบี้ท็อปทูโทวอช 500มล. | field Status: DELETE ALL -> MAINTAIN,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,007983182,JJ เบบี้ท็อปทูโทวอช 500มล.,Status,,DELETE ALL,MAINTAIN
+,Chanitsiree Dattuyawat,ADMIN,09:53,23/07/2026,RangeSheet Planogram Change,DG N1A | ID 007983182 | JJ เบบี้ท็อปทูโทวอช 500มล. | planogram SOAP N_G1_A L 12 OSS-WHT12_target_5040: 157.14 -> Delete,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,007983182,JJ เบบี้ท็อปทูโทวอช 500มล.,Planogram Status,SOAP N_G1_A L 12 OSS-WHT12_target_5040,157.14,Delete
+,Chanitsiree Dattuyawat,ADMIN,09:53,23/07/2026,RangeSheet Status Change,DG N1A | ID 007983182 | JJ เบบี้ท็อปทูโทวอช 500มล. | field Status: MAINTAIN -> DELETE SOME,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,007983182,JJ เบบี้ท็อปทูโทวอช 500มล.,Status,,MAINTAIN,DELETE SOME
+,Chanitsiree Dattuyawat,ADMIN,09:53,23/07/2026,RangeSheet Status Change,DG N1A | ID 007983182 | JJ เบบี้ท็อปทูโทวอช 500มล. | field Status: DELETE SOME -> MAINTAIN,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,007983182,JJ เบบี้ท็อปทูโทวอช 500มล.,Status,,DELETE SOME,MAINTAIN
+,Chanitsiree Dattuyawat,ADMIN,10:39,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,10:46,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,10:47,23/07/2026,Clear Files,,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,10:55,23/07/2026,Upload,2 file(s) added,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,11:07,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,11:18,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,11:32,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,15:08,23/07/2026,Logout,Chanitsiree Dattuyawat signed out,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,15:23,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,15:29,23/07/2026,RangeSheet Planogram Change,DG N1A | ID 007983182 | JJ เบบี้ท็อปทูโทวอช 500มล. | planogram SOAP N_G1_A L 12 OSS-WHT12_target_5040: 157.14 -> Delete,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,007983182,JJ เบบี้ท็อปทูโทวอช 500มล.,Planogram Status,SOAP N_G1_A L 12 OSS-WHT12_target_5040,157.14,Delete
+,Chanitsiree Dattuyawat,ADMIN,15:29,23/07/2026,RangeSheet Status Change,DG N1A | ID 007983182 | JJ เบบี้ท็อปทูโทวอช 500มล. | field Status: MAINTAIN -> DELETE SOME,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,007983182,JJ เบบี้ท็อปทูโทวอช 500มล.,Status,,MAINTAIN,DELETE SOME
+,Chanitsiree Dattuyawat,ADMIN,15:29,23/07/2026,RangeSheet Planogram Change,DG N1A | ID 014504383 | นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก. | planogram SOAP N_G1_A L 12 OSS-WHT12_target_5040:  -> New,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,014504383,นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก.,Planogram Status,SOAP N_G1_A L 12 OSS-WHT12_target_5040,,New
+,Chanitsiree Dattuyawat,ADMIN,15:29,23/07/2026,RangeSheet Status Change,DG N1A | ID 014504383 | นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก. | field Status: MAINTAIN -> NEW SOME,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,014504383,นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก.,Status,,MAINTAIN,NEW SOME
+,Chanitsiree Dattuyawat,ADMIN,15:29,23/07/2026,RangeSheet Status Change,DG N1A | ID 014504383 | นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก. | field Status: NEW SOME -> MAINTAIN,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,014504383,นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก.,Status,,NEW SOME,MAINTAIN
+,Chanitsiree Dattuyawat,ADMIN,15:30,23/07/2026,RangeSheet Planogram Change,DG N1A | ID 014504383 | นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก. | planogram SOAP N_G1_A L 12 OSS-WHT12_target_5040:  -> New,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,014504383,นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก.,Planogram Status,SOAP N_G1_A L 12 OSS-WHT12_target_5040,,New
+,Chanitsiree Dattuyawat,ADMIN,15:30,23/07/2026,RangeSheet Status Change,DG N1A | ID 014504383 | นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก. | field Status: MAINTAIN -> NEW SOME,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,014504383,นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก.,Status,,MAINTAIN,NEW SOME
+,Chanitsiree Dattuyawat,ADMIN,15:30,23/07/2026,RangeSheet Status Change,DG N1A | ID 014504383 | นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก. | field Status: NEW SOME -> MAINTAIN,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,014504383,นางพญาหน้าขาวสมุนไพร สูตรพอกหน้า 10ก.,Status,,NEW SOME,MAINTAIN
+,Chanitsiree Dattuyawat,ADMIN,15:30,23/07/2026,RangeSheet Status Change,DG N1A | ID 007014880 | แลคตาซิด ออล เดย์ แคร์ 150 มล. | field Status: MAINTAIN -> DELETE ALL,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,007014880,แลคตาซิด ออล เดย์ แคร์ 150 มล.,Status,,MAINTAIN,DELETE ALL
+,Chanitsiree Dattuyawat,ADMIN,15:31,23/07/2026,RangeSheet Status Change,DG N1A | ID 007014880 | แลคตาซิด ออล เดย์ แคร์ 150 มล. | field Status: DELETE ALL -> MAINTAIN,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,N1A,007014880,แลคตาซิด ออล เดย์ แคร์ 150 มล.,Status,,DELETE ALL,MAINTAIN
+,Chanitsiree Dattuyawat,ADMIN,15:46,23/07/2026,RangeSheet Planogram Change,DG K3K | ID 051649687 | เนลี่ แครกเกอร์รสคลาสสิค 8 ก. X24 | planogram CRACKER H_G_5012 E 5 OMS-WHT5_target_5012: 107.82 -> Delete,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Chatbot,K3K,051649687,เนลี่ แครกเกอร์รสคลาสสิค 8 ก. X24,Planogram Status,CRACKER H_G_5012 E 5 OMS-WHT5_target_5012,107.82,Delete
+,Chanitsiree Dattuyawat,ADMIN,15:46,23/07/2026,RangeSheet Status Change,DG K3K | ID 051649687 | เนลี่ แครกเกอร์รสคลาสสิค 8 ก. X24 | field Status: MAINTAIN -> DELETE SOME,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Chatbot,K3K,051649687,เนลี่ แครกเกอร์รสคลาสสิค 8 ก. X24,Status,,MAINTAIN,DELETE SOME
+,Chanitsiree Dattuyawat,ADMIN,16:29,23/07/2026,RangeSheet New Item Edit,DG K3K | ID ggggg |  | field ID:  -> ggggg,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,K3K,ggggg,,ID,,,ggggg
+,Chanitsiree Dattuyawat,ADMIN,16:45,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,16:46,23/07/2026,RangeSheet New Item Edit,DG K3K | ID 123456789 |  | field Avg Units 52wk/ Forecast new item sales:  -> 9,TH90383638,ONLINE,Rangesheet Review,Range Sheet,Table,K3K,123456789,,Avg Units 52wk/ Forecast new item sales,,,9
+,Chanitsiree Dattuyawat,ADMIN,16:54,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
+,Chanitsiree Dattuyawat,ADMIN,21:00,23/07/2026,Login,Chanitsiree Dattuyawat signed in as ADMIN,TH90383638,ONLINE,,,,,,,,,,
