@@ -271,17 +271,17 @@ def create_review_df(df, mapping):
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 DEMO_USERS = {
-    "admin": {
+    "90383638": {
         "password": "admin123",
-        "employee_id": "TH100001",
-        "name": "Lucas Martin",
+        "employee_id": "TH90383638",
+        "name": "Chanitsiree Dattuyawat",
         "role": "admin",
         "title": "System Administrator",
     },
-    "editor": {
+    "90383645": {
         "password": "editor123",
-        "employee_id": "TH100002",
-        "name": "Daniel Cheng",
+        "employee_id": "TH90383645",
+        "name": "Chayakarn Hengsuwan",
         "role": "editor",
         "title": "Range Editor",
     },
@@ -292,13 +292,28 @@ DEMO_USERS = {
         "role": "viewer",
         "title": "Business Viewer",
     },
+    "admin2": {
+        "password": "admin123",
+        "employee_id": "TH100001",
+        "name": "Chanitsiree Dattuyawat",
+        "role": "admin",
+        "title": "System Administrator",
+    }
 }
 
 def current_user() -> dict:
-    return st.session_state.get("auth_user", {
+    user = st.session_state.get("auth_user", {
         "employee_id": "TH111111", "name": "Developer",
         "role": "admin", "login_time": datetime.now().strftime("%H:%M"),
     })
+    # Keep an already-authenticated admin session in sync with the configured
+    # display name, so this change does not require logging out and back in.
+    if user and str(user.get("username", "")).lower() == "admin":
+        admin_name = DEMO_USERS["admin"]["name"]
+        if user.get("name") != admin_name:
+            user = {**user, "name": admin_name}
+            st.session_state.auth_user = user
+    return user
 
 def is_admin() -> bool:
     return current_user().get("role") == "admin"
@@ -938,7 +953,8 @@ div[data-testid="stForm"] [data-testid="stFormSubmitButton"] button {
                 st.error(msg)
     return False
 
-def add_audit(action: str, detail: str = ""):
+def add_audit(action: str, detail: str = "", **context):
+    """Persist an audit event with optional structured business context."""
     u = current_user()
     record = {
         "employee_id": u["employee_id"],
@@ -950,6 +966,15 @@ def add_audit(action: str, detail: str = ""):
         "action":      action,
         "detail":      detail,
     }
+    # Structured columns make Range Sheet edits searchable and readable without
+    # having to reverse-parse a free-text detail string. Existing callers remain
+    # compatible because every field is optional.
+    for key in (
+        "page", "tab", "source", "dg_code", "item_id", "item_name",
+        "field", "planogram", "old_value", "new_value",
+    ):
+        if key in context:
+            record[key] = context.get(key, "")
     if "audit_log" not in st.session_state:
         st.session_state.audit_log = []
     st.session_state.audit_log.append(record)
@@ -961,7 +986,7 @@ def _save_audit_record(record: dict):
         path = os.path.join(BASE_DIR, "audit", "audit_log.csv")
         df_new = pd.DataFrame([record])
         if os.path.exists(path):
-            df_old = pd.read_csv(path, encoding="utf-8-sig")
+            df_old = pd.read_csv(path, encoding="utf-8-sig", dtype=str, keep_default_na=False)
             pd.concat([df_old, df_new], ignore_index=True).to_csv(
                 path, index=False, encoding="utf-8-sig")
         else:
@@ -984,6 +1009,14 @@ def init_session_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+    # One-time reset for sessions that were open when the persisted audit log
+    # was cleared. Without this marker, audit.py can fall back to stale rows
+    # still held in the browser session even though the CSV is empty.
+    _audit_reset_epoch = "2026-07-22-admin-name-reset"
+    if st.session_state.get("_audit_reset_epoch") != _audit_reset_epoch:
+        st.session_state.audit_log = []
+        st.session_state["_audit_reset_epoch"] = _audit_reset_epoch
     if st.session_state.get("merged_df") is None:
         snap = load_merged_snapshot()
         if snap is not None:
@@ -1336,6 +1369,11 @@ _PAGE_LABELS = {
     "audit":     "Audit Log",
 }
 
+
+def _queue_page_nav(page_path: str):
+    """Defer navigation so a heavy current page is not rendered again first."""
+    st.session_state["_page_nav_target"] = page_path
+
 def render_page_nav(current: str):
     idx       = _PAGE_ORDER.index(current) if current in _PAGE_ORDER else 0
     prev_page = _PAGE_ORDER[idx - 1] if idx > 0 else None
@@ -1356,7 +1394,7 @@ def render_page_nav(current: str):
                 f"← {_PAGE_LABELS[prev_page]}",
                 key="page_nav_prev",
                 use_container_width=True,
-                on_click=st.switch_page,
+                on_click=_queue_page_nav,
                 args=(f"pages/{prev_page}.py",),
             )
             st.markdown("</div>", unsafe_allow_html=True)
@@ -1368,7 +1406,7 @@ def render_page_nav(current: str):
                 f"{_PAGE_LABELS[next_page]} →",
                 key="page_nav_next",
                 use_container_width=True,
-                on_click=st.switch_page,
+                on_click=_queue_page_nav,
                 args=(f"pages/{next_page}.py",),
             )
             st.markdown("</div>", unsafe_allow_html=True)
@@ -3045,7 +3083,12 @@ def load_audit_log():
     try:
         path = os.path.join(BASE_DIR, "audit", "audit_log.csv")
         if os.path.exists(path):
-            return pd.read_csv(path, encoding="utf-8-sig")
+            return pd.read_csv(
+                path,
+                encoding="utf-8-sig",
+                dtype=str,
+                keep_default_na=False,
+            )
     except Exception:
         pass
     return None

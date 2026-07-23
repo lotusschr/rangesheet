@@ -34,6 +34,12 @@ pg = st.navigation(
     ],
     position="hidden",   # hide default sidebar nav — we render our own
 )
+# Button callbacks run before the next script pass. Resolve queued navigation
+# after the page registry exists, but before rendering the current heavy page.
+_page_nav_target = st.session_state.pop("_page_nav_target", None)
+if _page_nav_target:
+    st.switch_page(_page_nav_target)
+
 pg.run()
 
 if __name__ == "__main__":

@@ -108,7 +108,11 @@ st.markdown("</div>", unsafe_allow_html=True)
 
 # ── Filter ────────────────────────────────────────────────────────────────────
 show = audit_df.copy()
-COLS = ["employee_id", "name", "role", "session", "date", "status", "action", "detail"]
+COLS = [
+    "employee_id", "name", "role", "session", "date", "status", "action", "detail",
+    "page", "tab", "source", "dg_code", "item_id", "item_name", "field",
+    "planogram", "old_value", "new_value",
+]
 for c in COLS:
     if c not in show.columns:
         show[c] = ""
@@ -260,14 +264,21 @@ if not show.empty:
     _prev_user = _user_key.shift()
     _prev_ts = show["_audit_ts"].shift()
     _gap = show["_audit_ts"] - _prev_ts
+    _auth_row = show["action"].fillna("").astype(str).str.strip().str.lower().isin(
+        ("login", "logout")
+    )
+    _prev_auth_row = _auth_row.shift(fill_value=False)
     # Approximate login-to-logout sessions from available action timestamps.
-    # If a session is too long or has a long idle gap, split it by hour.
+    # Business edits are deliberately kept as individual rows so no Range Sheet
+    # change is hidden inside a Login/Logout session summary.
     _new_session = (
         (_user_key != _prev_user)
         | show["_audit_ts"].isna()
         | _prev_ts.isna()
         | (_gap > pd.Timedelta(hours=1))
         | (show["_audit_ts"].dt.floor("h") != _prev_ts.dt.floor("h"))
+        | ~_auth_row
+        | ~_prev_auth_row
     )
     show["_session_bucket"] = _new_session.cumsum()
     grouped_rows = []
@@ -326,7 +337,7 @@ def _display_employee_name(value, employee_id) -> str:
 
 # Header
 th = ""
-HEADERS = ["TIME PERIOD", "EMPLOYEE ID", "NAME", "AUTHOR", "STATUS", "ACTION"]
+HEADERS = ["TIME PERIOD", "EMPLOYEE ID", "NAME", "AUTHOR", "STATUS", "LOCATION", "CHANGE"]
 for h in HEADERS:
     th += (f'<th style="padding:10px 12px;text-align:left;font-weight:700;'
            f'color:#1A1A1A;font-size:11px;'
@@ -378,27 +389,78 @@ for i, row in show.iterrows():
                  f'font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap;">'
                  f'{status_val}</span></td>')
 
-    # Action + detail
-    action = html.escape(str(row.get("action", "")))
-    detail = html.escape(str(row.get("detail", "")))
-    detail_span = (f'<span style="color:#BBB;font-size:11px;margin-left:8px;">{detail}</span>'
-                   if detail and detail not in ("", "nan") else "")
-    td_action = (f'<td style="padding:8px 12px;border-bottom:1px solid #E0E0E0;'
-                 f'font-size:12px;color:#1A1A1A;">'
-                 f'{action}{detail_span}</td>')
+    # Location + exact change. Structured Range Sheet events show DG, item,
+    # field/planogram and old -> new values as separate readable information.
+    action_raw = str(row.get("action", "") or "").strip()
+    is_rangesheet_edit = action_raw.lower().startswith("rangesheet")
+    if is_rangesheet_edit:
+        tab_raw = str(row.get("tab", "") or row.get("page", "") or "Range Sheet").strip()
+        dg_raw = str(row.get("dg_code", "") or "").strip()
+        planogram_raw = str(row.get("planogram", "") or "").strip()
+        field_raw = str(row.get("field", "") or "").strip()
+        location_parts = [tab_raw]
+        if dg_raw and dg_raw.lower() != "nan":
+            location_parts.append(f"DG {dg_raw}")
+        if planogram_raw and planogram_raw.lower() != "nan":
+            location_parts.append(_short_planogram_name(planogram_raw, 48))
+        elif field_raw and field_raw.lower() != "nan":
+            location_parts.append(field_raw)
+        location = html.escape(" · ".join(location_parts))
+
+        item_id_raw = str(row.get("item_id", "") or "").strip()
+        item_name_raw = str(row.get("item_name", "") or "").strip()
+        old_raw = str(row.get("old_value", "") or "")
+        new_raw = str(row.get("new_value", "") or "")
+        source_raw = str(row.get("source", "") or "Table").strip()
+        item_label = " - ".join(
+            value for value in (item_id_raw, item_name_raw)
+            if value and value.lower() != "nan"
+        )
+        change_detail = f"{field_raw}: {old_raw} → {new_raw}" if field_raw else f"{old_raw} → {new_raw}"
+        action = html.escape(action_raw.replace("RangeSheet ", ""))
+        item_html = html.escape(item_label)
+        change_html = html.escape(change_detail)
+        source_html = html.escape(source_raw)
+        detail_span = (
+            f'<div style="color:#374151;font-size:12px;margin-top:3px;">{item_html}</div>'
+            f'<div style="color:#64748B;font-size:11px;margin-top:2px;">{change_html}</div>'
+            f'<div style="color:#94A3B8;font-size:10px;margin-top:2px;">via {source_html}</div>'
+        )
+    else:
+        location = "Authentication" if action_raw.lower() in ("login", "logout") else html.escape(
+            str(row.get("page", "") or "System")
+        )
+        action = html.escape(action_raw)
+        detail = html.escape(str(row.get("detail", "")))
+        detail_span = (
+            f'<span style="color:#94A3B8;font-size:11px;margin-left:8px;">{detail}</span>'
+            if detail and detail not in ("", "nan") else ""
+        )
+
+    td_location = (
+        f'<td style="padding:8px 12px;border-bottom:1px solid #E0E0E0;'
+        f'border-right:1px solid #E0E0E0;font-size:11px;color:#475569;'
+        f'max-width:260px;overflow-wrap:anywhere;">{location}</td>'
+    )
+    td_action = (
+        f'<td style="padding:8px 12px;border-bottom:1px solid #E0E0E0;'
+        f'font-size:12px;color:#1A1A1A;min-width:300px;">'
+        f'<strong>{action}</strong>{detail_span}</td>'
+    )
 
     rows_html += (f'<tr style="background:{bg};">'
-                  f'{td_ts}{td_emp}{td_name}{td_author}{td_status}{td_action}</tr>')
+                  f'{td_ts}{td_emp}{td_name}{td_author}{td_status}'
+                  f'{td_location}{td_action}</tr>')
 
 st.markdown(f"""
 <div style="margin-bottom:12px;">
     <span style="font-size:12px;color:#888;">
-        Showing <strong>{shown}</strong> session period(s) from <strong>{total}</strong> edit entries
+        Showing <strong>{shown}</strong> audit row(s) from <strong>{total}</strong> entries
     </span>
 </div>
 <div style="background:#fff;border-radius:14px;border:1px solid #E8E3DC;overflow:hidden;">
     <div style="overflow-x:auto;">
-        <table style="width:100%;border-collapse:collapse;min-width:760px;">
+        <table style="width:100%;border-collapse:collapse;min-width:1180px;">
             <thead>
                 <tr>{th}</tr>
             </thead>

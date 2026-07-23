@@ -269,6 +269,16 @@ if not st.session_state.get("_admin_synced"):
 
 _all_files = st.session_state.raw_files  # include df=None; lazy-loaded per tab
 
+# A5 and HDET are source files used by the Minor dashboard and downstream
+# calculations.  Keep them available in session state, but do not expose their
+# raw-data tabs in the View Data navigation.
+def _show_raw_file_tab(entry: dict) -> bool:
+    _base_name = os.path.splitext(str(entry.get("name", "")))[0].strip().lower()
+    return not (_base_name.startswith("a5") or _base_name.startswith("hdet"))
+
+
+_visible_files = [_entry for _entry in _all_files if _show_raw_file_tab(_entry)]
+
 # ── Shared helpers ────────────────────────────────────────────────────────────
 def _dedup(df: pd.DataFrame) -> pd.DataFrame:
     seen: dict[str, int] = {}
@@ -491,6 +501,7 @@ def _pog_fullscreen_dialog():
     _lbl       = st.session_state.get("_pog_fs_label", "")
     _pvt_fs    = st.session_state.get("_pog_fs_pvt")
     _cl_sel_fs = st.session_state.get("_pog_fs_cl_sel")
+    _ready_html = st.session_state.get("_pog_fs_html", "")
     if _lbl:
         st.caption(_lbl)
     _id_srch_fs = st.text_input(
@@ -498,18 +509,49 @@ def _pog_fullscreen_dialog():
         label_visibility="collapsed", key="minor_id_srch_fs"
     )
     if _pvt_fs is not None:
-        _pvt_fs = _pvt_fs.copy()
         if _id_srch_fs and "ID" in _pvt_fs.columns:
+            _pvt_fs = _pvt_fs.copy()
             _si = _pvt_fs["ID"].astype(str).str.strip().str.zfill(9)
             _sq = (str(_id_srch_fs).strip().zfill(9)
                    if str(_id_srch_fs).strip().isdigit()
                    else str(_id_srch_fs).strip())
             _im = _si.str.contains(_sq, case=False, na=False)
             _pvt_fs = pd.concat([_pvt_fs[_im], _pvt_fs[~_im]]).reset_index(drop=True)
-        st.markdown(
-            _build_pog_cluster_html(_pvt_fs, _cl_sel_fs, max_height="calc(100vh - 78px)"),
-            unsafe_allow_html=True,
-        )
+            _ready_html = _build_pog_cluster_html(
+                _pvt_fs, _cl_sel_fs, max_height="calc(100vh - 78px)"
+            )
+        elif not _ready_html:
+            _ready_html = _build_pog_cluster_html(
+                _pvt_fs, _cl_sel_fs, max_height="calc(100vh - 78px)"
+            )
+        st.markdown(_ready_html, unsafe_allow_html=True)
+
+
+def _render_pog_cluster_panel(pvt, cl_sel, label: str, table_html: str):
+    """Render the table controls in a fragment so Full screen opens quickly."""
+    _exp_c, _btn_c = st.columns([8, 1])
+    with _exp_c:
+        with st.expander(label, expanded=True):
+            st.markdown(table_html, unsafe_allow_html=True)
+    with _btn_c:
+        if st.button(
+            "⛶", key="minor_fs_btn", help="Full screen", use_container_width=True
+        ):
+            # Reuse the table and its already-rendered HTML.  This avoids rebuilding
+            # thousands of cells once more just to open the dialog.
+            st.session_state["_pog_fs_pvt"]    = pvt
+            st.session_state["_pog_fs_cl_sel"] = cl_sel
+            st.session_state["_pog_fs_label"]  = label
+            st.session_state["_pog_fs_html"]   = table_html.replace(
+                "max-height:calc(100vh - 250px)",
+                "max-height:calc(100vh - 78px)",
+                1,
+            )
+            _pog_fullscreen_dialog()
+
+
+if hasattr(st, "fragment"):
+    _render_pog_cluster_panel = st.fragment(_render_pog_cluster_panel)
 
 
 # ── Minor dashboard ───────────────────────────────────────────────────────────
@@ -1043,22 +1085,15 @@ def _render_minor():
                 _N        = len(_pog_cols)
                 _right_html  = _build_pog_cluster_html(_pvt, _cl_sel)
                 _right_label = f"{len(_pvt):,} items · {_N} POGs"
-                _btn_c, _exp_c = st.columns([1, 8])
-                with _btn_c:
-                    if st.button("⛶", key="minor_fs_btn", help="Full screen"):
-                        st.session_state["_pog_fs_pvt"]    = _pvt.copy()
-                        st.session_state["_pog_fs_cl_sel"] = _cl_sel
-                        st.session_state["_pog_fs_label"]  = _right_label
-                        _pog_fullscreen_dialog()
-                with _exp_c:
-                    with st.expander(_right_label, expanded=True):
-                        st.markdown(_right_html, unsafe_allow_html=True)
+                _render_pog_cluster_panel(
+                    _pvt, _cl_sel, _right_label, _right_html
+                )
 
 
 # ── Tab label list: [Minor] + one per uploaded file ───────────────────────────
 _file_labels: list[str] = []
 _seen_labels: dict[str, int] = {}
-for _f in _all_files:
+for _f in _visible_files:
     _lbl = _short(_f["name"])
     if _lbl in _seen_labels:
         _seen_labels[_lbl] += 1
@@ -1070,7 +1105,7 @@ for _f in _all_files:
 _all_tab_labels = ["Minor"] + _file_labels
 
 # ── No files yet — still show Minor tab ──────────────────────────────────────
-if not _all_files:
+if not _visible_files:
     (_t_minor,) = st.tabs(["Minor"])
     with _t_minor:
         _render_minor()
@@ -1083,7 +1118,7 @@ _all_tabs = st.tabs(_all_tab_labels)
 with _all_tabs[0]:
     _render_minor()
 
-for _i, (_tab, _entry) in enumerate(zip(_all_tabs[1:], _all_files)):
+for _i, (_tab, _entry) in enumerate(zip(_all_tabs[1:], _visible_files)):
     with _tab:
         _render_data(_entry, f"file_{_i}")
 
